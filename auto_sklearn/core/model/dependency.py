@@ -25,6 +25,27 @@ class DependencyType(Enum):
     BASE_MARGIN = "base_margin"
     """XGBoost-style stacking: predictions used as base margin."""
 
+    CONDITIONAL_SAMPLE = "conditional_sample"
+    """Joint quantile: condition on sampled values from upstream property."""
+
+
+@dataclass
+class ConditionalSampleConfig:
+    """
+    Configuration for conditional sample dependencies.
+
+    Used in joint quantile regression to specify how upstream
+    property values should be used as conditioning features.
+
+    Attributes:
+        property_name: Name of the upstream property to condition on.
+        use_actual_during_training: If True, use actual Y values during training
+                                   instead of predictions (default: True).
+    """
+
+    property_name: str
+    use_actual_during_training: bool = True
+
 
 @dataclass
 class DependencyEdge:
@@ -40,12 +61,14 @@ class DependencyEdge:
         dep_type: How the dependency is used.
         column_name: Optional name for the feature in target's input.
                     If None, defaults to "pred_{source}" or similar.
+        conditional_config: Configuration for CONDITIONAL_SAMPLE dependencies.
     """
 
     source: str
     target: str
     dep_type: DependencyType = DependencyType.PREDICTION
     column_name: Optional[str] = None
+    conditional_config: Optional[ConditionalSampleConfig] = None
 
     def __post_init__(self) -> None:
         """Validate edge configuration."""
@@ -57,6 +80,14 @@ class DependencyEdge:
             raise ValueError("Self-loops are not allowed")
         if isinstance(self.dep_type, str):
             self.dep_type = DependencyType(self.dep_type)
+        # Validate conditional_config is provided for CONDITIONAL_SAMPLE
+        if (
+            self.dep_type == DependencyType.CONDITIONAL_SAMPLE
+            and self.conditional_config is None
+        ):
+            raise ValueError(
+                "conditional_config is required for CONDITIONAL_SAMPLE dependency type"
+            )
 
     @property
     def feature_name(self) -> str:
@@ -69,6 +100,7 @@ class DependencyEdge:
             DependencyType.TRANSFORM: "trans",
             DependencyType.FEATURE: "feat",
             DependencyType.BASE_MARGIN: "margin",
+            DependencyType.CONDITIONAL_SAMPLE: "cond",
         }
         prefix = prefix_map.get(self.dep_type, "out")
         return f"{prefix}_{self.source}"

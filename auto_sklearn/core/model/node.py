@@ -22,6 +22,9 @@ class OutputType:
     TRANSFORM = "transform"
     """Transformed features (for preprocessors/transformers)."""
 
+    QUANTILES = "quantiles"
+    """Quantile predictions (for quantile regression)."""
+
 
 @dataclass
 class ModelNode:
