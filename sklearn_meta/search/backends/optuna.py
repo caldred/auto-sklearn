@@ -62,6 +62,7 @@ class OptunaBackend(SearchBackend):
         timeout: Optional[float] = None,
         callbacks: Optional[List[Callable]] = None,
         study_name: Optional[str] = None,
+        early_stopping_rounds: Optional[int] = None,
     ) -> OptimizationResult:
         """
         Run hyperparameter optimization using Optuna.
@@ -92,7 +93,7 @@ class OptunaBackend(SearchBackend):
             return objective(params)
 
         # Convert callbacks to Optuna format
-        optuna_callbacks = None
+        optuna_callbacks = []
         if callbacks:
             optuna_callbacks = [
                 lambda study, trial: cb(
@@ -106,11 +107,26 @@ class OptunaBackend(SearchBackend):
                 for cb in callbacks
             ]
 
+        # Add early stopping callback if configured
+        if early_stopping_rounds is not None and early_stopping_rounds > 0:
+            try:
+                from optuna.callbacks import EarlyStoppingCallback
+                early_stop_cb = EarlyStoppingCallback(
+                    early_stopping_rounds, direction=self.direction
+                )
+                optuna_callbacks.append(early_stop_cb)
+            except ImportError:
+                # EarlyStoppingCallback may not be available in older Optuna versions
+                logging.getLogger(__name__).warning(
+                    "EarlyStoppingCallback not available in this Optuna version. "
+                    "early_stopping_rounds will be ignored."
+                )
+
         self._study.optimize(
             optuna_objective,
             n_trials=n_trials,
             timeout=timeout,
-            callbacks=optuna_callbacks,
+            callbacks=optuna_callbacks if optuna_callbacks else None,
             show_progress_bar=False,
         )
 
@@ -255,7 +271,8 @@ class OptunaBackend(SearchBackend):
 
         try:
             return optuna.importance.get_param_importances(self._study)
-        except Exception:
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Parameter importance calculation failed: {e}")
             return {}
 
     def __repr__(self) -> str:

@@ -411,6 +411,9 @@ class GraphBuilder:
         if isinstance(strategy, str):
             strategy = OptimizationStrategy(strategy)
 
+        if n_trials < 1:
+            raise ValueError(f"n_trials must be >= 1, got {n_trials}")
+
         self._tuning_config = TuningConfig(
             strategy=strategy,
             n_trials=n_trials,
@@ -571,6 +574,12 @@ class GraphBuilder:
             y = pd.Series(y)
         if groups is not None and not isinstance(groups, pd.Series):
             groups = pd.Series(groups)
+
+        # Validate inputs
+        if X.shape[0] == 0:
+            raise ValueError("X cannot be empty")
+        if X.shape[1] == 0:
+            raise ValueError("X must have at least one feature")
 
         ctx = DataContext(X=X, y=y, groups=groups)
         orchestrator = self.create_orchestrator(search_backend)

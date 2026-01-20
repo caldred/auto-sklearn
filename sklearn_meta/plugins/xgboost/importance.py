@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING
 
 from sklearn_meta.plugins.base import ModelPlugin
@@ -10,6 +11,8 @@ from sklearn_meta.selection.importance import ImportanceExtractor
 if TYPE_CHECKING:
     from sklearn_meta.core.data.context import DataContext
     from sklearn_meta.core.model.node import ModelNode
+
+logger = logging.getLogger(__name__)
 
 
 class XGBImportanceExtractor(ImportanceExtractor):
@@ -59,8 +62,9 @@ class XGBImportanceExtractor(ImportanceExtractor):
 
         try:
             score = booster.get_score(importance_type=imp_type)
-        except Exception:
+        except Exception as e:
             # Fall back to default
+            logger.warning(f"Requested XGBoost importance_type '{imp_type}' failed, using default: {e}")
             score = booster.get_score()
 
         # Map XGBoost feature names to actual names

@@ -567,7 +567,9 @@ class MockSearchBackend:
         search_space,
         n_trials: int = 10,
         timeout: Optional[float] = None,
+        callbacks=None,
         study_name: str = "test",
+        early_stopping_rounds: Optional[int] = None,
     ):
         """Run mock optimization."""
         from sklearn_meta.search.backends.base import OptimizationResult, TrialResult

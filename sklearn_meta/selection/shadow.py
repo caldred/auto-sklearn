@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -12,6 +13,8 @@ from sklearn_meta.selection.importance import ImportanceExtractor, ImportanceReg
 
 if TYPE_CHECKING:
     pass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -92,7 +95,8 @@ class ShadowFeatureSelector:
         try:
             q_values = col_clean.quantile(q=qs)
             _, counts = np.unique(q_values, return_counts=True)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Entropy calculation failed for column, returning 0.0: {e}")
             return 0.0
 
         # Compute probabilities

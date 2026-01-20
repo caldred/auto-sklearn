@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Optional, Type
 
 from sklearn_meta.plugins.base import ModelPlugin
+
+logger = logging.getLogger(__name__)
 
 
 class PluginRegistry:
@@ -91,9 +94,9 @@ class PluginRegistry:
             try:
                 if plugin.applies_to(estimator_class):
                     applicable.append(plugin)
-            except Exception:
+            except Exception as e:
                 # Skip plugins that fail the check
-                pass
+                logger.debug(f"Plugin '{name}' applicability check failed: {e}")
         return applicable
 
     def get_plugins_for_names(self, plugin_names: List[str]) -> List[ModelPlugin]:

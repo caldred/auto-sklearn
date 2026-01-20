@@ -233,6 +233,13 @@ class TuningOrchestrator:
         self.audit_logger = audit_logger
         self.fit_cache = fit_cache
 
+        # Warn about unused executor parameter
+        if executor is not None:
+            logger.warning(
+                "executor parameter is not yet used - CV folds run sequentially. "
+                "Parallel execution will be supported in a future version."
+            )
+
         # Validate graph
         self.graph.validate()
 
@@ -255,6 +262,11 @@ class TuningOrchestrator:
             fitted_nodes = self._fit_greedy(ctx)
         elif self.tuning_config.strategy == OptimizationStrategy.NONE:
             fitted_nodes = self._fit_no_tuning(ctx)
+        elif self.tuning_config.strategy == OptimizationStrategy.FULL_GRAPH:
+            raise NotImplementedError(
+                "FULL_GRAPH strategy is not yet implemented. "
+                "Use LAYER_BY_LAYER (recommended) or GREEDY instead."
+            )
         else:
             raise ValueError(
                 f"Unsupported optimization strategy: {self.tuning_config.strategy}"
@@ -464,6 +476,7 @@ class TuningOrchestrator:
             n_trials=self.tuning_config.n_trials,
             timeout=self.tuning_config.timeout,
             study_name=f"{node.name}_tuning",
+            early_stopping_rounds=self.tuning_config.early_stopping_rounds,
         )
 
         # Inverse transform best params if reparameterized
@@ -513,6 +526,11 @@ class TuningOrchestrator:
         cv_config = self.tuning_config.cv_config or CVConfig()
         dm = DataManager(cv_config)
         train_ctx, val_ctx = dm.align_to_fold(ctx, fold)
+
+        # Call plugin on_fold_start hooks
+        if self.plugin_registry:
+            for plugin in self.plugin_registry.get_plugins_for(node.estimator_class):
+                plugin.on_fold_start(fold.fold_idx, node, train_ctx)
 
         # Check cache before fitting
         cache_key = None
@@ -570,6 +588,11 @@ class TuningOrchestrator:
 
         # Calculate score
         val_score = self._calculate_score(val_ctx.y, val_predictions)
+
+        # Call plugin on_fold_end hooks
+        if self.plugin_registry:
+            for plugin in self.plugin_registry.get_plugins_for(node.estimator_class):
+                plugin.on_fold_end(fold.fold_idx, model, val_score, node)
 
         return FoldResult(
             fold=fold,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import pickle
 import tempfile
@@ -17,6 +18,8 @@ import numpy as np
 if TYPE_CHECKING:
     from sklearn_meta.core.data.context import DataContext
     from sklearn_meta.core.model.node import ModelNode
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -163,8 +166,9 @@ class FitCache:
                     hit_count=1,
                 )
                 return model
-            except Exception:
+            except Exception as e:
                 # Cache corruption - remove entry
+                logger.warning(f"Cache read failed for {cache_path}, removing: {e}")
                 cache_path.unlink(missing_ok=True)
 
         return None
@@ -192,9 +196,9 @@ class FitCache:
         try:
             with open(cache_path, "wb") as f:
                 pickle.dump(model, f)
-        except Exception:
+        except Exception as e:
             # If serialization fails, just skip disk cache
-            pass
+            logger.warning(f"Cache write failed for {cache_path}: {e}")
 
         # Check size limits
         self._enforce_size_limit()

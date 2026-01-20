@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING
 
 import numpy as np
@@ -11,6 +12,8 @@ from sklearn_meta.plugins.base import ModelPlugin
 if TYPE_CHECKING:
     from sklearn_meta.core.data.context import DataContext
     from sklearn_meta.core.model.node import ModelNode
+
+logger = logging.getLogger(__name__)
 
 
 class XGBMultiplierPlugin(ModelPlugin):
@@ -160,7 +163,8 @@ class XGBMultiplierPlugin(ModelPlugin):
 
             return -np.mean(scores)
 
-        except Exception:
+        except Exception as e:
+            logger.debug(f"XGB multiplier CV evaluation failed: {e}")
             return float("inf")
 
     def __repr__(self) -> str:

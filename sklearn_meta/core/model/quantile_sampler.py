@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class SamplingStrategy(Enum):
@@ -213,7 +216,8 @@ class ParametricSampler(QuantileSamplerBase):
                     if np.any(np.isnan(predicted)):
                         return np.inf
                     return np.sum((predicted - quantile_values) ** 2)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Johnson SU fitting failed: {e}")
                     return np.inf
 
             # Initial guess
@@ -296,7 +300,8 @@ class AutoSelectSampler(QuantileSamplerBase):
                     best_error = error
                     best_sampler = sampler
                     best_name = name
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Sampler fitting failed for {name}: {e}")
                 continue
 
         if best_sampler is None:

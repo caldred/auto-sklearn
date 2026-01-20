@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Protocol, TYPE_CHECKING
 
@@ -9,6 +10,8 @@ import numpy as np
 
 if TYPE_CHECKING:
     import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 class FeatureImportance(Protocol):
@@ -162,7 +165,8 @@ class TreeImportanceExtractor(ImportanceExtractor):
 
         try:
             score = booster.get_score(importance_type=xgb_type)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Requested importance_type '{xgb_type}' failed, using default: {e}")
             score = booster.get_score()
 
         # Map XGBoost feature names (f0, f1, ...) to actual names
@@ -190,7 +194,8 @@ class TreeImportanceExtractor(ImportanceExtractor):
 
         try:
             importances = model.get_feature_importance(type=cb_type)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Requested CatBoost importance_type '{cb_type}' failed, using default: {e}")
             importances = model.get_feature_importance()
 
         return dict(zip(feature_names, importances))

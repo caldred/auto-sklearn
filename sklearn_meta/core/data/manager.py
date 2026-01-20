@@ -58,6 +58,12 @@ class DataManager:
         if ctx.y is None:
             raise ValueError("Cannot create folds without target variable y")
 
+        if ctx.n_samples < self.cv_config.n_splits:
+            raise ValueError(
+                f"Dataset has {ctx.n_samples} samples but n_splits={self.cv_config.n_splits}. "
+                f"Reduce n_splits or use more data."
+            )
+
         splitter = self._create_splitter(ctx)
         folds = []
 
@@ -165,6 +171,9 @@ class DataManager:
         Returns:
             Array of OOF predictions with shape (n_samples,) or (n_samples, n_classes).
         """
+        if not fold_results:
+            raise ValueError("fold_results cannot be empty - no folds were evaluated")
+
         # Determine output shape from first result
         first_preds = fold_results[0].val_predictions
         if first_preds.ndim == 1:

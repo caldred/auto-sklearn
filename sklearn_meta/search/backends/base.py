@@ -109,6 +109,7 @@ class SearchBackend(ABC):
         timeout: Optional[float] = None,
         callbacks: Optional[List[Callable]] = None,
         study_name: Optional[str] = None,
+        early_stopping_rounds: Optional[int] = None,
     ) -> OptimizationResult:
         """
         Run hyperparameter optimization.
@@ -120,6 +121,7 @@ class SearchBackend(ABC):
             timeout: Optional timeout in seconds.
             callbacks: Optional list of callback functions.
             study_name: Optional name for the study.
+            early_stopping_rounds: Stop if no improvement for this many trials.
 
         Returns:
             OptimizationResult with best parameters and all trial results.

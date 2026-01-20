@@ -66,7 +66,9 @@ class MockSearchBackend:
         search_space,
         n_trials=10,
         timeout=None,
+        callbacks=None,
         study_name="test",
+        early_stopping_rounds=None,
     ):
         from sklearn_meta.search.backends.base import OptimizationResult, TrialResult
 

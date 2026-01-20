@@ -50,6 +50,12 @@ class DataContext:
                 f"X and base_margin must have same length. Got X: {len(self.X)}, base_margin: {len(self.base_margin)}"
             )
 
+        # Warn about NaN values (don't error - user may handle it in preprocessing)
+        if self.X.isnull().any().any():
+            import warnings
+            nan_count = self.X.isnull().sum().sum()
+            warnings.warn(f"X contains {nan_count} NaN values")
+
     @property
     def n_samples(self) -> int:
         """Number of samples in the dataset."""
@@ -152,6 +158,11 @@ class DataContext:
         """
         X_augmented = self.X.copy()
         for node_name, preds in predictions.items():
+            # Validate predictions shape
+            if len(preds) != len(self.X):
+                raise ValueError(
+                    f"Predictions for '{node_name}' have {len(preds)} samples but X has {len(self.X)}"
+                )
             col_name = f"{prefix}{node_name}"
             if preds.ndim == 1:
                 X_augmented[col_name] = preds
