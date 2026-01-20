@@ -3,7 +3,7 @@
 import pytest
 import numpy as np
 
-from auto_sklearn.search.parameter import (
+from sklearn_meta.search.parameter import (
     CategoricalParameter,
     ConditionalParameter,
     FloatParameter,

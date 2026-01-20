@@ -3,8 +3,8 @@
 import pytest
 from typing import Type
 
-from auto_sklearn.plugins.base import ModelPlugin
-from auto_sklearn.plugins.registry import PluginRegistry, get_default_registry
+from sklearn_meta.plugins.base import ModelPlugin
+from sklearn_meta.plugins.registry import PluginRegistry, get_default_registry
 
 
 class DummyPluginA(ModelPlugin):

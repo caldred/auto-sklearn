@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from auto_sklearn.core.data.context import DataContext
-from auto_sklearn.core.data.cv import CVConfig, CVFold, CVStrategy, FoldResult
-from auto_sklearn.core.data.manager import DataManager
+from sklearn_meta.core.data.context import DataContext
+from sklearn_meta.core.data.cv import CVConfig, CVFold, CVStrategy, FoldResult
+from sklearn_meta.core.data.manager import DataManager
 
 
 class TestDataManagerCreateFolds:

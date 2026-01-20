@@ -3,13 +3,13 @@
 import pytest
 import numpy as np
 
-from auto_sklearn.core.model.dependency import DependencyType
-from auto_sklearn.core.model.joint_quantile_graph import (
+from sklearn_meta.core.model.dependency import DependencyType
+from sklearn_meta.core.model.joint_quantile_graph import (
     JointQuantileConfig,
     JointQuantileGraph,
     OrderConstraint,
 )
-from auto_sklearn.core.model.quantile_sampler import SamplingStrategy
+from sklearn_meta.core.model.quantile_sampler import SamplingStrategy
 
 
 # =============================================================================

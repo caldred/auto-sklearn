@@ -3,7 +3,7 @@
 import pytest
 from typing import Any, Dict, Type
 
-from auto_sklearn.plugins.base import ModelPlugin, CompositePlugin
+from sklearn_meta.plugins.base import ModelPlugin, CompositePlugin
 
 
 class DummyPlugin(ModelPlugin):
@@ -308,7 +308,7 @@ class TestCompositePlugin:
 @pytest.fixture
 def simple_search_space():
     """Simple search space for testing."""
-    from auto_sklearn.search.space import SearchSpace
+    from sklearn_meta.search.space import SearchSpace
     space = SearchSpace()
     space.add_int("n_estimators", 10, 100)
     return space

@@ -5,7 +5,7 @@ import numpy as np
 import warnings
 from unittest.mock import MagicMock, patch
 
-from auto_sklearn.plugins.xgboost.importance import (
+from sklearn_meta.plugins.xgboost.importance import (
     XGBImportanceExtractor,
     XGBImportancePlugin,
 )
@@ -27,7 +27,7 @@ class MockXGBModel:
 
     def __init__(self, scores=None, feature_names=None):
         self._booster = MockBooster(scores, feature_names)
-        self._auto_sklearn_meta = {}
+        self._sklearn_meta_meta = {}
 
     def get_booster(self):
         return self._booster
@@ -212,9 +212,9 @@ class TestXGBImportancePluginPostFit:
 
         result = plugin.post_fit(model, node, data_context)
 
-        assert "_auto_sklearn_meta" in dir(result)
-        assert "feature_importance" in result._auto_sklearn_meta
-        assert "importance_type" in result._auto_sklearn_meta
+        assert "_sklearn_meta_meta" in dir(result)
+        assert "feature_importance" in result._sklearn_meta_meta
+        assert "importance_type" in result._sklearn_meta_meta
 
     def test_returns_same_model(self, data_context):
         """Verify post_fit returns the same model object."""
@@ -261,7 +261,7 @@ class TestXGBImportancePluginGetImportance:
         """Verify returns cached importance if available."""
         plugin = XGBImportancePlugin()
         model = MockXGBModel()
-        model._auto_sklearn_meta["feature_importance"] = {"a": 1.0, "b": 2.0}
+        model._sklearn_meta_meta["feature_importance"] = {"a": 1.0, "b": 2.0}
 
         result = plugin.get_importance(model)
 
@@ -271,7 +271,7 @@ class TestXGBImportancePluginGetImportance:
         """Verify extracts fresh importance with provided feature names."""
         plugin = XGBImportancePlugin()
         model = MockXGBModel(scores={"f0": 10.0, "f1": 20.0})
-        model._auto_sklearn_meta = {}  # No cached importance
+        model._sklearn_meta_meta = {}  # No cached importance
 
         result = plugin.get_importance(model, feature_names=["x", "y"])
 
@@ -282,7 +282,7 @@ class TestXGBImportancePluginGetImportance:
         """Verify raises when no feature names and no cache."""
         plugin = XGBImportancePlugin()
         model = MockXGBModel()
-        model._auto_sklearn_meta = {}
+        model._sklearn_meta_meta = {}
         model._booster.feature_names = None
 
         # Either ValueError from explicit check or TypeError from iterating None
@@ -293,7 +293,7 @@ class TestXGBImportancePluginGetImportance:
         """Verify uses booster's feature names as fallback."""
         plugin = XGBImportancePlugin()
         model = MockXGBModel(scores={"f0": 10.0}, feature_names=["alpha"])
-        model._auto_sklearn_meta = {}
+        model._sklearn_meta_meta = {}
 
         result = plugin.get_importance(model)
 
@@ -307,7 +307,7 @@ class TestXGBImportancePluginGetTopFeatures:
         """Verify returns top N features."""
         plugin = XGBImportancePlugin()
         model = MockXGBModel()
-        model._auto_sklearn_meta["feature_importance"] = {
+        model._sklearn_meta_meta["feature_importance"] = {
             "a": 10.0,
             "b": 30.0,
             "c": 20.0,
@@ -324,7 +324,7 @@ class TestXGBImportancePluginGetTopFeatures:
         """Verify returns list of tuples."""
         plugin = XGBImportancePlugin()
         model = MockXGBModel()
-        model._auto_sklearn_meta["feature_importance"] = {"a": 10.0, "b": 20.0}
+        model._sklearn_meta_meta["feature_importance"] = {"a": 10.0, "b": 20.0}
 
         result = plugin.get_top_features(model, n=2)
 
@@ -336,7 +336,7 @@ class TestXGBImportancePluginGetTopFeatures:
         """Verify features are sorted by importance descending."""
         plugin = XGBImportancePlugin()
         model = MockXGBModel()
-        model._auto_sklearn_meta["feature_importance"] = {
+        model._sklearn_meta_meta["feature_importance"] = {
             "low": 1.0,
             "medium": 5.0,
             "high": 10.0,
@@ -351,7 +351,7 @@ class TestXGBImportancePluginGetTopFeatures:
         """Verify default n is 10."""
         plugin = XGBImportancePlugin()
         model = MockXGBModel()
-        model._auto_sklearn_meta["feature_importance"] = {
+        model._sklearn_meta_meta["feature_importance"] = {
             f"f{i}": float(i) for i in range(20)
         }
 
@@ -363,7 +363,7 @@ class TestXGBImportancePluginGetTopFeatures:
         """Verify returns all features if fewer than n."""
         plugin = XGBImportancePlugin()
         model = MockXGBModel()
-        model._auto_sklearn_meta["feature_importance"] = {"a": 1.0, "b": 2.0}
+        model._sklearn_meta_meta["feature_importance"] = {"a": 1.0, "b": 2.0}
 
         result = plugin.get_top_features(model, n=10)
 

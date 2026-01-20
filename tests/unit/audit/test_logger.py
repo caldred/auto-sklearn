@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from auto_sklearn.audit.logger import AuditLogger, FoldLog, TrialLog
+from sklearn_meta.audit.logger import AuditLogger, FoldLog, TrialLog
 
 
 class TestFoldLog:
@@ -85,7 +85,7 @@ class TestAuditLoggerInit:
         """Verify default initialization."""
         logger = AuditLogger()
 
-        assert logger.name == "auto_sklearn"
+        assert logger.name == "sklearn_meta"
         assert len(logger._fold_logs) == 0
         assert len(logger._trial_logs) == 0
 

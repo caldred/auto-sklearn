@@ -2,7 +2,7 @@
 
 import pytest
 
-from auto_sklearn.meta.prebaked import (
+from sklearn_meta.meta.prebaked import (
     PREBAKED_REGISTRY,
     PrebakedConfig,
     get_all_prebaked_for_model,
@@ -10,7 +10,7 @@ from auto_sklearn.meta.prebaked import (
     register_prebaked,
     suggest_reparameterizations,
 )
-from auto_sklearn.meta.reparameterization import (
+from sklearn_meta.meta.reparameterization import (
     LogProductReparameterization,
     RatioReparameterization,
 )

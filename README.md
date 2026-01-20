@@ -1,4 +1,4 @@
-# Auto-sklearn Meta-Learning Library
+# sklearn-meta
 
 A Python library for automated machine learning with meta-learning capabilities, hyperparameter optimization, and model stacking.
 
@@ -40,14 +40,15 @@ pip install lightgbm
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 
-from auto_sklearn.core.data.context import DataContext
-from auto_sklearn.core.data.cv import CVConfig, CVStrategy
-from auto_sklearn.core.data.manager import DataManager
-from auto_sklearn.core.model.node import ModelNode
-from auto_sklearn.core.model.graph import ModelGraph
-from auto_sklearn.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from auto_sklearn.core.tuning.strategy import OptimizationStrategy
-from auto_sklearn.search.space import SearchSpace
+from sklearn_meta.core.data.context import DataContext
+from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+from sklearn_meta.core.data.manager import DataManager
+from sklearn_meta.core.model.node import ModelNode
+from sklearn_meta.core.model.graph import ModelGraph
+from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
+from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.search.space import SearchSpace
+from sklearn_meta.search.backends.optuna import OptunaBackend
 
 # Create search space
 rf_space = SearchSpace()
@@ -69,7 +70,7 @@ graph.add_node(rf_node)
 # Configure tuning
 cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED, random_state=42)
 tuning_config = TuningConfig(
-    strategy=OptimizationStrategy.OPTUNA,
+    strategy=OptimizationStrategy.LAYER_BY_LAYER,
     n_trials=20,
     cv_config=cv_config,
     metric="accuracy",
@@ -84,6 +85,7 @@ data_manager = DataManager(cv_config)
 orchestrator = TuningOrchestrator(
     graph=graph,
     data_manager=data_manager,
+    search_backend=OptunaBackend(),
     tuning_config=tuning_config,
 )
 fitted_graph = orchestrator.fit(ctx)
@@ -95,7 +97,7 @@ predictions = fitted_graph.predict(X_test)
 ## Project Structure
 
 ```
-auto_sklearn/
+sklearn_meta/
 ├── core/
 │   ├── data/          # DataContext, CV, DataManager
 │   ├── model/         # ModelNode, ModelGraph, Dependencies
@@ -120,7 +122,7 @@ pytest tests/ -v
 
 # Run with coverage
 pip install pytest-cov
-pytest tests/ --cov=auto_sklearn --cov-report=html
+pytest tests/ --cov=sklearn_meta --cov-report=html
 ```
 
 ## License

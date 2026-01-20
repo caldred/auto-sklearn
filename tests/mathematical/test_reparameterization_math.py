@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 from scipy import stats
 
-from auto_sklearn.meta.reparameterization import (
+from sklearn_meta.meta.reparameterization import (
     LinearReparameterization,
     LogProductReparameterization,
     RatioReparameterization,

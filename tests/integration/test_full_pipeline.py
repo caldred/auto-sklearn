@@ -8,15 +8,15 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import accuracy_score, mean_squared_error
 
-from auto_sklearn.core.data.context import DataContext
-from auto_sklearn.core.data.cv import CVConfig, CVStrategy
-from auto_sklearn.core.data.manager import DataManager
-from auto_sklearn.core.model.graph import ModelGraph
-from auto_sklearn.core.model.node import ModelNode, OutputType
-from auto_sklearn.core.model.dependency import DependencyEdge, DependencyType
-from auto_sklearn.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from auto_sklearn.core.tuning.strategy import OptimizationStrategy
-from auto_sklearn.search.space import SearchSpace
+from sklearn_meta.core.data.context import DataContext
+from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+from sklearn_meta.core.data.manager import DataManager
+from sklearn_meta.core.model.graph import ModelGraph
+from sklearn_meta.core.model.node import ModelNode, OutputType
+from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
+from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.search.space import SearchSpace
 
 
 @pytest.fixture

@@ -4,7 +4,7 @@ import pytest
 from abc import ABC
 from concurrent.futures import Future
 
-from auto_sklearn.execution.base import Executor
+from sklearn_meta.execution.base import Executor
 
 
 class ConcreteExecutor(Executor):

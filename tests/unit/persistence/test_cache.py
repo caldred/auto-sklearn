@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
-from auto_sklearn.persistence.cache import FitCache, CacheEntry
+from sklearn_meta.persistence.cache import FitCache, CacheEntry
 
 
 class MockModel:
@@ -53,7 +53,7 @@ class TestFitCacheInit:
         """Verify default cache dir is temp directory."""
         cache = FitCache()
 
-        assert "auto_sklearn_cache" in str(cache.cache_dir)
+        assert "sklearn_meta_cache" in str(cache.cache_dir)
 
     def test_custom_cache_dir(self, tmp_path):
         """Verify custom cache dir is used."""
@@ -170,7 +170,7 @@ class TestFitCacheCacheKey:
 
     def test_cache_key_different_data(self, classification_data):
         """Verify different data produces different keys."""
-        from auto_sklearn.core.data.context import DataContext
+        from sklearn_meta.core.data.context import DataContext
 
         cache = FitCache()
         node = MagicMock()
@@ -214,7 +214,7 @@ class TestFitCacheDataHash:
 
     def test_data_hash_different_shapes(self, classification_data):
         """Verify different shapes produce different hashes."""
-        from auto_sklearn.core.data.context import DataContext
+        from sklearn_meta.core.data.context import DataContext
 
         cache = FitCache()
         X, y = classification_data

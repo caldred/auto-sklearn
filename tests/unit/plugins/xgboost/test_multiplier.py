@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 from unittest.mock import MagicMock, patch
 
-from auto_sklearn.plugins.xgboost.multiplier import XGBMultiplierPlugin
+from sklearn_meta.plugins.xgboost.multiplier import XGBMultiplierPlugin
 
 
 def _has_xgboost():
@@ -312,7 +312,7 @@ class TestXGBMultiplierPluginEvaluateParams:
     def test_returns_score_on_success(self, classification_data):
         """Verify returns actual score on success."""
         import pandas as pd
-        from auto_sklearn.core.data.context import DataContext
+        from sklearn_meta.core.data.context import DataContext
 
         X, y = classification_data
         ctx = DataContext(X=X, y=y)

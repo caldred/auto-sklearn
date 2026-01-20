@@ -8,7 +8,7 @@ import numpy as np
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from auto_sklearn.persistence.store import ArtifactStore, ArtifactMetadata
+from sklearn_meta.persistence.store import ArtifactStore, ArtifactMetadata
 
 
 class MockModel:
@@ -62,7 +62,7 @@ class TestArtifactStoreInit:
         monkeypatch.chdir(tmp_path)
         store = ArtifactStore()
 
-        assert store.base_path == Path(".auto_sklearn_artifacts")
+        assert store.base_path == Path(".sklearn_meta_artifacts")
 
     def test_custom_path(self, tmp_path):
         """Verify custom path is used."""
@@ -356,7 +356,7 @@ class TestArtifactStoreSaveFittedNode:
         store = ArtifactStore(base_path=str(tmp_path))
 
         # Create mock fitted node
-        from auto_sklearn.core.data.cv import CVFold, FoldResult, CVResult
+        from sklearn_meta.core.data.cv import CVFold, FoldResult, CVResult
 
         fold = CVFold(
             fold_idx=0,
@@ -398,8 +398,8 @@ class TestArtifactStoreSaveFittedGraph:
         store = ArtifactStore(base_path=str(tmp_path))
 
         # Create mock fitted graph
-        from auto_sklearn.core.data.cv import CVFold, FoldResult, CVResult
-        from auto_sklearn.core.tuning.strategy import OptimizationStrategy
+        from sklearn_meta.core.data.cv import CVFold, FoldResult, CVResult
+        from sklearn_meta.core.tuning.strategy import OptimizationStrategy
 
         fold = CVFold(
             fold_idx=0,

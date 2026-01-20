@@ -4,9 +4,9 @@ import pytest
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 
-from auto_sklearn.core.model.graph import CycleError, ModelGraph
-from auto_sklearn.core.model.node import ModelNode
-from auto_sklearn.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta.core.model.graph import CycleError, ModelGraph
+from sklearn_meta.core.model.node import ModelNode
+from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
 
 
 class TestModelGraphBasics:

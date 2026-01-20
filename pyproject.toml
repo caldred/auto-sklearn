@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sklearn-meta"
+version = "0.1.0"
+description = "A meta-learning library for sklearn-compatible ML models"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "sklearn-meta Contributors"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.21.0",
+    "pandas>=1.3.0",
+    "scikit-learn>=1.0.0",
+    "optuna>=3.0.0",
+]
+
+[project.optional-dependencies]
+xgboost = ["xgboost>=1.6.0"]
+lightgbm = ["lightgbm>=3.3.0"]
+catboost = ["catboost>=1.0.0"]
+all = [
+    "xgboost>=1.6.0",
+    "lightgbm>=3.3.0",
+    "catboost>=1.0.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=3.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/sklearn-meta/sklearn-meta"
+Documentation = "https://github.com/sklearn-meta/sklearn-meta"
+Repository = "https://github.com/sklearn-meta/sklearn-meta"
+
+[tool.setuptools.packages.find]
+include = ["sklearn_meta*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v"
+
+[tool.coverage.run]
+source = ["sklearn_meta"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

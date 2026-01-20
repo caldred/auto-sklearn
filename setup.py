@@ -1,4 +1,4 @@
-"""Setup script for auto-sklearn meta-learning library."""
+"""Setup script for sklearn-meta library."""
 
 from setuptools import setup, find_packages
 
@@ -9,10 +9,10 @@ with open("requirements.txt") as f:
     ]
 
 setup(
-    name="auto-sklearn-meta",
+    name="sklearn-meta",
     version="0.1.0",
-    description="A flexible meta-learning library for tuning sklearn-compatible ML models",
-    author="Your Name",
+    description="A meta-learning library for sklearn-compatible ML models",
+    author="sklearn-meta Contributors",
     python_requires=">=3.8",
     packages=find_packages(),
     install_requires=requirements,
@@ -33,6 +33,7 @@ setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
 )

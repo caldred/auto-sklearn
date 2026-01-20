@@ -143,7 +143,7 @@ def time_series_data() -> Tuple[pd.DataFrame, pd.Series]:
 @pytest.fixture
 def data_context(classification_data):
     """DataContext from classification data."""
-    from auto_sklearn.core.data.context import DataContext
+    from sklearn_meta.core.data.context import DataContext
 
     X, y = classification_data
     return DataContext(X=X, y=y)
@@ -152,7 +152,7 @@ def data_context(classification_data):
 @pytest.fixture
 def data_context_with_groups(grouped_data):
     """DataContext with groups for group CV."""
-    from auto_sklearn.core.data.context import DataContext
+    from sklearn_meta.core.data.context import DataContext
 
     X, y, groups = grouped_data
     return DataContext(X=X, y=y, groups=groups)
@@ -161,7 +161,7 @@ def data_context_with_groups(grouped_data):
 @pytest.fixture
 def regression_context(regression_data):
     """DataContext from regression data."""
-    from auto_sklearn.core.data.context import DataContext
+    from sklearn_meta.core.data.context import DataContext
 
     X, y = regression_data
     return DataContext(X=X, y=y)
@@ -170,7 +170,7 @@ def regression_context(regression_data):
 @pytest.fixture
 def small_context(small_classification_data):
     """Small DataContext for quick tests."""
-    from auto_sklearn.core.data.context import DataContext
+    from sklearn_meta.core.data.context import DataContext
 
     X, y = small_classification_data
     return DataContext(X=X, y=y)
@@ -184,7 +184,7 @@ def small_context(small_classification_data):
 @pytest.fixture
 def cv_config_stratified():
     """Stratified CV configuration."""
-    from auto_sklearn.core.data.cv import CVConfig, CVStrategy
+    from sklearn_meta.core.data.cv import CVConfig, CVStrategy
 
     return CVConfig(
         n_splits=5,
@@ -198,7 +198,7 @@ def cv_config_stratified():
 @pytest.fixture
 def cv_config_group():
     """Group CV configuration."""
-    from auto_sklearn.core.data.cv import CVConfig, CVStrategy
+    from sklearn_meta.core.data.cv import CVConfig, CVStrategy
 
     return CVConfig(
         n_splits=5,
@@ -212,7 +212,7 @@ def cv_config_group():
 @pytest.fixture
 def cv_config_repeated():
     """Repeated CV configuration."""
-    from auto_sklearn.core.data.cv import CVConfig, CVStrategy
+    from sklearn_meta.core.data.cv import CVConfig, CVStrategy
 
     return CVConfig(
         n_splits=5,
@@ -226,7 +226,7 @@ def cv_config_repeated():
 @pytest.fixture
 def cv_config_nested():
     """Nested CV configuration."""
-    from auto_sklearn.core.data.cv import CVConfig, CVStrategy
+    from sklearn_meta.core.data.cv import CVConfig, CVStrategy
 
     return CVConfig(
         n_splits=5,
@@ -245,8 +245,8 @@ def cv_config_nested():
 @pytest.fixture
 def rf_classifier_node():
     """ModelNode for Random Forest classifier."""
-    from auto_sklearn.core.model.node import ModelNode
-    from auto_sklearn.search.space import SearchSpace
+    from sklearn_meta.core.model.node import ModelNode
+    from sklearn_meta.search.space import SearchSpace
 
     space = SearchSpace()
     space.add_int("n_estimators", 10, 100)
@@ -263,8 +263,8 @@ def rf_classifier_node():
 @pytest.fixture
 def lr_classifier_node():
     """ModelNode for Logistic Regression classifier."""
-    from auto_sklearn.core.model.node import ModelNode
-    from auto_sklearn.search.space import SearchSpace
+    from sklearn_meta.core.model.node import ModelNode
+    from sklearn_meta.search.space import SearchSpace
 
     space = SearchSpace()
     space.add_float("C", 0.01, 10.0, log=True)
@@ -280,8 +280,8 @@ def lr_classifier_node():
 @pytest.fixture
 def rf_regressor_node():
     """ModelNode for Random Forest regressor."""
-    from auto_sklearn.core.model.node import ModelNode
-    from auto_sklearn.search.space import SearchSpace
+    from sklearn_meta.core.model.node import ModelNode
+    from sklearn_meta.search.space import SearchSpace
 
     space = SearchSpace()
     space.add_int("n_estimators", 10, 100)
@@ -298,7 +298,7 @@ def rf_regressor_node():
 @pytest.fixture
 def scaler_node():
     """ModelNode for StandardScaler transformer."""
-    from auto_sklearn.core.model.node import ModelNode, OutputType
+    from sklearn_meta.core.model.node import ModelNode, OutputType
 
     return ModelNode(
         name="scaler",
@@ -315,7 +315,7 @@ def scaler_node():
 @pytest.fixture
 def simple_graph(rf_classifier_node):
     """Graph with a single node."""
-    from auto_sklearn.core.model.graph import ModelGraph
+    from sklearn_meta.core.model.graph import ModelGraph
 
     graph = ModelGraph()
     graph.add_node(rf_classifier_node)
@@ -325,7 +325,7 @@ def simple_graph(rf_classifier_node):
 @pytest.fixture
 def two_model_graph(rf_classifier_node, lr_classifier_node):
     """Graph with two independent nodes."""
-    from auto_sklearn.core.model.graph import ModelGraph
+    from sklearn_meta.core.model.graph import ModelGraph
 
     graph = ModelGraph()
     graph.add_node(rf_classifier_node)
@@ -336,10 +336,10 @@ def two_model_graph(rf_classifier_node, lr_classifier_node):
 @pytest.fixture
 def stacking_graph():
     """Graph with base models stacked into meta-learner."""
-    from auto_sklearn.core.model.graph import ModelGraph
-    from auto_sklearn.core.model.node import ModelNode, OutputType
-    from auto_sklearn.core.model.dependency import DependencyEdge, DependencyType
-    from auto_sklearn.search.space import SearchSpace
+    from sklearn_meta.core.model.graph import ModelGraph
+    from sklearn_meta.core.model.node import ModelNode, OutputType
+    from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+    from sklearn_meta.search.space import SearchSpace
 
     # Base models
     rf_space = SearchSpace()
@@ -390,9 +390,9 @@ def stacking_graph():
 @pytest.fixture
 def linear_graph():
     """Linear graph A -> B -> C."""
-    from auto_sklearn.core.model.graph import ModelGraph
-    from auto_sklearn.core.model.node import ModelNode
-    from auto_sklearn.core.model.dependency import DependencyEdge, DependencyType
+    from sklearn_meta.core.model.graph import ModelGraph
+    from sklearn_meta.core.model.node import ModelNode
+    from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
 
     node_a = ModelNode(name="A", estimator_class=LogisticRegression)
     node_b = ModelNode(name="B", estimator_class=LogisticRegression)
@@ -412,9 +412,9 @@ def linear_graph():
 @pytest.fixture
 def diamond_graph():
     """Diamond-shaped graph: A -> B, A -> C, B -> D, C -> D."""
-    from auto_sklearn.core.model.graph import ModelGraph
-    from auto_sklearn.core.model.node import ModelNode
-    from auto_sklearn.core.model.dependency import DependencyEdge, DependencyType
+    from sklearn_meta.core.model.graph import ModelGraph
+    from sklearn_meta.core.model.node import ModelNode
+    from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
 
     nodes = {name: ModelNode(name=name, estimator_class=LogisticRegression)
              for name in ["A", "B", "C", "D"]}
@@ -439,7 +439,7 @@ def diamond_graph():
 @pytest.fixture
 def simple_search_space():
     """Simple search space with various parameter types."""
-    from auto_sklearn.search.space import SearchSpace
+    from sklearn_meta.search.space import SearchSpace
 
     space = SearchSpace()
     space.add_int("n_estimators", 10, 100)
@@ -451,7 +451,7 @@ def simple_search_space():
 @pytest.fixture
 def xgb_search_space():
     """XGBoost-like search space for reparameterization tests."""
-    from auto_sklearn.search.space import SearchSpace
+    from sklearn_meta.search.space import SearchSpace
 
     space = SearchSpace()
     space.add_float("learning_rate", 0.01, 0.3, log=True)
@@ -470,8 +470,8 @@ def xgb_search_space():
 @pytest.fixture
 def tuning_config():
     """Basic tuning configuration."""
-    from auto_sklearn.core.tuning.orchestrator import TuningConfig
-    from auto_sklearn.core.tuning.strategy import OptimizationStrategy
+    from sklearn_meta.core.tuning.orchestrator import TuningConfig
+    from sklearn_meta.core.tuning.strategy import OptimizationStrategy
 
     return TuningConfig(
         strategy=OptimizationStrategy.LAYER_BY_LAYER,
@@ -485,8 +485,8 @@ def tuning_config():
 @pytest.fixture
 def tuning_config_regression():
     """Tuning configuration for regression."""
-    from auto_sklearn.core.tuning.orchestrator import TuningConfig
-    from auto_sklearn.core.tuning.strategy import OptimizationStrategy
+    from sklearn_meta.core.tuning.orchestrator import TuningConfig
+    from sklearn_meta.core.tuning.strategy import OptimizationStrategy
 
     return TuningConfig(
         strategy=OptimizationStrategy.LAYER_BY_LAYER,
@@ -554,7 +554,7 @@ class MockSearchBackend:
     """Mock search backend for testing."""
 
     def __init__(self, best_params: Optional[Dict[str, Any]] = None):
-        from auto_sklearn.search.backends.base import OptimizationResult, TrialResult
+        from sklearn_meta.search.backends.base import OptimizationResult, TrialResult
 
         self._best_params = best_params or {}
         self._trials: List[TrialResult] = []
@@ -570,7 +570,7 @@ class MockSearchBackend:
         study_name: str = "test",
     ):
         """Run mock optimization."""
-        from auto_sklearn.search.backends.base import OptimizationResult, TrialResult
+        from sklearn_meta.search.backends.base import OptimizationResult, TrialResult
 
         best_value = float('inf')
         best_params = self._best_params

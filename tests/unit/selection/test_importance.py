@@ -6,7 +6,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression, Ridge
 
-from auto_sklearn.selection.importance import (
+from sklearn_meta.selection.importance import (
     ImportanceExtractor,
     ImportanceRegistry,
     LinearImportanceExtractor,

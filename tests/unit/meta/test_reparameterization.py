@@ -3,14 +3,14 @@
 import pytest
 import numpy as np
 
-from auto_sklearn.meta.reparameterization import (
+from sklearn_meta.meta.reparameterization import (
     LinearReparameterization,
     LogProductReparameterization,
     RatioReparameterization,
     ReparameterizationResult,
     ReparameterizedSpace,
 )
-from auto_sklearn.search.space import SearchSpace
+from sklearn_meta.search.space import SearchSpace
 
 
 class TestLogProductReparameterization:

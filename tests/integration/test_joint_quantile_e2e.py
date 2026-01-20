@@ -4,20 +4,20 @@ import pytest
 import numpy as np
 import pandas as pd
 
-from auto_sklearn.core.data.context import DataContext
-from auto_sklearn.core.data.cv import CVConfig, CVStrategy
-from auto_sklearn.core.data.manager import DataManager
-from auto_sklearn.core.model.joint_quantile_graph import (
+from sklearn_meta.core.data.context import DataContext
+from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+from sklearn_meta.core.data.manager import DataManager
+from sklearn_meta.core.model.joint_quantile_graph import (
     JointQuantileConfig,
     JointQuantileGraph,
     OrderConstraint,
 )
-from auto_sklearn.core.model.joint_quantile_fitted import JointQuantileFittedGraph
-from auto_sklearn.core.model.quantile_node import QuantileScalingConfig
-from auto_sklearn.core.model.quantile_sampler import SamplingStrategy
-from auto_sklearn.core.tuning.joint_quantile_orchestrator import JointQuantileOrchestrator
-from auto_sklearn.core.tuning.orchestrator import TuningConfig
-from auto_sklearn.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.core.model.joint_quantile_fitted import JointQuantileFittedGraph
+from sklearn_meta.core.model.quantile_node import QuantileScalingConfig
+from sklearn_meta.core.model.quantile_sampler import SamplingStrategy
+from sklearn_meta.core.tuning.joint_quantile_orchestrator import JointQuantileOrchestrator
+from sklearn_meta.core.tuning.orchestrator import TuningConfig
+from sklearn_meta.core.tuning.strategy import OptimizationStrategy
 
 
 # =============================================================================
@@ -94,7 +94,7 @@ class MockSearchBackend:
     """Mock search backend for testing."""
 
     def optimize(self, objective, search_space, n_trials=10, timeout=None, study_name="test"):
-        from auto_sklearn.search.backends.base import OptimizationResult, TrialResult
+        from sklearn_meta.search.backends.base import OptimizationResult, TrialResult
 
         params = {}
         value = objective(params)

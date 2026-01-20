@@ -7,9 +7,9 @@ from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 
-from auto_sklearn.core.data.context import DataContext
-from auto_sklearn.core.data.cv import CVConfig, CVFold, CVStrategy, FoldResult
-from auto_sklearn.core.data.manager import DataManager
+from sklearn_meta.core.data.context import DataContext
+from sklearn_meta.core.data.cv import CVConfig, CVFold, CVStrategy, FoldResult
+from sklearn_meta.core.data.manager import DataManager
 
 
 class TestTrainValDisjoint:

@@ -6,7 +6,7 @@ import pandas as pd
 from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
 
-from auto_sklearn.selection.shadow import ShadowFeatureSelector, ShadowResult
+from sklearn_meta.selection.shadow import ShadowFeatureSelector, ShadowResult
 
 
 class TestShadowFeatureSelectorCreation:

@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from dataclasses import FrozenInstanceError
 
-from auto_sklearn.core.data.context import DataContext
+from sklearn_meta.core.data.context import DataContext
 
 
 class TestDataContextImmutability:

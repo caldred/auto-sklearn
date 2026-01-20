@@ -2,7 +2,7 @@
 
 import pytest
 
-from auto_sklearn.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
 
 
 class TestDependencyType:

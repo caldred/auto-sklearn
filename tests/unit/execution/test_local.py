@@ -5,7 +5,7 @@ import os
 from concurrent.futures import Future
 from unittest.mock import patch, MagicMock
 
-from auto_sklearn.execution.local import LocalExecutor, SequentialExecutor
+from sklearn_meta.execution.local import LocalExecutor, SequentialExecutor
 
 
 class TestLocalExecutorInit:

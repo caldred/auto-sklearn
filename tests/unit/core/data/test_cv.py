@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from auto_sklearn.core.data.cv import (
+from sklearn_meta.core.data.cv import (
     CVConfig,
     CVFold,
     CVResult,

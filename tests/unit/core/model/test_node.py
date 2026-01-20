@@ -7,8 +7,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
-from auto_sklearn.core.model.node import ModelNode, OutputType
-from auto_sklearn.search.space import SearchSpace
+from sklearn_meta.core.model.node import ModelNode, OutputType
+from sklearn_meta.search.space import SearchSpace
 
 
 class TestModelNodeCreation:

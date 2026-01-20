@@ -4,12 +4,12 @@ import pytest
 import numpy as np
 from sklearn.linear_model import Ridge
 
-from auto_sklearn.core.model.quantile_node import (
+from sklearn_meta.core.model.quantile_node import (
     DEFAULT_QUANTILE_LEVELS,
     QuantileModelNode,
     QuantileScalingConfig,
 )
-from auto_sklearn.core.model.node import OutputType
+from sklearn_meta.core.model.node import OutputType
 
 
 # =============================================================================
