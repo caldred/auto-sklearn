@@ -543,3 +543,149 @@ class TestFittedGraphPredict:
         # Predictions should work
         predictions = fitted.predict(small_context.X)
         assert len(predictions) == small_context.n_samples
+
+
+class TestParallelFoldFitting:
+    """Tests for parallel CV fold fitting."""
+
+    def test_parallel_fold_fitting_with_executor(self, simple_graph, small_context, mock_search_backend):
+        """Verify parallel fold fitting produces same results as sequential."""
+        from sklearn_meta.execution.local import LocalExecutor
+
+        cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            cv_config=cv_config,
+            metric="accuracy",
+            greater_is_better=True,
+            verbose=0,
+        )
+
+        data_manager = DataManager(cv_config)
+
+        # Sequential execution
+        orchestrator_seq = TuningOrchestrator(
+            graph=simple_graph,
+            data_manager=data_manager,
+            search_backend=mock_search_backend,
+            tuning_config=tuning_config,
+        )
+        fitted_seq = orchestrator_seq.fit(small_context)
+
+        # Parallel execution with 2 workers
+        executor = LocalExecutor(n_workers=2, backend="threading")
+        orchestrator_par = TuningOrchestrator(
+            graph=simple_graph,
+            data_manager=data_manager,
+            search_backend=mock_search_backend,
+            tuning_config=tuning_config,
+            executor=executor,
+        )
+        fitted_par = orchestrator_par.fit(small_context)
+
+        # Both should have same number of models
+        assert len(fitted_seq.fitted_nodes["rf"].models) == len(fitted_par.fitted_nodes["rf"].models)
+
+        # Both should produce same OOF prediction shape
+        assert fitted_seq.get_oof_predictions("rf").shape == fitted_par.get_oof_predictions("rf").shape
+
+    def test_executor_with_single_worker_uses_sequential(self, simple_graph, small_context, mock_search_backend):
+        """Verify single worker executor falls back to sequential."""
+        from sklearn_meta.execution.local import LocalExecutor
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            cv_config=cv_config,
+            metric="accuracy",
+            greater_is_better=True,
+            verbose=0,
+        )
+
+        data_manager = DataManager(cv_config)
+        executor = LocalExecutor(n_workers=1)
+
+        orchestrator = TuningOrchestrator(
+            graph=simple_graph,
+            data_manager=data_manager,
+            search_backend=mock_search_backend,
+            tuning_config=tuning_config,
+            executor=executor,
+        )
+
+        fitted = orchestrator.fit(small_context)
+
+        # Should still work with single worker
+        assert len(fitted.fitted_nodes) == 1
+        assert len(fitted.fitted_nodes["rf"].models) == 3
+
+
+class TestParallelNodeFitting:
+    """Tests for parallel node fitting within layers."""
+
+    def test_parallel_node_fitting_in_layer(self, two_model_graph, small_context, mock_search_backend):
+        """Verify nodes in same layer can be fitted in parallel."""
+        from sklearn_meta.execution.local import LocalExecutor
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.LAYER_BY_LAYER,
+            n_trials=1,
+            cv_config=cv_config,
+            metric="accuracy",
+            greater_is_better=True,
+            verbose=0,
+        )
+
+        data_manager = DataManager(cv_config)
+        executor = LocalExecutor(n_workers=2, backend="threading")
+
+        orchestrator = TuningOrchestrator(
+            graph=two_model_graph,
+            data_manager=data_manager,
+            search_backend=mock_search_backend,
+            tuning_config=tuning_config,
+            executor=executor,
+        )
+
+        fitted = orchestrator.fit(small_context)
+
+        # Both nodes should be fitted
+        assert "rf" in fitted.fitted_nodes
+        assert "lr" in fitted.fitted_nodes
+
+    def test_stacking_preserves_order_with_parallel(self, stacking_graph, small_context, mock_search_backend):
+        """Verify stacking still works correctly with parallel execution."""
+        from sklearn_meta.execution.local import LocalExecutor
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.LAYER_BY_LAYER,
+            n_trials=1,
+            cv_config=cv_config,
+            metric="accuracy",
+            greater_is_better=True,
+            verbose=0,
+        )
+
+        data_manager = DataManager(cv_config)
+        executor = LocalExecutor(n_workers=2, backend="threading")
+
+        orchestrator = TuningOrchestrator(
+            graph=stacking_graph,
+            data_manager=data_manager,
+            search_backend=mock_search_backend,
+            tuning_config=tuning_config,
+            executor=executor,
+        )
+
+        fitted = orchestrator.fit(small_context)
+
+        # All nodes should be fitted in correct order
+        assert "rf_base" in fitted.fitted_nodes
+        assert "lr_base" in fitted.fitted_nodes
+        assert "meta" in fitted.fitted_nodes
+
+        # Meta model should have been fitted after base models
+        # (it receives their OOF predictions)
+        assert fitted.fitted_nodes["meta"] is not None

@@ -36,6 +36,7 @@ class OptunaBackend(SearchBackend):
         random_state: Optional[int] = None,
         sampler: Optional[optuna.samplers.BaseSampler] = None,
         pruner: Optional[optuna.pruners.BasePruner] = None,
+        n_jobs: int = 1,
     ) -> None:
         """
         Initialize the Optuna backend.
@@ -45,11 +46,13 @@ class OptunaBackend(SearchBackend):
             random_state: Random seed for reproducibility.
             sampler: Optional custom Optuna sampler.
             pruner: Optional Optuna pruner for early stopping.
+            n_jobs: Number of parallel jobs for optimization trials.
         """
         super().__init__(direction=direction, random_state=random_state)
 
         self.sampler = sampler or TPESampler(seed=random_state)
         self.pruner = pruner
+        self._n_jobs = n_jobs
 
         self._study: Optional[optuna.Study] = None
         self._current_trial: Optional[optuna.Trial] = None
@@ -127,6 +130,7 @@ class OptunaBackend(SearchBackend):
             n_trials=n_trials,
             timeout=timeout,
             callbacks=optuna_callbacks if optuna_callbacks else None,
+            n_jobs=self._n_jobs,
             show_progress_bar=False,
         )
 

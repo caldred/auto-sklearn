@@ -16,6 +16,7 @@ from sklearn_meta.core.tuning.orchestrator import (
     TuningOrchestrator,
 )
 from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.execution.base import Executor
 from sklearn_meta.search.backends.base import SearchBackend
 from sklearn_meta.search.backends.optuna import OptunaBackend
 from sklearn_meta.search.space import SearchSpace
@@ -316,6 +317,7 @@ class GraphBuilder:
         self._cv_config: Optional[CVConfig] = None
         self._tuning_config: Optional[TuningConfig] = None
         self._feature_selection_config: Optional[FeatureSelectionConfig] = None
+        self._n_parallel_trials: int = 1
 
         # Reparameterization configuration
         self._custom_reparameterizations: List[Reparameterization] = []
@@ -393,6 +395,7 @@ class GraphBuilder:
         metric: str = "neg_mean_squared_error",
         greater_is_better: bool = False,
         early_stopping_rounds: Optional[int] = None,
+        n_parallel_trials: int = 1,
     ) -> GraphBuilder:
         """
         Configure hyperparameter tuning.
@@ -404,6 +407,7 @@ class GraphBuilder:
             metric: Evaluation metric.
             greater_is_better: Whether higher metric is better.
             early_stopping_rounds: Stop after N trials without improvement.
+            n_parallel_trials: Number of parallel Optuna trials.
 
         Returns:
             Self for chaining.
@@ -422,6 +426,7 @@ class GraphBuilder:
             metric=metric,
             greater_is_better=greater_is_better,
         )
+        self._n_parallel_trials = n_parallel_trials
 
         return self
 
@@ -509,12 +514,14 @@ class GraphBuilder:
     def create_orchestrator(
         self,
         search_backend: Optional[SearchBackend] = None,
+        executor: Optional[Executor] = None,
     ) -> TuningOrchestrator:
         """
         Build graph and create a TuningOrchestrator.
 
         Args:
             search_backend: Search backend to use (default: OptunaBackend).
+            executor: Optional executor for parallel execution.
 
         Returns:
             Configured TuningOrchestrator.
@@ -537,13 +544,14 @@ class GraphBuilder:
             tuning_config.custom_reparameterizations = self._custom_reparameterizations
 
         data_manager = DataManager(cv_config)
-        backend = search_backend or OptunaBackend()
+        backend = search_backend or OptunaBackend(n_jobs=self._n_parallel_trials)
 
         return TuningOrchestrator(
             graph=graph,
             data_manager=data_manager,
             search_backend=backend,
             tuning_config=tuning_config,
+            executor=executor,
         )
 
     def fit(
@@ -552,6 +560,7 @@ class GraphBuilder:
         y,
         groups=None,
         search_backend: Optional[SearchBackend] = None,
+        executor: Optional[Executor] = None,
     ) -> FittedGraph:
         """
         Build graph and fit to data.
@@ -561,6 +570,7 @@ class GraphBuilder:
             y: Target Series.
             groups: Optional groups for group CV.
             search_backend: Search backend to use.
+            executor: Optional executor for parallel execution.
 
         Returns:
             FittedGraph with trained models.
@@ -582,7 +592,7 @@ class GraphBuilder:
             raise ValueError("X must have at least one feature")
 
         ctx = DataContext(X=X, y=y, groups=groups)
-        orchestrator = self.create_orchestrator(search_backend)
+        orchestrator = self.create_orchestrator(search_backend, executor)
 
         return orchestrator.fit(ctx)
 

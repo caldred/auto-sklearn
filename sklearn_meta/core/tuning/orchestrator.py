@@ -246,13 +246,6 @@ class TuningOrchestrator:
         self.audit_logger = audit_logger
         self.fit_cache = fit_cache
 
-        # Warn about unused executor parameter
-        if executor is not None:
-            logger.warning(
-                "executor parameter is not yet used - CV folds run sequentially. "
-                "Parallel execution will be supported in a future version."
-            )
-
         # Validate graph
         self.graph.validate()
 
@@ -308,16 +301,33 @@ class TuningOrchestrator:
             # Prepare context with upstream OOF predictions
             layer_ctx = self._prepare_context_with_oof(ctx, layer, oof_cache)
 
-            # Fit all nodes in this layer
+            # Filter nodes that should run
+            nodes_to_fit = []
             for node_name in layer:
                 node = self.graph.get_node(node_name)
-
                 if node.is_conditional and not node.should_run(layer_ctx):
                     continue
+                nodes_to_fit.append((node_name, node))
 
-                fitted = self._fit_node(node, layer_ctx)
-                fitted_nodes[node_name] = fitted
-                oof_cache[node_name] = fitted.oof_predictions
+            # Parallel node fitting within layer if executor available
+            if (self.executor is not None and
+                self.executor.n_workers > 1 and
+                len(nodes_to_fit) > 1):
+
+                def fit_node_task(item: Tuple[str, ModelNode]) -> Tuple[str, FittedNode]:
+                    name, node = item
+                    return (name, self._fit_node(node, layer_ctx))
+
+                results = self.executor.map(fit_node_task, nodes_to_fit)
+                for name, fitted in results:
+                    fitted_nodes[name] = fitted
+                    oof_cache[name] = fitted.oof_predictions
+            else:
+                # Sequential fallback
+                for node_name, node in nodes_to_fit:
+                    fitted = self._fit_node(node, layer_ctx)
+                    fitted_nodes[node_name] = fitted
+                    oof_cache[node_name] = fitted.oof_predictions
 
         return fitted_nodes
 
@@ -512,15 +522,26 @@ class TuningOrchestrator:
         dm = DataManager(cv_config)
         folds = dm.create_folds(ctx)
 
-        fold_results = []
-        for fold in folds:
-            result = self._fit_fold(node, ctx, fold, params)
-            fold_results.append(result)
+        # Parallel fold fitting if executor available with multiple workers
+        if self.executor is not None and self.executor.n_workers > 1:
+            # Create a function that captures the fixed arguments
+            def fit_fold_task(fold: CVFold) -> FoldResult:
+                return self._fit_fold(node, ctx, fold, params)
 
-            if self.audit_logger:
+            fold_results = self.executor.map(fit_fold_task, folds)
+        else:
+            # Sequential fallback
+            fold_results = []
+            for fold in folds:
+                result = self._fit_fold(node, ctx, fold, params)
+                fold_results.append(result)
+
+        # Audit logging (after parallel section)
+        if self.audit_logger:
+            for result in fold_results:
                 self.audit_logger.log_fold(
                     node_name=node.name,
-                    fold=fold,
+                    fold=result.fold,
                     score=result.val_score,
                     fit_time=result.fit_time,
                     params=params,

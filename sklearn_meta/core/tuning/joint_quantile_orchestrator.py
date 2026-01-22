@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -361,7 +361,7 @@ class JointQuantileOrchestrator:
         node: QuantileModelNode,
         ctx: DataContext,
         tau: float,
-    ) -> tuple[Dict[str, Any], OptimizationResult]:
+    ) -> Tuple[Dict[str, Any], OptimizationResult]:
         """
         Optimize hyperparameters at a specific quantile level.
 
@@ -406,7 +406,7 @@ class JointQuantileOrchestrator:
         ctx: DataContext,
         params: Dict[str, Any],
         tau: float,
-    ) -> tuple[List[Any], np.ndarray]:
+    ) -> Tuple[List[Any], np.ndarray]:
         """
         Cross-validate a quantile model.
 
@@ -423,25 +423,52 @@ class JointQuantileOrchestrator:
         dm = DataManager(cv_config)
         folds = dm.create_folds(ctx)
 
-        fold_models = []
-        fold_results = []
+        # Parallel fold fitting if executor available with multiple workers
+        if self.executor is not None and self.executor.n_workers > 1:
+            def fit_fold_task(fold: CVFold) -> Tuple[Any, np.ndarray, CVFold]:
+                model, val_preds = self._fit_fold_quantile(node, ctx, fold, params)
+                return (model, val_preds, fold)
 
-        for fold in folds:
-            model, val_preds = self._fit_fold_quantile(node, ctx, fold, params)
-            fold_models.append(model)
-            fold_results.append(
-                FoldResult(
-                    fold=fold,
-                    model=model,
-                    val_predictions=val_preds,
-                    val_score=-self._pinball_loss(
-                        ctx.y.iloc[fold.val_indices].values, val_preds, tau
-                    ),
-                    fit_time=0,
-                    predict_time=0,
-                    params=params,
+            results = self.executor.map(fit_fold_task, folds)
+
+            fold_models = []
+            fold_results = []
+            for model, val_preds, fold in results:
+                fold_models.append(model)
+                fold_results.append(
+                    FoldResult(
+                        fold=fold,
+                        model=model,
+                        val_predictions=val_preds,
+                        val_score=-self._pinball_loss(
+                            ctx.y.iloc[fold.val_indices].values, val_preds, tau
+                        ),
+                        fit_time=0,
+                        predict_time=0,
+                        params=params,
+                    )
                 )
-            )
+        else:
+            # Sequential fallback
+            fold_models = []
+            fold_results = []
+
+            for fold in folds:
+                model, val_preds = self._fit_fold_quantile(node, ctx, fold, params)
+                fold_models.append(model)
+                fold_results.append(
+                    FoldResult(
+                        fold=fold,
+                        model=model,
+                        val_predictions=val_preds,
+                        val_score=-self._pinball_loss(
+                            ctx.y.iloc[fold.val_indices].values, val_preds, tau
+                        ),
+                        fit_time=0,
+                        predict_time=0,
+                        params=params,
+                    )
+                )
 
         # Combine OOF predictions
         oof_predictions = dm.route_oof_predictions(ctx, fold_results)
@@ -454,7 +481,7 @@ class JointQuantileOrchestrator:
         ctx: DataContext,
         fold: CVFold,
         params: Dict[str, Any],
-    ) -> tuple[Any, np.ndarray]:
+    ) -> Tuple[Any, np.ndarray]:
         """
         Fit a quantile model on a single fold.
 
