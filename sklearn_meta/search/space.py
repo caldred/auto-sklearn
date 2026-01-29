@@ -306,3 +306,110 @@ class SearchSpace:
                 else:
                     raise ValueError(f"Unknown parameter type: {param_type}")
         return space
+
+    def narrow_around(
+        self,
+        center: Dict[str, Any],
+        factor: float = 0.5,
+        regularization_bias: float = 0.25,
+        regularization_params: Optional[List[str]] = None,
+    ) -> SearchSpace:
+        """
+        Create a narrowed search space around a center point.
+
+        Useful for retuning after feature selection, where the optimal
+        params should be near the previous best but may need less
+        regularization (since removing features is itself regularization).
+
+        Args:
+            center: Dictionary of parameter name to center value.
+            factor: How much to narrow bounds (0.5 = half the original range
+                    on each side of center, capped to original bounds).
+            regularization_bias: For regularization params, shift the search
+                    window lower by this factor (0.25 = lower bound at
+                    center * 0.25 instead of center * (1-factor)).
+            regularization_params: Names of regularization parameters to bias
+                    lower. Defaults to common XGBoost/LightGBM reg params.
+
+        Returns:
+            New SearchSpace with narrowed bounds.
+        """
+        if regularization_params is None:
+            regularization_params = ["reg_lambda", "reg_alpha", "gamma", "lambda_l1", "lambda_l2"]
+
+        new_space = SearchSpace()
+
+        for param in self._parameters.values():
+            if param.name not in center:
+                # Keep original if no center value provided
+                new_space.add_parameter(param)
+                continue
+
+            center_val = center[param.name]
+
+            if isinstance(param, FloatParameter):
+                is_reg = param.name in regularization_params
+
+                if param.log:
+                    # For log-scale, multiply/divide by factor
+                    if is_reg:
+                        # Bias lower for regularization
+                        new_low = max(param.low, center_val * regularization_bias)
+                        new_high = min(param.high, center_val * (1 + factor))
+                    else:
+                        new_low = max(param.low, center_val / (1 + factor))
+                        new_high = min(param.high, center_val * (1 + factor))
+                else:
+                    # For linear scale, use range fraction
+                    original_range = param.high - param.low
+                    half_width = original_range * factor / 2
+
+                    if is_reg:
+                        # Bias lower for regularization
+                        new_low = max(param.low, center_val - half_width * 2)
+                        new_high = min(param.high, center_val + half_width * 0.5)
+                    else:
+                        new_low = max(param.low, center_val - half_width)
+                        new_high = min(param.high, center_val + half_width)
+
+                # Ensure valid range
+                if new_low >= new_high:
+                    new_low = param.low
+                    new_high = param.high
+
+                new_space.add_float(
+                    param.name, new_low, new_high,
+                    log=param.log, step=param.step
+                )
+
+            elif isinstance(param, IntParameter):
+                is_reg = param.name in regularization_params
+                original_range = param.high - param.low
+                half_width = int(original_range * factor / 2) or 1
+
+                if is_reg:
+                    new_low = max(param.low, center_val - half_width * 2)
+                    new_high = min(param.high, center_val + half_width // 2)
+                else:
+                    new_low = max(param.low, center_val - half_width)
+                    new_high = min(param.high, center_val + half_width)
+
+                # Ensure valid range
+                if new_low >= new_high:
+                    new_low = param.low
+                    new_high = param.high
+
+                new_space.add_int(
+                    param.name, int(new_low), int(new_high),
+                    log=param.log, step=param.step
+                )
+
+            elif isinstance(param, CategoricalParameter):
+                # Keep categorical as-is (could restrict to just center value if desired)
+                new_space.add_parameter(param)
+
+            else:
+                # Keep other parameter types as-is
+                new_space.add_parameter(param)
+
+        return new_space

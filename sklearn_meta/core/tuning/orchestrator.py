@@ -467,10 +467,20 @@ class TuningOrchestrator:
 
             # Retune if configured
             if self.tuning_config.feature_selection.retune_after_pruning:
-                logger.info(f"Re-tuning '{node.name}' with selected features...")
                 if search_space and len(search_space) > 0:
+                    # Narrow search space around previous best, biased towards less regularization
+                    # (since removing features is itself a form of regularization)
+                    narrowed_space = search_space.narrow_around(
+                        center=best_params,
+                        factor=0.5,
+                        regularization_bias=0.25,
+                    )
+                    logger.info(
+                        f"Re-tuning '{node.name}' with {len(selected_features)} features "
+                        f"(narrowed search space around previous best)"
+                    )
                     best_params, opt_result = self._optimize_node(
-                        node, ctx, search_space, reparam_space
+                        node, ctx, narrowed_space, None  # Don't use reparam on narrowed space
                     )
 
         # Search for optimal n_estimators scaling if configured
