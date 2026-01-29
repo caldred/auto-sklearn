@@ -181,6 +181,10 @@ class FittedGraph:
                 # DISTILL only affects training loss, not inference.
                 pass
 
+        # Filter to selected features if feature selection was used
+        if fitted.selected_features is not None:
+            X_augmented = X_augmented[fitted.selected_features]
+
         # Ensemble predictions from all fold models
         predictions = []
         for model in fitted.models:
@@ -437,12 +441,21 @@ class TuningOrchestrator:
             selection_result = selector.select_for_node(node, ctx, best_params)
             selected_features = selection_result.selected_features
 
+            # Log feature selection results
+            n_original = len(ctx.feature_cols)
+            n_selected = len(selected_features) if selected_features else n_original
+            dropped = set(ctx.feature_cols) - set(selected_features) if selected_features else set()
+            logger.info(f"Feature selection for '{node.name}': {n_selected}/{n_original} features kept")
+            if dropped:
+                logger.info(f"  Dropped: {sorted(dropped)}")
+
             # Filter context to selected features
             if selected_features:
                 ctx = ctx.with_feature_cols(selected_features)
 
             # Retune if configured
             if self.tuning_config.feature_selection.retune_after_pruning:
+                logger.info(f"Re-tuning '{node.name}' with selected features...")
                 if search_space and len(search_space) > 0:
                     best_params, opt_result = self._optimize_node(
                         node, ctx, search_space, reparam_space
@@ -592,7 +605,7 @@ class TuningOrchestrator:
                 val_predictions = node.get_output(model, val_ctx.X)
                 predict_time = time.time() - pred_start
 
-                val_score = self._calculate_score(val_ctx.y, val_predictions)
+                val_score = self._calculate_score(val_ctx.y, val_predictions, node)
 
                 return FoldResult(
                     fold=fold,
@@ -640,7 +653,7 @@ class TuningOrchestrator:
         predict_time = time.time() - pred_start
 
         # Calculate score
-        val_score = self._calculate_score(val_ctx.y, val_predictions)
+        val_score = self._calculate_score(val_ctx.y, val_predictions, node)
 
         # Call plugin on_fold_end hooks
         if self.plugin_registry:
@@ -657,7 +670,7 @@ class TuningOrchestrator:
             params=params,
         )
 
-    def _calculate_score(self, y_true, y_pred) -> float:
+    def _calculate_score(self, y_true, y_pred, node=None) -> float:
         """Calculate the evaluation score."""
         from sklearn.metrics import get_scorer
 
@@ -690,6 +703,16 @@ class TuningOrchestrator:
                 return preds
 
         wrapper = _PredictionWrapper(y_pred)
+
+        # Set _estimator_type and classes_ so sklearn's scorer recognizes the
+        # wrapper as a classifier (needed for metrics like neg_log_loss that
+        # use predict_proba)
+        if node is not None:
+            estimator_type = getattr(node.estimator_class, "_estimator_type", None)
+            if estimator_type:
+                wrapper._estimator_type = estimator_type
+            if estimator_type == "classifier":
+                wrapper.classes_ = np.unique(y_true)
 
         # Use scorer properly - this respects _sign, _kwargs, and response_method
         # We pass y_true as X since the wrapper ignores it
