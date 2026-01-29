@@ -437,6 +437,10 @@ class GraphBuilder:
         greater_is_better: bool = False,
         early_stopping_rounds: Optional[int] = None,
         n_parallel_trials: int = 1,
+        tuning_n_estimators: Optional[int] = None,
+        final_n_estimators: Optional[int] = None,
+        estimator_scaling_search: bool = False,
+        estimator_scaling_factors: Optional[List[int]] = None,
     ) -> GraphBuilder:
         """
         Configure hyperparameter tuning.
@@ -449,6 +453,18 @@ class GraphBuilder:
             greater_is_better: Whether higher metric is better.
             early_stopping_rounds: Stop after N trials without improvement.
             n_parallel_trials: Number of parallel Optuna trials.
+            tuning_n_estimators: n_estimators to use during tuning for faster trials.
+                If set along with final_n_estimators, learning_rate is scaled
+                proportionally for the final model.
+            final_n_estimators: n_estimators to use for the final model. If
+                tuning_n_estimators is set, learning_rate is scaled by
+                (tuning_n_estimators / final_n_estimators) to maintain equivalent
+                training.
+            estimator_scaling_search: If True, search for optimal n_estimators
+                scaling after tuning. Tests multipliers [2, 5, 10, 20] with early
+                stopping if performance degrades.
+            estimator_scaling_factors: Custom scaling factors to search
+                (default: [2, 5, 10, 20]).
 
         Returns:
             Self for chaining.
@@ -466,6 +482,10 @@ class GraphBuilder:
             early_stopping_rounds=early_stopping_rounds,
             metric=metric,
             greater_is_better=greater_is_better,
+            tuning_n_estimators=tuning_n_estimators,
+            final_n_estimators=final_n_estimators,
+            estimator_scaling_search=estimator_scaling_search,
+            estimator_scaling_factors=estimator_scaling_factors,
         )
         self._n_parallel_trials = n_parallel_trials
 

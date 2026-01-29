@@ -48,6 +48,14 @@ class TuningConfig:
         use_reparameterization: Whether to apply reparameterization transforms.
         custom_reparameterizations: Custom reparameterization transforms to apply.
         verbose: Verbosity level (0=silent, 1=progress, 2=detailed).
+        tuning_n_estimators: n_estimators to use during tuning (faster trials).
+            If set, learning_rate is scaled proportionally for the final model.
+        final_n_estimators: n_estimators to use for final model. If tuning_n_estimators
+            is set, learning_rate is scaled by (tuning_n_estimators / final_n_estimators).
+        estimator_scaling_search: If True, search for optimal n_estimators/learning_rate
+            scaling after tuning. Tests multipliers [2, 5, 10, 20] with early stopping
+            if performance degrades. Overrides tuning_n_estimators/final_n_estimators.
+        estimator_scaling_factors: Custom scaling factors to search (default: [2, 5, 10, 20]).
     """
 
     strategy: OptimizationStrategy = OptimizationStrategy.LAYER_BY_LAYER
@@ -61,6 +69,10 @@ class TuningConfig:
     use_reparameterization: bool = False
     custom_reparameterizations: Optional[List[Reparameterization]] = None
     verbose: int = 1
+    tuning_n_estimators: Optional[int] = None
+    final_n_estimators: Optional[int] = None
+    estimator_scaling_search: bool = False
+    estimator_scaling_factors: Optional[List[int]] = None
 
 
 @dataclass
@@ -461,8 +473,32 @@ class TuningOrchestrator:
                         node, ctx, search_space, reparam_space
                     )
 
-        # Final CV with best params
-        cv_result = self._cross_validate(node, ctx, best_params)
+        # Search for optimal n_estimators scaling if configured
+        cv_result = None
+        if self.tuning_config.estimator_scaling_search:
+            best_params, cv_result = self._search_estimator_scaling(node, ctx, best_params)
+        # Or use fixed scaling if configured
+        elif (self.tuning_config.tuning_n_estimators is not None and
+                self.tuning_config.final_n_estimators is not None):
+            tuning_n = self.tuning_config.tuning_n_estimators
+            final_n = self.tuning_config.final_n_estimators
+            scale_factor = tuning_n / final_n
+
+            best_params = dict(best_params)  # Copy to avoid mutation
+            best_params["n_estimators"] = final_n
+
+            # Scale learning_rate proportionally
+            if "learning_rate" in best_params:
+                old_lr = best_params["learning_rate"]
+                best_params["learning_rate"] = old_lr * scale_factor
+                logger.info(
+                    f"Scaled for final model: n_estimators {tuning_n} -> {final_n}, "
+                    f"learning_rate {old_lr:.6f} -> {best_params['learning_rate']:.6f}"
+                )
+
+        # Final CV with best params (skip if already done in scaling search)
+        if cv_result is None:
+            cv_result = self._cross_validate(node, ctx, best_params)
 
         return FittedNode(
             node=node,
@@ -471,6 +507,85 @@ class TuningOrchestrator:
             optimization_result=opt_result,
             selected_features=selected_features,
         )
+
+    def _search_estimator_scaling(
+        self,
+        node: ModelNode,
+        ctx: DataContext,
+        best_params: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], CVResult]:
+        """Search for optimal n_estimators/learning_rate scaling.
+
+        Tests scaling factors [1, 2, 5, 10, 20] (or custom with 1 prepended),
+        scaling n_estimators up and learning_rate down proportionally.
+        Stops early if performance degrades.
+
+        Args:
+            node: The model node.
+            ctx: Data context.
+            best_params: Best parameters from tuning.
+
+        Returns:
+            Tuple of (parameters with optimal scaling, CV result for best scaling).
+        """
+        scaling_factors = [1] + (self.tuning_config.estimator_scaling_factors or [2, 5, 10, 20])
+
+        base_n_estimators = best_params.get("n_estimators", 100)
+        base_lr = best_params.get("learning_rate")
+
+        if base_lr is None:
+            logger.warning("No learning_rate in params, skipping estimator scaling search")
+            cv_result = self._cross_validate(node, ctx, best_params)
+            return best_params, cv_result
+
+        logger.info(
+            f"Estimator scaling search: base n_estimators={base_n_estimators}, "
+            f"lr={base_lr:.6f}"
+        )
+
+        best_scale = 1
+        best_score = None
+        best_scaled_params = dict(best_params)
+        best_cv_result = None
+
+        for scale in scaling_factors:
+            scaled_params = dict(best_params)
+            scaled_params["n_estimators"] = base_n_estimators * scale
+            scaled_params["learning_rate"] = base_lr / scale
+
+            cv_result = self._cross_validate(node, ctx, scaled_params)
+            score = cv_result.mean_score
+
+            # Check if better (accounting for metric direction)
+            if best_score is None:
+                is_better = True  # First run (1x baseline)
+            elif self.tuning_config.greater_is_better:
+                is_better = score > best_score
+            else:
+                is_better = score < best_score
+
+            status = "(baseline)" if scale == 1 else ("(better)" if is_better else "(worse)")
+            logger.info(
+                f"  {scale}x: n_estimators={scaled_params['n_estimators']}, "
+                f"lr={scaled_params['learning_rate']:.6f}, score={score:.5f} {status}"
+            )
+
+            if is_better:
+                best_scale = scale
+                best_score = score
+                best_scaled_params = scaled_params
+                best_cv_result = cv_result
+            elif scale > 1:
+                # Early stopping: performance degraded (only after baseline)
+                logger.info(f"  Stopping search (performance degraded at {scale}x)")
+                break
+
+        logger.info(
+            f"Best scaling: {best_scale}x (n_estimators={best_scaled_params['n_estimators']}, "
+            f"lr={best_scaled_params['learning_rate']:.6f}, score={best_score:.5f})"
+        )
+
+        return best_scaled_params, best_cv_result
 
     def _optimize_node(
         self,
@@ -507,6 +622,10 @@ class TuningOrchestrator:
             # Merge with fixed params
             all_params = dict(node.fixed_params)
             all_params.update(params)
+
+            # Override n_estimators for faster tuning if configured
+            if self.tuning_config.tuning_n_estimators is not None:
+                all_params["n_estimators"] = self.tuning_config.tuning_n_estimators
 
             # Cross-validate
             cv_result = self._cross_validate(node, ctx, all_params)
