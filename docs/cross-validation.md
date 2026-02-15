@@ -10,7 +10,7 @@ Cross-validation is essential for reliable model evaluation and preventing overf
 graph TB
     subgraph "CV Strategies"
         A[CVStrategy.STRATIFIED] --> |Classification| B[Preserves class ratios]
-        C[CVStrategy.KFOLD] --> |Regression| D[Simple random splits]
+        C[CVStrategy.RANDOM] --> |Regression| D[Simple random splits]
         E[CVStrategy.GROUP] --> |Grouped data| F[Groups stay together]
         G[CVStrategy.TIME_SERIES] --> |Temporal data| H[Respects time order]
     end
@@ -32,14 +32,14 @@ cv_config = CVConfig(
 
 **When to use:** Classification problems, especially with imbalanced classes.
 
-### Standard K-Fold
+### Random K-Fold
 
 Simple random splits without stratification.
 
 ```python
 cv_config = CVConfig(
     n_splits=5,
-    strategy=CVStrategy.KFOLD,
+    strategy=CVStrategy.RANDOM,
     random_state=42,
 )
 ```
@@ -58,7 +58,7 @@ cv_config = CVConfig(
 )
 
 # Pass groups to DataContext
-ctx = DataContext(X=X, y=y, groups=group_labels)
+ctx = DataContext.from_Xy(X=X, y=y, groups=group_labels)
 ```
 
 **When to use:** When samples are not independent (e.g., multiple samples per patient, user, or session).
@@ -75,7 +75,7 @@ graph LR
 
 ### Time Series Split
 
-Respects temporal ordering — always train on past, validate on future.
+Respects temporal ordering -- always train on past, validate on future.
 
 ```python
 cv_config = CVConfig(
@@ -111,6 +111,7 @@ graph LR
 cv_config = CVConfig(
     n_splits=5,              # Number of folds
     strategy=CVStrategy.STRATIFIED,
+    shuffle=True,            # Shuffle before splitting
     random_state=42,         # For reproducibility
 )
 ```
@@ -122,7 +123,7 @@ Run CV multiple times with different random splits:
 ```python
 cv_config = CVConfig(
     n_splits=5,
-    n_repeats=3,             # 5×3 = 15 total folds
+    n_repeats=3,             # 5x3 = 15 total folds
     strategy=CVStrategy.STRATIFIED,
     random_state=42,
 )
@@ -132,17 +133,6 @@ cv_config = CVConfig(
 - More stable performance estimates
 - Better for small datasets
 - Reduces variance from unlucky splits
-
-### Shuffle Control
-
-```python
-cv_config = CVConfig(
-    n_splits=5,
-    strategy=CVStrategy.KFOLD,
-    shuffle=True,            # Shuffle before splitting
-    random_state=42,
-)
-```
 
 ---
 
@@ -185,24 +175,49 @@ With nested CV:
 
 ### Configuration
 
-```python
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy, NestedCVConfig
+Nested CV is configured using the `inner_cv` field on `CVConfig` or the `.with_inner_cv()` convenience method. There is no separate `NestedCVConfig` class.
 
-# Inner CV for hyperparameter tuning
-inner_cv = CVConfig(
+**Using `.with_inner_cv()` (recommended):**
+
+```python
+from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+
+# Outer CV for evaluation, with nested inner CV for tuning
+cv_config = CVConfig(
+    n_splits=5,
+    strategy=CVStrategy.STRATIFIED,
+    random_state=42,
+).with_inner_cv(n_splits=3, strategy=CVStrategy.STRATIFIED)
+```
+
+**Using the `inner_cv` field directly:**
+
+```python
+inner = CVConfig(
     n_splits=3,
     strategy=CVStrategy.STRATIFIED,
 )
 
-# Outer CV for evaluation
-outer_cv = CVConfig(
+outer = CVConfig(
     n_splits=5,
     strategy=CVStrategy.STRATIFIED,
+    random_state=42,
+    inner_cv=inner,
 )
+```
 
-nested_config = NestedCVConfig(
-    inner_cv=inner_cv,
-    outer_cv=outer_cv,
+**Using GraphBuilder:**
+
+```python
+from sklearn_meta.api import GraphBuilder
+
+pipeline = (
+    GraphBuilder("nested_cv_pipeline")
+    .add_model("rf", RandomForestClassifier)
+    .with_search_space(n_estimators=(50, 200))
+    .with_cv(n_splits=5, strategy="stratified")
+    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .fit(X_train, y_train)
 )
 ```
 
@@ -210,7 +225,7 @@ nested_config = NestedCVConfig(
 
 ## Out-of-Fold Predictions
 
-OOF predictions are crucial for model stacking — they provide predictions for training data without data leakage.
+OOF predictions are crucial for model stacking -- they provide predictions for training data without data leakage.
 
 ```mermaid
 graph TB
@@ -243,11 +258,32 @@ graph TB
 
 ### OOF for Stacking
 
+**Using GraphBuilder (recommended):**
+
 ```python
+pipeline = (
+    GraphBuilder("stacking")
+    .add_model("base", RandomForestClassifier)
+    .with_search_space(n_estimators=(50, 200))
+    .add_model("meta", LogisticRegression)
+    .stacks("base")
+    .with_cv(n_splits=5, strategy="stratified")
+    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .fit(X_train, y_train)
+)
+# DataManager routes OOF predictions automatically
+```
+
+**Using low-level API:**
+
+```python
+from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+
 # Base model produces OOF predictions
 # Meta-learner trains on OOF predictions (no leakage!)
-
-graph.add_dependency("base", "meta", PredictionDependency())
+graph.add_edge(
+    DependencyEdge(source="base", target="meta", dep_type=DependencyType.PREDICTION)
+)
 # DataManager routes OOF predictions automatically
 ```
 
@@ -259,11 +295,8 @@ from sklearn_meta.core.data.manager import DataManager
 data_manager = DataManager(cv_config)
 folds = data_manager.create_folds(ctx)
 
-# After fitting all folds
-oof_predictions = data_manager.route_oof_predictions(
-    fold_predictions=fold_preds,  # Dict[fold_idx, predictions]
-    n_samples=len(X),
-)
+# After fitting all folds, route OOF predictions
+oof_predictions = data_manager.route_oof_predictions(ctx, fold_results)
 ```
 
 ---
@@ -292,12 +325,17 @@ for fold in folds:
 
 ### Aligning Data to Folds
 
-```python
-# Get training data for a specific fold
-train_ctx = data_manager.align_to_fold(ctx, fold, split="train")
+`align_to_fold` returns a tuple of `(train_ctx, val_ctx)`:
 
-# Get validation data
-val_ctx = data_manager.align_to_fold(ctx, fold, split="val")
+```python
+# Get both train and validation DataContexts for a specific fold
+train_ctx, val_ctx = data_manager.align_to_fold(ctx, fold)
+```
+
+### Aggregating CV Results
+
+```python
+result = data_manager.aggregate_cv_result(node_name="rf", fold_results=fold_results, ctx=ctx)
 ```
 
 ---
@@ -355,7 +393,7 @@ Group CV ensures related samples stay together:
 |-------------|---------------------|
 | Classification | `STRATIFIED` |
 | Classification (imbalanced) | `STRATIFIED` |
-| Regression | `KFOLD` |
+| Regression | `RANDOM` |
 | Grouped data | `GROUP` |
 | Time series | `TIME_SERIES` |
 
@@ -399,6 +437,34 @@ cv_config = CVConfig(
 
 ## Complete Example
 
+### Using GraphBuilder (Recommended)
+
+```python
+from sklearn.datasets import make_classification
+from sklearn.ensemble import RandomForestClassifier
+import pandas as pd
+
+from sklearn_meta.api import GraphBuilder
+from sklearn_meta.core.data.context import DataContext
+
+# Generate data
+X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
+X = pd.DataFrame(X)
+y = pd.Series(y)
+
+# Build, configure, and fit in one fluent chain
+pipeline = (
+    GraphBuilder("quick_start")
+    .add_model("rf", RandomForestClassifier)
+    .with_search_space(n_estimators=(50, 200))
+    .with_cv(n_splits=5, strategy="stratified")
+    .with_tuning(n_trials=20, metric="roc_auc", greater_is_better=True)
+    .fit(X, y)
+)
+```
+
+### Using Low-Level API
+
 ```python
 from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
@@ -410,6 +476,7 @@ from sklearn_meta.core.data.manager import DataManager
 from sklearn_meta.core.model.node import ModelNode
 from sklearn_meta.core.model.graph import ModelGraph
 from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
+from sklearn_meta.search.backends.optuna import OptunaBackend
 from sklearn_meta.search.space import SearchSpace
 
 # Generate data
@@ -426,7 +493,12 @@ cv_config = CVConfig(
 
 # Create model
 space = SearchSpace().add_int("n_estimators", 50, 200)
-node = ModelNode("rf", RandomForestClassifier, space, {"random_state": 42})
+node = ModelNode(
+    name="rf",
+    estimator_class=RandomForestClassifier,
+    search_space=space,
+    fixed_params={"random_state": 42},
+)
 graph = ModelGraph()
 graph.add_node(node)
 
@@ -439,9 +511,10 @@ tuning_config = TuningConfig(
 )
 
 # Run
-ctx = DataContext(X=X, y=y)
+ctx = DataContext.from_Xy(X=X, y=y)
 data_manager = DataManager(cv_config)
-orchestrator = TuningOrchestrator(graph, data_manager, tuning_config)
+backend = OptunaBackend()
+orchestrator = TuningOrchestrator(graph, data_manager, backend, tuning_config)
 fitted = orchestrator.fit(ctx)
 ```
 
@@ -449,6 +522,6 @@ fitted = orchestrator.fit(ctx)
 
 ## Next Steps
 
-- [Stacking](stacking.md) — How OOF predictions enable stacking
-- [Tuning](tuning.md) — CV in hyperparameter optimization
-- [Model Graphs](model-graphs.md) — Building multi-model pipelines
+- [Stacking](stacking.md) -- How OOF predictions enable stacking
+- [Tuning](tuning.md) -- CV in hyperparameter optimization
+- [Model Graphs](model-graphs.md) -- Building multi-model pipelines

@@ -8,8 +8,8 @@ Reparameterization transforms correlated hyperparameters into orthogonal (uncorr
 
 Many hyperparameters are inherently correlated. For example, in gradient boosting:
 
-- **Lower learning rate** → needs **more estimators** to converge
-- **Higher learning rate** → needs **fewer estimators**
+- **Lower learning rate** -> needs **more estimators** to converge
+- **Higher learning rate** -> needs **fewer estimators**
 
 ```mermaid
 graph LR
@@ -54,11 +54,48 @@ graph TB
 
 ---
 
+## Quick Start
+
+The recommended way to use reparameterization is through the `GraphBuilder` fluent API:
+
+```python
+from sklearn_meta.api import GraphBuilder
+from sklearn_meta.core.data.context import DataContext
+import xgboost as xgb
+import pandas as pd
+
+ctx = DataContext.from_Xy(X=pd.DataFrame(X), y=pd.Series(y))
+
+result = (
+    GraphBuilder("my_pipeline")
+    .add_model("xgb", xgb.XGBClassifier)
+    .with_search_space(
+        learning_rate=(0.01, 0.3, "log"),
+        n_estimators=(50, 500),
+        max_depth=(3, 10),
+        subsample=(0.6, 1.0),
+    )
+    .with_fixed_params(random_state=42, eval_metric="logloss")
+    .with_reparameterization(use_prebaked=True)
+    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .with_cv(n_splits=5)
+    .fit(ctx)
+)
+
+print(f"Best params: {result.fitted_nodes['xgb'].best_params}")
+```
+
+With `use_prebaked=True`, sklearn-meta automatically applies known reparameterizations for the model type (e.g., `learning_rate x n_estimators` for XGBoost).
+
+---
+
 ## Available Reparameterizations
+
+All reparameterization classes live in `sklearn_meta.meta.reparameterization` and provide `.forward(params)` and `.inverse(params)` methods.
 
 ### LogProductReparameterization
 
-For parameters with inverse relationship (like learning rate × iterations):
+For parameters with an inverse relationship (like learning rate x iterations):
 
 ```python
 from sklearn_meta.meta.reparameterization import LogProductReparameterization
@@ -83,7 +120,7 @@ b = exp((log_product - log_ratio) / 2)
 ```
 
 **Properties:**
-- Product `a × b` is preserved
+- Product `a x b` is preserved
 - Dimensions are orthogonal
 
 ### RatioReparameterization
@@ -108,8 +145,8 @@ ratio = a / (a + b)
 
 **Inverse transform:**
 ```
-a = total × ratio
-b = total × (1 - ratio)
+a = total * ratio
+b = total * (1 - ratio)
 ```
 
 **Properties:**
@@ -140,61 +177,66 @@ frac2 = b / total
 
 ---
 
-## Usage
+## Using the Fluent API
 
-### Basic Usage
+### Prebaked Reparameterizations (recommended)
+
+The simplest approach -- let sklearn-meta apply known-good reparameterizations automatically:
+
+```python
+(
+    GraphBuilder("pipeline")
+    .add_model("xgb", XGBClassifier)
+    .with_search_space(
+        learning_rate=(0.01, 0.3, "log"),
+        n_estimators=(50, 500),
+    )
+    .with_reparameterization(use_prebaked=True)
+    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .with_cv(n_splits=5)
+    .fit(ctx)
+)
+```
+
+### Custom Reparameterizations
+
+Pass your own reparameterization objects:
 
 ```python
 from sklearn_meta.meta.reparameterization import LogProductReparameterization
 
-# Define reparameterization
 reparam = LogProductReparameterization(
     name="learning_budget",
     param1="learning_rate",
     param2="n_estimators",
 )
 
-# Forward transform (original → transformed)
-original = {"learning_rate": 0.1, "n_estimators": 100}
-transformed = reparam.forward(original)
-# {'log_product': 2.302..., 'log_ratio': -4.605...}
-
-# Inverse transform (transformed → original)
-recovered = reparam.inverse(transformed)
-# {'learning_rate': 0.1, 'n_estimators': 100}
-```
-
-### With Search Spaces
-
-```python
-from sklearn_meta.search.space import SearchSpace
-from sklearn_meta.meta.reparameterization import LogProductReparameterization
-
-# Original space
-space = SearchSpace()
-space.add_float("learning_rate", 0.01, 0.3, log=True)
-space.add_int("n_estimators", 50, 500)
-
-# Add reparameterization
-reparam = LogProductReparameterization(
-    name="learning_budget",
-    param1="learning_rate",
-    param2="n_estimators",
+(
+    GraphBuilder("pipeline")
+    .add_model("xgb", XGBClassifier)
+    .with_search_space(
+        learning_rate=(0.01, 0.3, "log"),
+        n_estimators=(50, 500),
+        max_depth=(3, 10),
+    )
+    .with_reparameterization(
+        reparameterizations=[reparam],
+        use_prebaked=False,
+    )
+    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .with_cv(n_splits=5)
+    .fit(ctx)
 )
-
-space.add_reparameterization(reparam)
 ```
 
-### With Model Nodes
+### Combining Custom and Prebaked
+
+You can provide custom reparameterizations while also enabling prebaked ones:
 
 ```python
-from sklearn_meta.core.model.node import ModelNode
-
-node = ModelNode(
-    name="xgb",
-    estimator_class=XGBClassifier,
-    search_space=space,
-    reparameterizations=[reparam],
+.with_reparameterization(
+    reparameterizations=[my_custom_reparam],
+    use_prebaked=True,  # Also apply prebaked for known param pairs
 )
 ```
 
@@ -202,41 +244,52 @@ node = ModelNode(
 
 ## Prebaked Reparameterizations
 
-sklearn-meta includes ready-to-use reparameterizations for common models:
+sklearn-meta includes ready-to-use reparameterizations for common models. These are applied automatically when `use_prebaked=True`.
 
 ```python
-from sklearn_meta.meta.prebaked import get_prebaked_reparameterizations
-
-# Get reparameterizations for XGBoost
-reparams = get_prebaked_reparameterizations(XGBClassifier)
-
-# Returns list of applicable reparameterizations:
-# - LogProductReparameterization for learning_rate × n_estimators
-# - RatioReparameterization for reg_alpha / reg_lambda
+from sklearn_meta.meta.prebaked import get_prebaked_reparameterization
 ```
 
 ### Available Prebaked Configs
 
-| Model | Reparameterization | Parameters |
-|-------|-------------------|------------|
-| XGBoost | `learning_budget` | learning_rate, n_estimators |
-| XGBoost | `regularization` | reg_alpha, reg_lambda |
-| LightGBM | `learning_budget` | learning_rate, n_estimators |
-| LightGBM | `regularization` | reg_alpha, reg_lambda |
-| RandomForest | `complexity` | max_depth, min_samples_split |
-| GradientBoosting | `learning_budget` | learning_rate, n_estimators |
+| Model | Reparameterization | Parameters | Transform |
+|-------|-------------------|------------|-----------|
+| XGBoost/LGBM/GradientBoosting | `xgb_learning_budget` | learning_rate, n_estimators | LogProduct |
+| XGBoost | `xgb_regularization` | reg_alpha, reg_lambda | Ratio |
+| LightGBM | `lgbm_regularization` | reg_alpha, reg_lambda | Ratio |
+| LGBM/CatBoost | `gbm_depth_leaves` | max_depth, num_leaves | LogProduct |
+| MLP/Neural | `nn_learning_epochs` | learning_rate, epochs | LogProduct |
+| MLP/Neural | `nn_dropout` | dropout1, dropout2 | Linear |
+| MLP/Neural/Torch | `nn_weight_decay_dropout` | weight_decay, dropout | Ratio |
+| ElasticNet/SGD/Linear | `elastic_net` | alpha/C, l1_ratio | Ratio |
+| RandomForest/ExtraTrees | `rf_complexity` | max_depth, min_samples_split | LogProduct |
+| RandomForest/ExtraTrees/Bagging | `rf_sampling` | max_features, max_samples | LogProduct |
+| SVC/SVR/SVM | `svm_kernel` | C, gamma | LogProduct |
+| CatBoost | `catboost_regularization` | l2_leaf_reg, random_strength | Ratio |
 
-### Auto-Apply
+---
+
+## Forward and Inverse Transforms
+
+All reparameterizations provide `.forward()` and `.inverse()` methods for converting between original and transformed parameter spaces:
 
 ```python
-from sklearn_meta.core.model.node import ModelNode
+from sklearn_meta.meta.reparameterization import LogProductReparameterization
 
-node = ModelNode(
-    name="xgb",
-    estimator_class=XGBClassifier,
-    search_space=space,
-    auto_reparameterize=True,  # Automatically apply prebaked
+reparam = LogProductReparameterization(
+    name="learning_budget",
+    param1="learning_rate",
+    param2="n_estimators",
 )
+
+# Forward transform (original -> transformed)
+original = {"learning_rate": 0.1, "n_estimators": 100}
+transformed = reparam.forward(original)
+# {'log_product': 2.302..., 'log_ratio': -4.605...}
+
+# Inverse transform (transformed -> original)
+recovered = reparam.inverse(transformed)
+# {'learning_rate': 0.1, 'n_estimators': 100}
 ```
 
 ---
@@ -266,16 +319,16 @@ graph LR
 
 **Original Space:**
 ```
-learning_rate: [0.01 ───────────────────── 0.3]
-n_estimators:  [50 ──────────────────────── 500]
+learning_rate: [0.01 ----------------------- 0.3]
+n_estimators:  [50 -------------------------- 500]
 
 Correlation: -0.85 (highly negative)
 ```
 
 **Transformed Space:**
 ```
-log_product: [3.9 ─────────────────────── 7.2]
-log_ratio:   [-6.2 ────────────────────── -0.5]
+log_product: [3.9 ------------------------- 7.2]
+log_ratio:   [-6.2 ------------------------ -0.5]
 
 Correlation: ~0.0 (independent)
 ```
@@ -311,62 +364,8 @@ Implementations handle:
 reparam = LogProductReparameterization("test", "a", "b")
 
 small = {"a": 1e-8, "b": 1e-8}
-transformed = reparam.forward(small)  # No overflow
+transformed = reparam.forward(small)   # No overflow
 recovered = reparam.inverse(transformed)  # Accurate recovery
-```
-
----
-
-## Best Practices
-
-### 1. Use for Known Correlations
-
-Only apply reparameterization when you know parameters are correlated:
-
-```python
-# Good: learning_rate and n_estimators are inversely correlated
-LogProductReparameterization("budget", "learning_rate", "n_estimators")
-
-# Questionable: max_depth and min_samples_split may not be correlated
-```
-
-### 2. Start with Prebaked
-
-Use prebaked configurations when available:
-
-```python
-reparams = get_prebaked_reparameterizations(XGBClassifier)
-node = ModelNode(..., reparameterizations=reparams)
-```
-
-### 3. Verify Improvement
-
-Compare optimization with and without reparameterization:
-
-```python
-# Without reparameterization
-config_no_reparam = TuningConfig(n_trials=50)
-result_no_reparam = orchestrator.fit(ctx)
-
-# With reparameterization
-node.reparameterizations = [reparam]
-config_reparam = TuningConfig(n_trials=50)
-result_reparam = orchestrator.fit(ctx)
-
-# Compare: result_reparam should converge faster
-```
-
-### 4. Log Scale for Product Reparameterization
-
-When using `LogProductReparameterization`, the underlying parameters should span multiplicative ranges:
-
-```python
-# Good: log scale makes sense
-space.add_float("learning_rate", 0.001, 0.3, log=True)
-space.add_int("n_estimators", 10, 1000)
-
-# Less effective: linear scale with narrow range
-space.add_float("learning_rate", 0.1, 0.2)  # Only 2x range
 ```
 
 ---
@@ -378,66 +377,119 @@ from sklearn.datasets import make_classification
 import pandas as pd
 import xgboost as xgb
 
+from sklearn_meta.api import GraphBuilder
 from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.node import ModelNode
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from sklearn_meta.search.space import SearchSpace
 from sklearn_meta.meta.reparameterization import LogProductReparameterization
 
 # Data
 X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
-ctx = DataContext(X=pd.DataFrame(X), y=pd.Series(y))
+ctx = DataContext.from_Xy(X=pd.DataFrame(X), y=pd.Series(y))
 
-# Search space with correlated parameters
-space = (
-    SearchSpace()
-    .add_float("learning_rate", 0.01, 0.3, log=True)
-    .add_int("n_estimators", 50, 500)
-    .add_int("max_depth", 3, 10)
-    .add_float("subsample", 0.6, 1.0)
-)
-
-# Reparameterization for learning_rate × n_estimators
+# Custom reparameterization
 reparam = LogProductReparameterization(
     name="learning_budget",
     param1="learning_rate",
     param2="n_estimators",
 )
 
-# Model with reparameterization
-node = ModelNode(
-    name="xgb",
-    estimator_class=xgb.XGBClassifier,
-    search_space=space,
-    fixed_params={"random_state": 42, "eval_metric": "logloss"},
-    reparameterizations=[reparam],
+# Build and fit with reparameterization
+result = (
+    GraphBuilder("reparam_demo")
+    .add_model("xgb", xgb.XGBClassifier)
+    .with_search_space(
+        learning_rate=(0.01, 0.3, "log"),
+        n_estimators=(50, 500),
+        max_depth=(3, 10),
+        subsample=(0.6, 1.0),
+    )
+    .with_fixed_params(random_state=42, eval_metric="logloss")
+    .with_reparameterization(
+        reparameterizations=[reparam],
+        use_prebaked=False,
+    )
+    .with_tuning(n_trials=30, metric="roc_auc", greater_is_better=True)
+    .with_cv(n_splits=5, strategy="stratified")
+    .fit(ctx)
 )
 
-# Graph and tuning
-graph = ModelGraph()
-graph.add_node(node)
+fitted = result.fitted_nodes["xgb"]
+print(f"Best params: {fitted.best_params}")
+```
 
-cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED)
-tuning_config = TuningConfig(
-    n_trials=30,
-    cv_config=cv_config,
-    metric="roc_auc",
+---
+
+## Best Practices
+
+### 1. Start with Prebaked
+
+Use prebaked configurations when available -- they encode domain knowledge about known parameter correlations:
+
+```python
+.with_reparameterization(use_prebaked=True)
+```
+
+### 2. Use for Known Correlations
+
+Only apply custom reparameterization when you know parameters are correlated:
+
+```python
+# Good: learning_rate and n_estimators are inversely correlated
+LogProductReparameterization("budget", "learning_rate", "n_estimators")
+
+# Questionable: max_depth and min_samples_split may not be strongly correlated
+```
+
+### 3. Log Scale for Product Reparameterization
+
+When using `LogProductReparameterization`, the underlying parameters should span multiplicative ranges:
+
+```python
+# Good: log scale makes sense
+.with_search_space(
+    learning_rate=(0.001, 0.3, "log"),
+    n_estimators=(10, 1000),
 )
 
-# Run optimization
-orchestrator = TuningOrchestrator(graph, DataManager(cv_config), tuning_config)
-fitted = orchestrator.fit(ctx)
+# Less effective: linear scale with narrow range
+.with_search_space(
+    learning_rate=(0.1, 0.2),  # Only 2x range
+)
+```
 
-print(f"Best params: {fitted.best_params['xgb']}")
+### 4. Verify Improvement
+
+Compare optimization with and without reparameterization:
+
+```python
+# Without reparameterization
+result_plain = (
+    GraphBuilder("baseline")
+    .add_model("xgb", XGBClassifier)
+    .with_search_space(...)
+    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .with_cv(n_splits=5)
+    .fit(ctx)
+)
+
+# With reparameterization
+result_reparam = (
+    GraphBuilder("with_reparam")
+    .add_model("xgb", XGBClassifier)
+    .with_search_space(...)
+    .with_reparameterization(use_prebaked=True)
+    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .with_cv(n_splits=5)
+    .fit(ctx)
+)
+
+# result_reparam should converge faster or find better params
 ```
 
 ---
 
 ## Next Steps
 
-- [Search Spaces](search-spaces.md) — Define parameter ranges
-- [Tuning](tuning.md) — Optimization configuration
-- [Model Graphs](model-graphs.md) — Multi-model pipelines
+- [Search Spaces](search-spaces.md) -- Define parameter ranges
+- [Tuning](tuning.md) -- Optimization configuration
+- [Feature Selection](feature-selection.md) -- Automated feature pruning
+- [Model Graphs](model-graphs.md) -- Multi-model pipelines

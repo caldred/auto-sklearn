@@ -165,7 +165,7 @@ orchestrator = JointQuantileOrchestrator(
 )
 
 # 4. Fit
-ctx = DataContext(X=X_train, y=y_price)  # y here is just for CV splitting
+ctx = DataContext.from_Xy(X=X_train, y=y_price)  # y here is just for CV splitting
 fit_result = orchestrator.fit(ctx, targets={
     "price": y_price,
     "volume": y_volume,
@@ -498,7 +498,7 @@ orchestrator = JointQuantileOrchestrator(
     tuning_config=tuning_config,
 )
 
-ctx = DataContext(X=X_train, y=targets_train["price"])
+ctx = DataContext.from_Xy(X=X_train, y=targets_train["price"])
 fit_result = orchestrator.fit(ctx, targets_train)
 
 print(f"\nFitting completed in {fit_result.total_time:.1f}s")

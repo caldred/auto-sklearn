@@ -40,6 +40,12 @@ with_tuning(
     metric: str = "neg_mean_squared_error",
     greater_is_better: bool = False,
     early_stopping_rounds: int | None = None,
+    n_parallel_trials: int = 1,
+    tuning_n_estimators: int | None = None,
+    final_n_estimators: int | None = None,
+    estimator_scaling_search: bool = False,
+    estimator_scaling_factors: list[int] | None = None,
+    show_progress: bool = False,
 ) -> GraphBuilder
 
 # Configure feature selection
@@ -62,10 +68,18 @@ with_reparameterization(
 build() -> ModelGraph
 
 # Create TuningOrchestrator
-create_orchestrator(search_backend: SearchBackend | None = None) -> TuningOrchestrator
+create_orchestrator(
+    search_backend: SearchBackend | None = None,
+    executor: Executor | None = None,
+) -> TuningOrchestrator
 
 # Build and fit in one step
-fit(X, y, groups=None, search_backend=None) -> FittedGraph
+fit(
+    X, y,
+    groups=None,
+    search_backend=None,
+    executor=None,
+) -> FittedGraph
 ```
 
 ### NodeBuilder
@@ -85,7 +99,7 @@ with_output_type(output_type: str) -> NodeBuilder  # "prediction", "proba", "tra
 # Set execution condition
 with_condition(condition: Callable[[DataContext], bool]) -> NodeBuilder
 
-# Add plugins
+# Add plugins (by string name)
 with_plugins(*plugins: str) -> NodeBuilder
 
 # Set fixed (non-tuned) parameters
@@ -104,7 +118,13 @@ with_description(description: str) -> NodeBuilder
 depends_on(*sources: str, dep_type: DependencyType = DependencyType.PREDICTION) -> NodeBuilder
 stacks(*sources: str) -> NodeBuilder           # Shortcut for prediction dependencies
 stacks_proba(*sources: str) -> NodeBuilder     # Shortcut for probability dependencies
+
+# Knowledge distillation
+distills(teacher: str, temperature: float = 3.0, alpha: float = 0.5) -> NodeBuilder
 ```
+
+NodeBuilder also forwards the following methods back to GraphBuilder, allowing continued chaining:
+- `add_model()`, `build()`, `with_cv()`, `with_tuning()`, `with_feature_selection()`, `with_reparameterization()`, `create_orchestrator()`, `fit()`
 
 **Example:**
 ```python
@@ -137,6 +157,20 @@ fitted = (
 predictions = fitted.predict(X_test)
 ```
 
+**Knowledge Distillation Example:**
+```python
+fitted = (
+    GraphBuilder("distillation")
+    .add_model("teacher", XGBClassifier)
+    .with_search_space(n_estimators=(100, 500), max_depth=(3, 10))
+    .add_model("student", LogisticRegression)
+    .distills("teacher", temperature=3.0, alpha=0.5)
+    .with_cv(n_splits=5)
+    .with_tuning(n_trials=50)
+    .fit(X_train, y_train)
+)
+```
+
 ---
 
 ## Core Module
@@ -149,15 +183,30 @@ from sklearn_meta.core.data.context import DataContext
 
 Immutable container for training data and metadata.
 
+**Constructor:**
 ```python
 DataContext(
-    X: pd.DataFrame | np.ndarray,    # Features
-    y: pd.Series | np.ndarray,       # Target
-    groups: pd.Series | None = None, # Group labels for GroupKFold
-    sample_weight: np.ndarray | None = None,
-    upstream_predictions: dict | None = None,
+    df: pd.DataFrame,
+    feature_cols: tuple,
+    target_col: str | None,
+    group_col: str | None = None,
     base_margin: np.ndarray | None = None,
+    soft_targets: np.ndarray | None = None,
+    indices: np.ndarray | None = None,
+    metadata: dict = {},
 )
+```
+
+**Factory Method:**
+```python
+DataContext.from_Xy(
+    X: pd.DataFrame,
+    y: pd.Series,
+    groups: pd.Series | None = None,
+    base_margin: np.ndarray | None = None,
+    indices: np.ndarray | None = None,
+    metadata: dict | None = None,
+) -> DataContext
 ```
 
 **Properties:**
@@ -168,16 +217,45 @@ DataContext(
 | `groups` | Series | Group labels |
 | `n_samples` | int | Number of samples |
 | `n_features` | int | Number of features |
-| `feature_columns` | list | Feature column names |
+| `feature_names` | list | Feature column names |
 
 **Methods:**
 ```python
-# Create subset with specific indices
-ctx.with_subset(indices: np.ndarray) -> DataContext
+# Return new DataContext with different feature columns
+ctx.with_feature_cols(feature_cols) -> DataContext
 
-# Add upstream model predictions
-ctx.with_upstream(predictions: dict) -> DataContext
+# Return new DataContext with a different target column
+ctx.with_target_col(target_col) -> DataContext
+
+# Add columns to the underlying DataFrame
+ctx.with_columns(as_features=False, **cols) -> DataContext
+
+# Return new DataContext with specific row indices
+ctx.with_indices(indices) -> DataContext
+
+# Return new DataContext with base margin
+ctx.with_base_margin(base_margin) -> DataContext
+
+# Return new DataContext with soft targets (for distillation)
+ctx.with_soft_targets(soft_targets) -> DataContext
+
+# Return new DataContext with updated metadata (key-value pair)
+ctx.with_metadata(key: str, value: Any) -> DataContext
+
+# Return new DataContext with replacement feature matrix
+ctx.with_X(X) -> DataContext
+
+# Return new DataContext with replacement target
+ctx.with_y(y) -> DataContext
+
+# Augment context with upstream model predictions as new feature columns
+ctx.augment_with_predictions(predictions: dict, prefix: str = "pred_") -> DataContext
+
+# Deep copy
+ctx.copy() -> DataContext
 ```
+
+DataContext is immutable -- all `with_*` methods return a new instance rather than modifying in place.
 
 ---
 
@@ -192,20 +270,35 @@ Cross-validation configuration.
 ```python
 CVConfig(
     n_splits: int = 5,
-    strategy: CVStrategy = CVStrategy.STRATIFIED,
     n_repeats: int = 1,
+    strategy: CVStrategy = CVStrategy.GROUP,
     shuffle: bool = True,
-    random_state: int | None = None,
+    random_state: int = 42,
+    inner_cv: CVConfig | None = None,
 )
 ```
 
 **CVStrategy Enum:**
 | Value | Description |
 |-------|-------------|
-| `STRATIFIED` | Preserve class ratios |
-| `KFOLD` | Simple random splits |
 | `GROUP` | Keep groups together |
+| `STRATIFIED` | Preserve class ratios |
+| `RANDOM` | Simple random splits |
 | `TIME_SERIES` | Temporal ordering |
+
+Note: There is no `KFOLD` strategy. Use `RANDOM` for simple random splits.
+
+**Methods:**
+```python
+# Enable nested CV by adding an inner CV configuration
+cv_config.with_inner_cv(n_splits: int = 3, strategy: CVStrategy | None = None) -> CVConfig
+```
+
+**Properties:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `is_nested` | bool | Whether nested CV is configured |
+| `total_folds` | int | Total number of folds (n_splits * n_repeats) |
 
 ---
 
@@ -226,14 +319,21 @@ DataManager(cv_config: CVConfig)
 # Create CV folds
 create_folds(ctx: DataContext) -> list[CVFold]
 
-# Get train/val data for a fold
-align_to_fold(ctx: DataContext, fold: CVFold, split: str) -> DataContext
+# Create nested CV folds (for nested cross-validation)
+create_nested_folds(ctx: DataContext) -> list[NestedCVFold]
 
-# Combine OOF predictions
-route_oof_predictions(
-    fold_predictions: dict[int, np.ndarray],
-    n_samples: int
-) -> np.ndarray
+# Split context into train/val for a given fold
+align_to_fold(ctx: DataContext, fold: CVFold) -> tuple[DataContext, DataContext]
+
+# Combine out-of-fold predictions into full array
+route_oof_predictions(ctx: DataContext, fold_results: list) -> np.ndarray
+
+# Aggregate fold-level results into a single CVResult
+aggregate_cv_result(
+    node_name: str,
+    fold_results: list,
+    ctx: DataContext,
+) -> CVResult
 ```
 
 ---
@@ -244,28 +344,25 @@ route_oof_predictions(
 from sklearn_meta.core.model.node import ModelNode
 ```
 
-Represents a single model in the graph.
+Represents a single model in the graph. Defined as a dataclass.
 
 ```python
-ModelNode(
-    name: str,
-    estimator_class: type,
-    search_space: SearchSpace | None = None,
-    fixed_params: dict | None = None,
-    reparameterizations: list | None = None,
-    plugins: list | None = None,
-    include_original_features: bool = False,
-)
+@dataclass
+class ModelNode:
+    name: str
+    estimator_class: type
+    search_space: SearchSpace | None = None
+    output_type: str = "prediction"          # "prediction", "proba", "transform"
+    condition: Callable | None = None
+    plugins: list[str] = field(default_factory=list)  # Plugin names, not instances
+    fixed_params: dict = field(default_factory=dict)
+    fit_params: dict = field(default_factory=dict)
+    feature_cols: list[str] | None = None
+    description: str = ""
+    distillation_config: DistillationConfig | None = None
 ```
 
-**Methods:**
-```python
-# Create estimator instance with params
-create_estimator(params: dict) -> estimator
-
-# Get combined fixed + tuned params
-get_params(tuned_params: dict) -> dict
-```
+Note: The `plugins` field is a `list[str]` of plugin names (e.g., `["xgboost"]`), not a list of `ModelPlugin` instances. Plugins are resolved from the registry by name at runtime.
 
 ---
 
@@ -284,45 +381,88 @@ ModelGraph()
 **Methods:**
 ```python
 # Add node to graph
-add_node(node: ModelNode) -> ModelGraph
+add_node(node: ModelNode)
 
-# Add dependency between nodes
-add_dependency(
-    from_node: str,
-    to_node: str,
-    dependency: Dependency
-) -> ModelGraph
-
-# Get topologically sorted node names
-topological_sort() -> list[str]
-
-# Get nodes grouped by layer
-get_layers() -> dict[int, list[str]]
-
-# Validate graph structure
-validate() -> None  # Raises ValueError if invalid
+# Add edge between nodes
+add_edge(edge: DependencyEdge)
 
 # Get node by name
 get_node(name: str) -> ModelNode
+
+# Get topologically ordered node names
+topological_order() -> list[str]
+
+# Get nodes grouped by execution layer
+get_layers() -> list[list[str]]
+
+# Get root nodes (no incoming edges)
+get_root_nodes() -> list[str]
+
+# Get leaf nodes (no outgoing edges)
+get_leaf_nodes() -> list[str]
+
+# Get edges pointing into a node
+get_upstream(name: str) -> list[DependencyEdge]
+
+# Get edges pointing out from a node
+get_downstream(name: str) -> list[DependencyEdge]
+
+# Validate graph structure, returns list of warnings
+validate() -> list[str]
+
+# Extract a subgraph containing only specified nodes
+subgraph(node_names: set[str]) -> ModelGraph
+
+# Get all ancestor node names
+ancestors(name: str) -> set[str]
+
+# Get all descendant node names
+descendants(name: str) -> set[str]
 ```
 
 ---
 
-### Dependency Types
+### DependencyEdge and DependencyType
 
 ```python
-from sklearn_meta.core.model.dependency import (
-    PredictionDependency,
-    ProbaDependency,
-    TransformDependency,
-)
+from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
 ```
 
-| Class | Description |
+```python
+@dataclass
+class DependencyEdge:
+    source: str
+    target: str
+    dep_type: DependencyType = DependencyType.PREDICTION
+    column_name: str | None = None
+    conditional_config: ConditionalSampleConfig | None = None
+```
+
+**DependencyType Enum:**
+| Value | Description |
 |-------|-------------|
-| `PredictionDependency` | Pass class predictions |
-| `ProbaDependency` | Pass probability predictions |
-| `TransformDependency` | Pass transformed features |
+| `PREDICTION` | Pass class predictions as features |
+| `PROBA` | Pass probability predictions as features |
+| `TRANSFORM` | Pass transformed features |
+| `FEATURE` | Pass raw features |
+| `BASE_MARGIN` | Pass predictions as base margin (boosting init) |
+| `CONDITIONAL_SAMPLE` | Conditional sample routing |
+| `DISTILL` | Knowledge distillation (soft targets from teacher) |
+
+---
+
+### DistillationConfig
+
+```python
+from sklearn_meta.core.model.distillation import DistillationConfig
+```
+
+```python
+@dataclass
+class DistillationConfig:
+    temperature: float = 3.0   # Softens probability distributions before KL computation
+    alpha: float = 0.5         # Blending weight between soft and hard losses
+```
 
 ---
 
@@ -335,24 +475,32 @@ from sklearn_meta.core.tuning.strategy import OptimizationStrategy
 
 ```python
 TuningConfig(
-    strategy: OptimizationStrategy = OptimizationStrategy.OPTUNA,
+    strategy: OptimizationStrategy = OptimizationStrategy.LAYER_BY_LAYER,
     n_trials: int = 100,
     timeout: float | None = None,
+    early_stopping_rounds: int | None = None,
     cv_config: CVConfig | None = None,
-    metric: str = "accuracy",
-    greater_is_better: bool = True,
-    random_state: int | None = None,
-    n_jobs: int = 1,
-    patience: int | None = None,
+    metric: str = "neg_mean_squared_error",
+    greater_is_better: bool = False,
+    feature_selection: FeatureSelectionConfig | None = None,
+    use_reparameterization: bool = False,
+    custom_reparameterizations: list | None = None,
+    verbose: int = 1,
+    tuning_n_estimators: int | None = None,
+    final_n_estimators: int | None = None,
+    estimator_scaling_search: bool = False,
+    estimator_scaling_factors: list[int] | None = None,
+    show_progress: bool = False,
 )
 ```
 
 **OptimizationStrategy Enum:**
 | Value | Description |
 |-------|-------------|
-| `OPTUNA` | Bayesian optimization with TPE |
-| `RANDOM` | Random search |
-| `GRID` | Grid search |
+| `LAYER_BY_LAYER` | Tune each graph layer sequentially |
+| `FULL_GRAPH` | Tune all nodes jointly |
+| `GREEDY` | Greedily tune one node at a time |
+| `NONE` | Skip tuning, use fixed params only |
 
 ---
 
@@ -366,17 +514,75 @@ from sklearn_meta.core.tuning.orchestrator import TuningOrchestrator
 TuningOrchestrator(
     graph: ModelGraph,
     data_manager: DataManager,
+    search_backend: SearchBackend,
     tuning_config: TuningConfig,
-    cache: FitCache | None = None,
-    logger: AuditLogger | None = None,
+    executor: Executor | None = None,
 )
 ```
 
 **Methods:**
 ```python
-# Run optimization
+# Run optimization and return fitted graph
 fit(ctx: DataContext) -> FittedGraph
 ```
+
+---
+
+### FittedGraph
+
+```python
+from sklearn_meta.core.tuning.orchestrator import FittedGraph
+```
+
+Result of fitting and tuning a model graph.
+
+**Properties:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `graph` | ModelGraph | The original model graph |
+| `fitted_nodes` | dict | Map of node name to FittedNode |
+| `tuning_config` | TuningConfig | Configuration used for tuning |
+| `total_time` | float | Total fit time in seconds |
+
+**Methods:**
+```python
+# Generate predictions (uses leaf node by default)
+predict(X: pd.DataFrame, node_name: str | None = None) -> np.ndarray
+
+# Get a specific fitted node
+get_node(name: str) -> FittedNode
+
+# Get out-of-fold predictions for a node
+get_oof_predictions(name: str) -> np.ndarray
+```
+
+Note: There is no `predict_proba()` method or `best_params` dict on FittedGraph. Access per-node best params via `fitted_graph.get_node("name").best_params`.
+
+---
+
+### FittedNode
+
+```python
+from sklearn_meta.core.tuning.orchestrator import FittedNode
+```
+
+Result for a single fitted node.
+
+**Attributes:**
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `node` | ModelNode | The original model node |
+| `cv_result` | CVResult | Cross-validation results |
+| `best_params` | dict | Best hyperparameters found |
+| `optimization_result` | OptimizationResult | Full optimization history |
+| `selected_features` | list | Features selected (if feature selection enabled) |
+
+**Properties:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `oof_predictions` | ndarray | Out-of-fold predictions |
+| `models` | list | List of fitted model instances (one per fold) |
+| `mean_score` | float | Mean CV score |
 
 ---
 
@@ -396,37 +602,34 @@ SearchSpace()
 ```python
 # Add parameters (all return self for chaining)
 add_float(name, low, high, log=False, step=None) -> SearchSpace
-add_int(name, low, high, log=False, step=None) -> SearchSpace
+add_int(name, low, high, log=False, step=1) -> SearchSpace
 add_categorical(name, choices) -> SearchSpace
-add_parameter(param: Parameter) -> SearchSpace
 
 # Conditional parameters
 add_conditional(
     name: str,
     parent_name: str,
     parent_value: Any,
-    parameter: Parameter
+    parameter: Parameter,
 ) -> SearchSpace
 
 # Shorthand notation
 add_from_shorthand(**kwargs) -> SearchSpace
 
-# Operations
-copy() -> SearchSpace
-merge(other: SearchSpace) -> SearchSpace
-remove_parameter(name: str) -> SearchSpace
-get_parameter(name: str) -> Parameter | None
+# Narrow search space around a center point
+narrow_around(
+    center: dict,
+    factor: float,
+    regularization_bias: float,
+) -> SearchSpace
 
 # Sampling
 sample_optuna(trial) -> dict
 
-# Properties
-parameter_names: list[str]
-```
-
-**Class Methods:**
-```python
-SearchSpace.from_dict(config: dict) -> SearchSpace
+# Operations
+copy() -> SearchSpace
+merge(other: SearchSpace) -> SearchSpace
+remove_parameter(name: str) -> SearchSpace
 ```
 
 ---
@@ -451,6 +654,26 @@ ConditionalParameter(name, parent_name, parent_value, parameter)
 
 ---
 
+### OptunaBackend
+
+```python
+from sklearn_meta.search.backends.optuna import OptunaBackend
+```
+
+```python
+OptunaBackend(
+    direction: str = "minimize",
+    random_state: int | None = None,
+    sampler: optuna.samplers.BaseSampler | None = None,
+    pruner: optuna.pruners.BasePruner | None = None,
+    n_jobs: int = 1,
+    show_progress_bar: bool = False,
+    verbosity: int | None = None,
+)
+```
+
+---
+
 ## Meta Module
 
 ### CorrelationAnalyzer
@@ -463,9 +686,9 @@ Analyzes optimization history to discover hyperparameter correlations. This help
 
 ```python
 CorrelationAnalyzer(
-    min_trials: int = 20,              # Minimum trials for reliable analysis
-    significance_threshold: float = 0.1,  # P-value threshold
-    correlation_threshold: float = 0.3,   # Minimum correlation to report
+    min_trials: int = 20,
+    significance_threshold: float = 0.1,
+    correlation_threshold: float = 0.3,
 )
 ```
 
@@ -488,20 +711,20 @@ suggest_reparameterization(
 |-------|-------------|
 | `SUBSTITUTE` | Parameters providing similar effects (e.g., L1 and L2 regularization) |
 | `COMPLEMENT` | Parameters that work together and move in the same direction |
-| `TRADEOFF` | Parameters with inverse relationship (e.g., learning_rate × n_estimators) |
+| `TRADEOFF` | Parameters with inverse relationship (e.g., learning_rate x n_estimators) |
 | `CONDITIONAL` | One parameter's optimal value depends on another |
 
 **HyperparameterCorrelation:**
 ```python
 @dataclass
 class HyperparameterCorrelation:
-    params: list[str]                    # Correlated parameter names
-    correlation_type: CorrelationType    # Type of correlation
-    strength: float                      # Correlation strength (0 to 1)
-    functional_form: str                 # Description of relationship
-    transform: Callable | None           # Transform to effective value
-    inverse_transform: Callable | None   # Recover original params
-    confidence: float                    # Confidence based on sample size
+    params: list[str]
+    correlation_type: CorrelationType
+    strength: float
+    functional_form: str
+    transform: Callable | None
+    inverse_transform: Callable | None
+    confidence: float
 
     # Methods
     effective_value(param_values: dict[str, float]) -> float
@@ -531,12 +754,22 @@ print(f"Tradeoffs found: {suggestions['tradeoffs']}")
 
 ```python
 from sklearn_meta.meta.reparameterization import (
+    Reparameterization,
     LogProductReparameterization,
     RatioReparameterization,
     LinearReparameterization,
 )
 ```
 
+**Reparameterization (abstract base):**
+```python
+class Reparameterization(ABC):
+    def __init__(self, name: str, original_params: list[str]): ...
+    def forward(self, params: dict) -> dict: ...   # Original -> transformed
+    def inverse(self, params: dict) -> dict: ...   # Transformed -> original
+```
+
+**Concrete implementations:**
 ```python
 LogProductReparameterization(
     name: str,
@@ -557,26 +790,45 @@ LinearReparameterization(
 )
 ```
 
-**Methods (all reparameterizations):**
-```python
-forward(params: dict) -> dict   # Original → transformed
-inverse(params: dict) -> dict   # Transformed → original
-```
-
 ---
 
 ### Prebaked Configs
 
 ```python
-from sklearn_meta.meta.prebaked import get_prebaked_reparameterizations
+from sklearn_meta.meta.prebaked import get_prebaked_reparameterization
 
-# Get recommended reparameterizations for a model
-reparams = get_prebaked_reparameterizations(XGBClassifier)
+# Get recommended reparameterizations for a model and its search space params
+reparams = get_prebaked_reparameterization(
+    model_class=XGBClassifier,
+    param_names=["learning_rate", "n_estimators", "max_depth"],
+)
 ```
 
 ---
 
 ## Selection Module
+
+### FeatureSelectionConfig
+
+```python
+from sklearn_meta.selection.selector import FeatureSelectionConfig
+```
+
+```python
+@dataclass
+class FeatureSelectionConfig:
+    enabled: bool = True
+    method: str = "shadow"                # "shadow", "permutation", "threshold"
+    n_shadows: int = 5
+    threshold_mult: float = 1.414
+    threshold_percentile: float = 10.0    # For threshold method
+    retune_after_pruning: bool = True
+    min_features: int = 1
+    max_features: int | None = None
+    random_state: int = 42
+```
+
+---
 
 ### ShadowFeatureSelector
 
@@ -586,27 +838,33 @@ from sklearn_meta.selection.shadow import ShadowFeatureSelector
 
 ```python
 ShadowFeatureSelector(
-    estimator,                    # Model with feature_importances_
-    n_iterations: int = 10,
-    threshold_multiplier: float = 1.0,
-    random_state: int | None = None,
+    importance_extractor: ImportanceExtractor | None = None,
+    n_shadows: int = 5,
+    n_clusters: int = 5,
+    threshold_mult: float = 1.414,
+    random_state: int = 42,
 )
 ```
 
 **Methods:**
 ```python
-fit(X, y) -> ShadowFeatureSelector
-transform(X) -> np.ndarray
-fit_transform(X, y) -> np.ndarray
-get_selected_features() -> list[str]
-get_selection_report() -> dict
+# Fit model with shadow features and return detailed selection result
+fit_select(model, X, y, feature_cols=None, importance_type="gain") -> ShadowResult
+
+# Convenience: return just the list of features to keep
+select_features(model, X, y, feature_cols=None) -> list[str]
 ```
 
-**Properties:**
+**ShadowResult:**
 ```python
-feature_importances_: np.ndarray
-shadow_max_: float
-selected_mask_: np.ndarray
+@dataclass
+class ShadowResult:
+    features_to_keep: list[str]
+    features_to_drop: list[str]
+    feature_importances: dict[str, float]
+    shadow_importances: dict[str, float]
+    feature_to_shadow: dict[str, str]
+    threshold_used: float
 ```
 
 ---
@@ -619,22 +877,32 @@ selected_mask_: np.ndarray
 from sklearn_meta.plugins.base import ModelPlugin
 ```
 
-Abstract base class for plugins.
+Abstract base class for plugins. Plugins hook into the model lifecycle at specific points.
 
 ```python
 class ModelPlugin(ABC):
     @property
-    @abstractmethod
-    def name(self) -> str: ...
+    def name(self) -> str: ...                    # Default: class name
 
+    @abstractmethod
     def applies_to(self, estimator_class) -> bool: ...
-    def modify_search_space(self, space, context) -> SearchSpace: ...
-    def modify_params(self, params, context) -> dict: ...
-    def modify_fit_params(self, params, context) -> dict: ...
-    def pre_fit(self, estimator, context) -> None: ...
-    def post_fit(self, estimator, context) -> None: ...
-    def post_tune(self, params, node, context) -> dict: ...
+
+    def modify_search_space(self, space, node) -> SearchSpace: ...
+    def modify_params(self, params, node) -> dict: ...
+    def modify_fit_params(self, params, ctx) -> dict: ...
+    def pre_fit(self, model, node, ctx) -> Any: ...
+    def post_fit(self, model, node, ctx) -> Any: ...
+    def post_tune(self, best_params, node, ctx) -> dict: ...
+    def on_fold_start(self, fold_idx, node, ctx) -> None: ...
+    def on_fold_end(self, fold_idx, model, score, node) -> None: ...
 ```
+
+Plugins are referenced by name (string) via the GraphBuilder API:
+```python
+.with_plugins("xgboost")
+```
+
+The `plugins` field on `ModelNode` is `list[str]`, not `list[ModelPlugin]`.
 
 ---
 
@@ -653,7 +921,7 @@ CompositePlugin(plugins: list[ModelPlugin])
 ### PluginRegistry
 
 ```python
-from sklearn_meta.plugins.registry import PluginRegistry, get_global_registry
+from sklearn_meta.plugins.registry import PluginRegistry, get_default_registry
 ```
 
 ```python
@@ -663,7 +931,7 @@ registry.unregister(plugin_name)
 registry.get_plugins_for(estimator_class) -> list[ModelPlugin]
 
 # Global registry
-registry = get_global_registry()
+registry = get_default_registry()
 ```
 
 ---
@@ -699,17 +967,10 @@ from sklearn_meta.persistence.cache import FitCache
 
 ```python
 FitCache(
-    max_memory_mb: int = 500,
-    disk_path: str | None = None,
-    max_disk_mb: int | None = None,
+    cache_dir: str | None = None,
+    max_size_mb: float = 1000.0,
+    enabled: bool = True,
 )
-```
-
-**Methods:**
-```python
-get(key: str) -> Any | None
-set(key: str, value: Any) -> None
-clear() -> None
 ```
 
 ---
@@ -787,27 +1048,6 @@ class ArtifactMetadata:
     tags: dict[str, str]
 ```
 
-**Example:**
-```python
-from sklearn_meta.persistence.store import ArtifactStore
-
-# Save a fitted graph
-store = ArtifactStore("./my_artifacts")
-graph_id = store.save_fitted_graph(
-    fitted_graph,
-    name="production_model",
-    tags={"version": "1.0", "dataset": "train_2024"}
-)
-
-# List all model artifacts
-models = store.list_artifacts(artifact_type="model")
-for m in models:
-    print(f"{m.node_name}: {m.metrics}")
-
-# Load a specific model
-model = store.load_model(models[0].artifact_id)
-```
-
 ---
 
 ## Audit Module
@@ -865,23 +1105,17 @@ from sklearn_meta.execution.base import Executor
 from sklearn_meta.execution.local import LocalExecutor, SequentialExecutor
 ```
 
-Abstract base class for execution backends. Executors handle parallel or distributed execution of tasks, allowing easy swapping between local, multiprocessing, or distributed backends.
+Abstract base class for execution backends. Executors handle parallel or distributed execution of tasks.
 
 **Base Executor Interface:**
 ```python
 class Executor(ABC):
-    # Apply function to list of items
     map(fn: Callable[[T], R], items: list[T]) -> list[R]
-
-    # Submit for async execution
     submit(fn: Callable[..., R], *args, **kwargs) -> Future[R]
-
-    # Shutdown executor
     shutdown(wait: bool = True) -> None
 
-    # Properties
-    n_workers: int          # Number of workers available
-    is_distributed() -> bool  # Whether runs on multiple machines
+    n_workers: int
+    is_distributed() -> bool
 ```
 
 **LocalExecutor:**
@@ -889,33 +1123,15 @@ class Executor(ABC):
 LocalExecutor(n_jobs: int = -1)  # -1 means use all CPU cores
 ```
 
-Parallel execution using Python's concurrent.futures.
-
 **SequentialExecutor:**
 ```python
 SequentialExecutor()
 ```
 
-Sequential execution for debugging or when parallelism isn't needed.
-
 **Context Manager Support:**
 ```python
 with LocalExecutor(n_jobs=4) as executor:
     results = executor.map(process_item, items)
-# Automatically shuts down on exit
-```
-
-**Example:**
-```python
-from sklearn_meta.execution.local import LocalExecutor, SequentialExecutor
-
-# Parallel execution
-with LocalExecutor(n_jobs=-1) as executor:
-    results = executor.map(fit_model, model_configs)
-
-# Sequential for debugging
-with SequentialExecutor() as executor:
-    results = executor.map(fit_model, model_configs)
 ```
 
 ---
@@ -938,7 +1154,11 @@ from sklearn_meta import (
     TuningOrchestrator,
     TuningConfig,
     OptimizationStrategy,
+    DistillationConfig,
 )
+
+# CV Strategy enum (not re-exported from sklearn_meta)
+from sklearn_meta.core.data.cv import CVStrategy
 
 # Search
 from sklearn_meta import SearchSpace, OptunaBackend
@@ -957,11 +1177,12 @@ from sklearn_meta import (
 )
 
 # Selection
-from sklearn_meta import FeatureSelector, FeatureSelectionConfig
+from sklearn_meta import FeatureSelectionConfig
+from sklearn_meta.selection.shadow import ShadowFeatureSelector
 
 # Plugins
 from sklearn_meta.plugins.base import ModelPlugin, CompositePlugin
-from sklearn_meta.plugins.registry import PluginRegistry, get_global_registry
+from sklearn_meta.plugins.registry import PluginRegistry, get_default_registry
 from sklearn_meta.plugins.xgboost.multiplier import XGBMultiplierPlugin
 from sklearn_meta.plugins.xgboost.importance import XGBImportancePlugin
 

@@ -12,6 +12,7 @@ graph TB
         TC[TuningConfig] --> TO[TuningOrchestrator]
         MG[ModelGraph] --> TO
         DM[DataManager] --> TO
+        SB[OptunaBackend] --> TO
 
         TO --> |For each layer| L[Process Layer]
         L --> |For each node| N[Tune Node]
@@ -26,6 +27,45 @@ graph TB
 
 ---
 
+## Quick Start with GraphBuilder
+
+The `GraphBuilder` fluent API is the recommended way to configure and run tuning:
+
+```python
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn_meta.api import GraphBuilder
+
+fitted = (
+    GraphBuilder("my_stack")
+    # Base model 1
+    .add_model("rf", RandomForestClassifier)
+    .with_search_space(n_estimators=(50, 300), max_depth=(3, 15))
+    # Base model 2
+    .add_model("gb", GradientBoostingClassifier)
+    .with_search_space(n_estimators=(50, 300), learning_rate=(0.01, 0.3), max_depth=(3, 10))
+    # Meta-learner stacking on base models
+    .add_model("meta", LogisticRegression)
+    .with_search_space(C=(0.01, 100.0))
+    .stacks_proba("rf")
+    .stacks_proba("gb")
+    # CV and tuning configuration
+    .with_cv(n_splits=5, strategy="stratified")
+    .with_tuning(
+        n_trials=100,
+        metric="roc_auc",
+        greater_is_better=True,
+        early_stopping_rounds=20,
+        show_progress=True,
+    )
+    .fit(X_train, y_train)
+)
+
+predictions = fitted.predict(X_test)
+```
+
+---
+
 ## TuningConfig
 
 Configure the optimization process:
@@ -36,20 +76,22 @@ from sklearn_meta.core.tuning.strategy import OptimizationStrategy
 from sklearn_meta.core.data.cv import CVConfig, CVStrategy
 
 tuning_config = TuningConfig(
-    # Optimization settings
-    strategy=OptimizationStrategy.OPTUNA,
+    strategy=OptimizationStrategy.LAYER_BY_LAYER,
     n_trials=100,
     timeout=3600,  # seconds
-
-    # Cross-validation
+    early_stopping_rounds=20,
     cv_config=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
-
-    # Metric
     metric="roc_auc",
     greater_is_better=True,
-
-    # Reproducibility
-    random_state=42,
+    feature_selection=None,
+    use_reparameterization=False,
+    custom_reparameterizations=None,
+    verbose=1,
+    tuning_n_estimators=100,
+    final_n_estimators=500,
+    estimator_scaling_search=False,
+    estimator_scaling_factors=None,
+    show_progress=True,
 )
 ```
 
@@ -57,67 +99,70 @@ tuning_config = TuningConfig(
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `strategy` | Optimization algorithm | `OPTUNA` |
+| `strategy` | Graph traversal strategy | `LAYER_BY_LAYER` |
 | `n_trials` | Maximum number of trials | 100 |
 | `timeout` | Time limit in seconds | None |
-| `cv_config` | Cross-validation configuration | 5-fold stratified |
-| `metric` | Scoring metric name | "accuracy" |
-| `greater_is_better` | Maximize or minimize | True |
-| `random_state` | Random seed | None |
-| `n_jobs` | Parallel jobs | 1 |
+| `early_stopping_rounds` | Stop if no improvement for N trials | None |
+| `cv_config` | Cross-validation configuration | None |
+| `metric` | Scoring metric name | `"neg_mean_squared_error"` |
+| `greater_is_better` | Maximize or minimize | False |
+| `feature_selection` | Feature selection configuration | None |
+| `use_reparameterization` | Enable reparameterization | False |
+| `custom_reparameterizations` | Custom reparameterization functions | None |
+| `verbose` | Verbosity level | 1 |
+| `tuning_n_estimators` | n_estimators used during tuning (faster) | None |
+| `final_n_estimators` | n_estimators for final model (after tuning) | None |
+| `estimator_scaling_search` | Search for optimal n_estimators scaling | False |
+| `estimator_scaling_factors` | Custom scaling factors to try | None |
+| `show_progress` | Display progress bar during tuning | False |
 
 ---
 
-## Optimization Strategies
+## Optimization Strategy vs. Search Backend
 
-### Optuna (Recommended)
+A key architectural concept: **strategy** and **search backend** are separate concerns.
 
-State-of-the-art Bayesian optimization with TPE sampler:
+### Strategy (Graph Traversal)
+
+`OptimizationStrategy` controls how the graph's layers are processed during tuning:
 
 ```python
 from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+```
 
-config = TuningConfig(
-    strategy=OptimizationStrategy.OPTUNA,
-    n_trials=100,
+| Strategy | Description |
+|----------|-------------|
+| `LAYER_BY_LAYER` | Tune nodes one layer at a time (default). Base models are tuned first, then meta-learners use their OOF predictions. |
+| `FULL_GRAPH` | Tune all nodes jointly in a single optimization pass. |
+| `GREEDY` | Tune each node greedily in topological order. |
+| `NONE` | Skip tuning; use default or provided parameters. |
+
+There are **no** `OPTUNA`, `RANDOM`, or `GRID` strategy values. These are not strategies.
+
+### Search Backend (Optuna)
+
+The search backend controls *how* individual nodes are optimized (the algorithm that suggests hyperparameter configurations). `OptunaBackend` is the default and uses Optuna's TPE sampler:
+
+```python
+from sklearn_meta.search.backends.optuna import OptunaBackend
+
+backend = OptunaBackend(
+    direction="minimize",
+    random_state=42,
+    sampler=None,         # defaults to TPE
+    pruner=None,
+    n_jobs=1,
+    show_progress_bar=False,
+    verbosity=None,
 )
 ```
 
-**Features:**
-- Tree-structured Parzen Estimator (TPE)
+**OptunaBackend features:**
+- Tree-structured Parzen Estimator (TPE) by default
 - Automatic pruning of unpromising trials
 - Handles conditional parameters
-- Efficient parallelization
-
-### Random Search
-
-Simple but effective baseline:
-
-```python
-config = TuningConfig(
-    strategy=OptimizationStrategy.RANDOM,
-    n_trials=100,
-)
-```
-
-**When to use:**
-- Baseline comparison
-- Very high-dimensional spaces
-- When TPE assumptions don't hold
-
-### Grid Search
-
-Exhaustive search over parameter grid:
-
-```python
-config = TuningConfig(
-    strategy=OptimizationStrategy.GRID,
-)
-```
-
-**When to use:**
-- Small, discrete search spaces
-- When you need to evaluate all combinations
+- Efficient parallelization via `n_jobs`
+- Custom Optuna samplers and pruners supported
 
 ---
 
@@ -127,16 +172,31 @@ The orchestrator coordinates the entire tuning process:
 
 ```python
 from sklearn_meta.core.tuning.orchestrator import TuningOrchestrator
+from sklearn_meta.search.backends.optuna import OptunaBackend
+
+backend = OptunaBackend(direction="maximize", random_state=42)
 
 orchestrator = TuningOrchestrator(
     graph=model_graph,
     data_manager=data_manager,
+    search_backend=backend,
     tuning_config=tuning_config,
+    executor=None,
 )
 
 # Run optimization
 fitted_graph = orchestrator.fit(ctx)
 ```
+
+### Constructor Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `graph` | The `ModelGraph` to tune | required |
+| `data_manager` | `DataManager` instance | required |
+| `search_backend` | Search backend (e.g. `OptunaBackend`) | OptunaBackend |
+| `tuning_config` | `TuningConfig` instance | required |
+| `executor` | Optional executor for parallel node tuning | None |
 
 ### Execution Flow
 
@@ -144,12 +204,12 @@ fitted_graph = orchestrator.fit(ctx)
 sequenceDiagram
     participant U as User
     participant TO as TuningOrchestrator
-    participant OPT as Optimizer
+    participant OPT as OptunaBackend
     participant CV as CrossValidator
     participant M as Model
 
     U->>TO: fit(ctx)
-    TO->>TO: Get layers (topological sort)
+    TO->>TO: Get layers (topological order)
 
     loop For each layer
         loop For each node in layer
@@ -176,7 +236,7 @@ sequenceDiagram
 
 ## Layer-by-Layer Tuning
 
-For stacking graphs, nodes are tuned layer by layer:
+For stacking graphs, nodes are tuned layer by layer (the default strategy):
 
 ```mermaid
 graph TB
@@ -208,6 +268,125 @@ fitted_graph = orchestrator.fit(ctx)
 
 ---
 
+## Estimator Scaling
+
+For boosting models (XGBoost, LightGBM, GradientBoosting), you often want to tune with fewer estimators for speed, then train the final model with more. `TuningConfig` supports this directly:
+
+### Fixed Scaling
+
+```python
+tuning_config = TuningConfig(
+    n_trials=100,
+    metric="roc_auc",
+    greater_is_better=True,
+    tuning_n_estimators=100,     # use 100 trees during tuning (fast)
+    final_n_estimators=1000,     # use 1000 trees for the final model
+)
+```
+
+### Automatic Scaling Search
+
+Automatically search for the best `n_estimators` value after hyperparameters are found:
+
+```python
+tuning_config = TuningConfig(
+    n_trials=100,
+    metric="roc_auc",
+    greater_is_better=True,
+    tuning_n_estimators=100,
+    estimator_scaling_search=True,
+    # Optionally provide custom factors to try:
+    estimator_scaling_factors=[1.0, 2.0, 5.0, 10.0],
+)
+```
+
+### With GraphBuilder
+
+```python
+fitted = (
+    GraphBuilder("boosting_pipeline")
+    .add_model("xgb", XGBClassifier)
+    .with_search_space(max_depth=(3, 10), learning_rate=(0.01, 0.3))
+    .with_tuning(
+        n_trials=100,
+        metric="roc_auc",
+        greater_is_better=True,
+        tuning_n_estimators=100,
+        final_n_estimators=1000,
+        estimator_scaling_search=True,
+    )
+    .fit(X_train, y_train)
+)
+```
+
+---
+
+## Progress Monitoring
+
+### Show Progress Bar
+
+Enable a progress bar during tuning:
+
+```python
+tuning_config = TuningConfig(
+    n_trials=100,
+    show_progress=True,
+)
+```
+
+Or with the GraphBuilder:
+
+```python
+fitted = (
+    GraphBuilder("pipeline")
+    .add_model("rf", RandomForestClassifier)
+    .with_search_space(n_estimators=(50, 300))
+    .with_tuning(n_trials=100, show_progress=True)
+    .fit(X_train, y_train)
+)
+```
+
+### Verbosity
+
+Control log output detail with `verbose`:
+
+```python
+tuning_config = TuningConfig(
+    n_trials=100,
+    verbose=0,  # silent
+    # verbose=1,  # summary (default)
+    # verbose=2,  # detailed
+)
+```
+
+---
+
+## Early Stopping
+
+### Early Stopping Rounds
+
+Stop tuning a node when no improvement is found for N consecutive trials:
+
+```python
+tuning_config = TuningConfig(
+    n_trials=1000,
+    early_stopping_rounds=20,  # stop if no improvement for 20 trials
+)
+```
+
+### Timeout
+
+Stop tuning after a time limit:
+
+```python
+tuning_config = TuningConfig(
+    n_trials=1000,
+    timeout=3600,  # stop after 1 hour
+)
+```
+
+---
+
 ## Metrics
 
 ### Built-in Metrics
@@ -220,7 +399,7 @@ fitted_graph = orchestrator.fit(ctx)
 | `precision` | Classification | Maximize |
 | `recall` | Classification | Maximize |
 | `log_loss` | Classification | Minimize |
-| `mse` | Regression | Minimize |
+| `neg_mean_squared_error` | Regression | Minimize |
 | `rmse` | Regression | Minimize |
 | `mae` | Regression | Minimize |
 | `r2` | Regression | Maximize |
@@ -231,8 +410,8 @@ fitted_graph = orchestrator.fit(ctx)
 # Classification
 config = TuningConfig(metric="roc_auc", greater_is_better=True)
 
-# Regression
-config = TuningConfig(metric="rmse", greater_is_better=False)
+# Regression (default)
+config = TuningConfig(metric="neg_mean_squared_error", greater_is_better=False)
 ```
 
 ### Custom Metrics
@@ -252,151 +431,76 @@ config = TuningConfig(
 
 ---
 
-## Early Stopping
+## Working with Results
 
-### Trial Pruning (Optuna)
+### FittedGraph
 
-Optuna can prune unpromising trials early:
+After tuning, the orchestrator returns a `FittedGraph`:
 
 ```python
-config = TuningConfig(
-    strategy=OptimizationStrategy.OPTUNA,
-    n_trials=100,
-    pruning=True,  # Enable median pruning
-)
+fitted_graph = orchestrator.fit(ctx)
+
+# Predict through the full graph (recursive)
+predictions = fitted_graph.predict(X_test)
+
+# Predict from a specific node
+rf_predictions = fitted_graph.predict(X_test, node_name="rf")
+
+# Access a specific fitted node
+rf_fitted = fitted_graph.get_node("rf")
+
+# Get out-of-fold predictions for a node
+rf_oof = fitted_graph.get_oof_predictions("rf")
 ```
 
-### Timeout
+### FittedNode
 
-Stop tuning after a time limit:
-
-```python
-config = TuningConfig(
-    n_trials=1000,
-    timeout=3600,  # Stop after 1 hour
-)
-```
-
-### Convergence
-
-Stop when no improvement for N trials:
+Each fitted node contains detailed results:
 
 ```python
-config = TuningConfig(
-    n_trials=1000,
-    patience=20,  # Stop if no improvement for 20 trials
-)
+rf_fitted = fitted_graph.get_node("rf")
+
+rf_fitted.node               # original ModelNode
+rf_fitted.best_params        # best hyperparameters dict
+rf_fitted.cv_result          # cross-validation result
+rf_fitted.optimization_result  # full optimization result
+rf_fitted.selected_features  # features selected (if feature selection enabled)
+rf_fitted.oof_predictions    # out-of-fold predictions
+rf_fitted.models             # list of fitted model objects
+rf_fitted.mean_score         # mean CV score
 ```
 
 ---
 
-## Parallelization
+## Dependencies
 
-### Parallel Trials
-
-Run multiple trials simultaneously:
+Connect models using `DependencyEdge` and `DependencyType`:
 
 ```python
-config = TuningConfig(
-    n_trials=100,
-    n_jobs=4,  # 4 parallel trials
-)
+from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+
+# Prediction dependency (class labels or regression values)
+edge = DependencyEdge(source="rf", target="meta", dep_type=DependencyType.PREDICTION)
+graph.add_edge(edge)
+
+# Probability dependency (class probabilities)
+edge = DependencyEdge(source="gb", target="meta", dep_type=DependencyType.PROBA)
+graph.add_edge(edge)
 ```
 
-### Parallel CV Folds
-
-Parallelize cross-validation within each trial:
+With GraphBuilder, dependencies are simpler:
 
 ```python
-config = TuningConfig(
-    n_trials=100,
-    cv_n_jobs=-1,  # Use all cores for CV
+(
+    GraphBuilder("stack")
+    .add_model("rf", RandomForestClassifier)
+    .with_search_space(n_estimators=(50, 200))
+    .add_model("meta", LogisticRegression)
+    .with_search_space(C=(0.01, 100.0))
+    .stacks("rf")          # prediction dependency
+    # or
+    .stacks_proba("rf")    # probability dependency
 )
-```
-
-### Parallel Nodes
-
-Independent nodes in the same layer can be tuned in parallel:
-
-```mermaid
-graph LR
-    subgraph "Parallel Tuning"
-        A[RF Tuning] --> |parallel| B[XGB Tuning]
-        A --> |parallel| C[LGBM Tuning]
-    end
-```
-
----
-
-## Caching
-
-Cache expensive model fits to avoid redundant computation:
-
-```python
-from sklearn_meta.persistence.cache import FitCache
-
-cache = FitCache(
-    max_memory_mb=500,
-    disk_path="./cache",
-)
-
-orchestrator = TuningOrchestrator(
-    graph=graph,
-    data_manager=data_manager,
-    tuning_config=config,
-    cache=cache,
-)
-```
-
-### How Caching Works
-
-```mermaid
-graph TB
-    T[Trial] --> H[Compute hash<br/>params + data + fold]
-    H --> C{In cache?}
-    C -->|Yes| R[Return cached result]
-    C -->|No| F[Fit model]
-    F --> S[Store in cache]
-    S --> R2[Return result]
-```
-
----
-
-## Audit Logging
-
-Track tuning progress and results:
-
-```python
-from sklearn_meta.audit.logger import AuditLogger
-
-logger = AuditLogger(log_dir="./logs")
-
-orchestrator = TuningOrchestrator(
-    graph=graph,
-    data_manager=data_manager,
-    tuning_config=config,
-    logger=logger,
-)
-
-fitted = orchestrator.fit(ctx)
-
-# View logs
-logger.get_trial_history("rf")  # All trials for RF node
-logger.get_best_params("rf")    # Best parameters
-```
-
-### Log Contents
-
-```
-logs/
-├── tuning_2024_01_15_10_30_00/
-│   ├── rf/
-│   │   ├── trials.json
-│   │   └── best_params.json
-│   ├── xgb/
-│   │   ├── trials.json
-│   │   └── best_params.json
-│   └── summary.json
 ```
 
 ---
@@ -407,6 +511,7 @@ logs/
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.datasets import make_classification
+from sklearn.metrics import accuracy_score
 import pandas as pd
 
 from sklearn_meta.core.data.context import DataContext
@@ -414,16 +519,17 @@ from sklearn_meta.core.data.cv import CVConfig, CVStrategy
 from sklearn_meta.core.data.manager import DataManager
 from sklearn_meta.core.model.node import ModelNode
 from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.model.dependency import ProbaDependency
+from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
 from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
 from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.search.backends.optuna import OptunaBackend
 from sklearn_meta.search.space import SearchSpace
 
 # === Data ===
 X, y = make_classification(n_samples=2000, n_features=20, random_state=42)
 X = pd.DataFrame(X)
 y = pd.Series(y)
-ctx = DataContext(X=X, y=y)
+ctx = DataContext.from_Xy(X=X, y=y)
 
 # === Search Spaces ===
 rf_space = (
@@ -446,50 +552,87 @@ meta_space = (
 )
 
 # === Model Nodes ===
-rf_node = ModelNode("rf", RandomForestClassifier, rf_space, {"random_state": 42})
-gb_node = ModelNode("gb", GradientBoostingClassifier, gb_space, {"random_state": 42})
-meta_node = ModelNode("meta", LogisticRegression, meta_space, {"random_state": 42})
+rf_node = ModelNode(name="rf", estimator_class=RandomForestClassifier, search_space=rf_space, fixed_params={"random_state": 42})
+gb_node = ModelNode(name="gb", estimator_class=GradientBoostingClassifier, search_space=gb_space, fixed_params={"random_state": 42})
+meta_node = ModelNode(name="meta", estimator_class=LogisticRegression, search_space=meta_space, fixed_params={"random_state": 42})
 
 # === Graph ===
 graph = ModelGraph()
 graph.add_node(rf_node)
 graph.add_node(gb_node)
 graph.add_node(meta_node)
-graph.add_dependency("rf", "meta", ProbaDependency())
-graph.add_dependency("gb", "meta", ProbaDependency())
+graph.add_edge(DependencyEdge(source="rf", target="meta", dep_type=DependencyType.PROBA))
+graph.add_edge(DependencyEdge(source="gb", target="meta", dep_type=DependencyType.PROBA))
 
 # === Tuning Config ===
-cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED, random_state=42)
+cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED)
 
 tuning_config = TuningConfig(
-    strategy=OptimizationStrategy.OPTUNA,
+    strategy=OptimizationStrategy.LAYER_BY_LAYER,
     n_trials=50,
     cv_config=cv_config,
     metric="roc_auc",
     greater_is_better=True,
-    random_state=42,
+    early_stopping_rounds=15,
+    show_progress=True,
 )
+
+# === Search Backend ===
+backend = OptunaBackend(direction="maximize", random_state=42)
 
 # === Run Tuning ===
 data_manager = DataManager(cv_config)
-orchestrator = TuningOrchestrator(graph, data_manager, tuning_config)
+orchestrator = TuningOrchestrator(
+    graph=graph,
+    data_manager=data_manager,
+    search_backend=backend,
+    tuning_config=tuning_config,
+)
 
 print("Starting hyperparameter optimization...")
 fitted_graph = orchestrator.fit(ctx)
 
 # === Results ===
-print("\nBest parameters:")
-for node_name, params in fitted_graph.best_params.items():
-    print(f"  {node_name}: {params}")
+print("\nBest parameters per node:")
+for name in ["rf", "gb", "meta"]:
+    node = fitted_graph.get_node(name)
+    print(f"  {name}: {node.best_params} (mean score: {node.mean_score:.4f})")
 
 # === Predict ===
 X_test, y_test = make_classification(n_samples=500, n_features=20, random_state=123)
-predictions = fitted_graph.predict(pd.DataFrame(X_test))
-probabilities = fitted_graph.predict_proba(pd.DataFrame(X_test))
+X_test = pd.DataFrame(X_test)
+predictions = fitted_graph.predict(X_test)
 
-from sklearn.metrics import accuracy_score, roc_auc_score
 print(f"\nTest Accuracy: {accuracy_score(y_test, predictions):.4f}")
-print(f"Test ROC-AUC: {roc_auc_score(y_test, probabilities[:, 1]):.4f}")
+```
+
+### Equivalent with GraphBuilder
+
+```python
+from sklearn_meta.api import GraphBuilder
+
+fitted = (
+    GraphBuilder("stacking_pipeline")
+    .add_model("rf", RandomForestClassifier)
+    .with_search_space(n_estimators=(50, 300), max_depth=(3, 15), min_samples_split=(0.01, 0.2))
+    .add_model("gb", GradientBoostingClassifier)
+    .with_search_space(n_estimators=(50, 300), learning_rate=(0.01, 0.3), max_depth=(3, 10))
+    .add_model("meta", LogisticRegression)
+    .with_search_space(C=(0.01, 100.0))
+    .stacks_proba("rf")
+    .stacks_proba("gb")
+    .with_cv(n_splits=5, strategy="stratified")
+    .with_tuning(
+        n_trials=50,
+        metric="roc_auc",
+        greater_is_better=True,
+        early_stopping_rounds=15,
+        show_progress=True,
+    )
+    .fit(X_train, y_train)
+)
+
+predictions = fitted.predict(X_test)
 ```
 
 ---
@@ -512,34 +655,35 @@ config = TuningConfig(n_trials=200)
 config = TuningConfig(
     n_trials=1000,
     timeout=3600,  # 1 hour max
+    early_stopping_rounds=30,
 )
 ```
 
-### 3. Enable Caching for Repeated Runs
+### 3. Use Estimator Scaling for Boosting Models
 
 ```python
-cache = FitCache(max_memory_mb=1000)
-orchestrator = TuningOrchestrator(..., cache=cache)
+config = TuningConfig(
+    n_trials=100,
+    tuning_n_estimators=100,
+    final_n_estimators=1000,
+    estimator_scaling_search=True,
+)
 ```
 
-### 4. Monitor Progress
-
-```python
-# Use audit logger
-logger = AuditLogger(log_dir="./logs")
-orchestrator = TuningOrchestrator(..., logger=logger)
-```
-
-### 5. Use Reparameterization for Correlated Parameters
+### 4. Use Reparameterization for Correlated Parameters
 
 ```python
 # See reparameterization.md for details
+config = TuningConfig(
+    n_trials=100,
+    use_reparameterization=True,
+)
 ```
 
 ---
 
 ## Next Steps
 
-- [Reparameterization](reparameterization.md) — Improve optimization efficiency
-- [Stacking](stacking.md) — Multi-layer model stacking
-- [Cross-Validation](cross-validation.md) — CV strategies in detail
+- [Reparameterization](reparameterization.md) -- Improve optimization efficiency
+- [Stacking](stacking.md) -- Multi-layer model stacking
+- [Cross-Validation](cross-validation.md) -- CV strategies in detail
