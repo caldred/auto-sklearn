@@ -798,6 +798,7 @@ class TuningOrchestrator:
 
     def _calculate_score(self, y_true, y_pred, node=None) -> float:
         """Calculate the evaluation score."""
+        from sklearn.base import BaseEstimator
         from sklearn.metrics import get_scorer
 
         metric = self.tuning_config.metric
@@ -805,7 +806,7 @@ class TuningOrchestrator:
 
         # Create a dummy estimator wrapper for the scorer
         # The scorer expects (estimator, X, y) but we already have predictions
-        class _PredictionWrapper:
+        class _PredictionWrapper(BaseEstimator):
             """Wrapper that returns pre-computed predictions."""
 
             def __init__(self, predictions):
