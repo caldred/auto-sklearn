@@ -433,12 +433,12 @@ Automatically drop uninformative features before final training. Three methods a
 
 ### Shadow Feature Selection (Recommended)
 
-Creates shuffled "shadow" copies of each feature and compares real feature importance against the shadow baseline. Features that don't beat their shadows are dropped.
+Clusters features by entropy, then generates synthetic noise features matched to each cluster's entropy distribution. Each real feature is compared against its entropy-matched shadow -- features that can't beat calibrated noise at their own information level are dropped.
 
 ```python
 .with_feature_selection(
     method="shadow",
-    n_shadows=5,                   # Number of shadow copies per feature
+    n_shadows=5,                   # Number of shadow features per entropy cluster
     threshold_mult=1.414,          # Multiplier on shadow importance threshold
     retune_after_pruning=True,     # Re-tune hyperparameters with selected features
     min_features=1,                # Never drop below this many features
