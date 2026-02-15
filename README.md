@@ -19,19 +19,20 @@ pip install lightgbm        # LightGBM support
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
-2. [Defining Models](#defining-models)
-3. [Search Spaces](#search-spaces)
-4. [Cross-Validation](#cross-validation)
-5. [Hyperparameter Tuning](#hyperparameter-tuning)
-6. [Model Stacking](#model-stacking)
-7. [Feature Selection](#feature-selection)
-8. [Reparameterization](#reparameterization)
-9. [Knowledge Distillation](#knowledge-distillation)
-10. [Estimator Scaling](#estimator-scaling)
-11. [Working with Results](#working-with-results)
-12. [Advanced Usage](#advanced-usage)
-13. [Project Structure](#project-structure)
-14. [Running Tests](#running-tests)
+2. [Data Management](#data-management)
+3. [Defining Models](#defining-models)
+4. [Search Spaces](#search-spaces)
+5. [Cross-Validation](#cross-validation)
+6. [Hyperparameter Tuning](#hyperparameter-tuning)
+7. [Model Stacking](#model-stacking)
+8. [Feature Selection](#feature-selection)
+9. [Reparameterization](#reparameterization)
+10. [Knowledge Distillation](#knowledge-distillation)
+11. [Estimator Scaling](#estimator-scaling)
+12. [Working with Results](#working-with-results)
+13. [Advanced Usage](#advanced-usage)
+14. [Project Structure](#project-structure)
+15. [Running Tests](#running-tests)
 
 ## Quick Start
 
@@ -58,6 +59,142 @@ predictions = fitted.predict(X_test)
 ```
 
 This tunes a random forest over 50 Optuna trials using 5-fold stratified CV, then refits on the full training set with the best hyperparameters.
+
+## Data Management
+
+sklearn-meta uses `DataContext` as an immutable container for datasets. It wraps a single pandas DataFrame and declares column roles (features, target, groups) rather than storing separate arrays.
+
+### Creating a DataContext
+
+The fluent API handles this for you when you call `.fit(X, y)`, but you can also create one directly:
+
+```python
+from sklearn_meta.core.data.context import DataContext
+
+# From separate X, y, groups
+ctx = DataContext.from_Xy(
+    X=X_train,                         # pd.DataFrame of features
+    y=y_train,                         # pd.Series target
+    groups=group_labels,               # Optional pd.Series for group CV
+    base_margin=margin_array,          # Optional np.ndarray for XGBoost base margins
+)
+```
+
+Or construct from a single DataFrame with column roles declared explicitly:
+
+```python
+ctx = DataContext(
+    df=full_dataframe,
+    feature_cols=("feat_1", "feat_2", "feat_3"),
+    target_col="target",
+    group_col="patient_id",            # Optional
+)
+```
+
+### Accessing Data
+
+DataContext provides backward-compatible properties for accessing the underlying data:
+
+```python
+ctx.X              # Feature DataFrame (only feature_cols)
+ctx.y              # Target Series
+ctx.groups         # Group labels Series (or None)
+ctx.n_samples      # Number of rows
+ctx.n_features     # Number of feature columns
+ctx.feature_names  # List of feature column names
+```
+
+### Immutable Transformations
+
+DataContext is frozen -- every transformation returns a new instance, leaving the original unchanged. This prevents subtle bugs from shared mutable state during cross-validation and stacking.
+
+```python
+# Swap out the feature columns
+ctx2 = ctx.with_feature_cols(["feat_1", "feat_3"])
+
+# Point at a different target column already in the DataFrame
+ctx3 = ctx.with_target_col("alt_target")
+
+# Add new columns (optionally registering them as features)
+ctx4 = ctx.with_columns(
+    as_features=True,
+    new_feat=some_array,
+    another_feat=another_array,
+)
+
+# Subset to specific row indices
+ctx5 = ctx.with_indices(train_indices)
+
+# Attach an XGBoost base margin for stacking
+ctx6 = ctx.with_base_margin(margin_array)
+
+# Attach soft targets for knowledge distillation
+ctx7 = ctx.with_soft_targets(teacher_probabilities)
+
+# Store arbitrary metadata
+ctx8 = ctx.with_metadata("source", "experiment_3")
+
+# Replace features or target (backward-compatible)
+ctx9 = ctx.with_X(new_feature_df)
+ctx10 = ctx.with_y(new_target_series)
+```
+
+### Augmenting with Predictions (Stacking)
+
+During stacking, upstream model predictions are added as features for downstream models. This is handled automatically by the orchestrator, but you can also do it manually:
+
+```python
+ctx_stacked = ctx.augment_with_predictions(
+    predictions={
+        "rf": rf_oof_predictions,       # np.ndarray, shape (n_samples,)
+        "xgb": xgb_oof_predictions,
+    },
+    prefix="pred_",                     # Column names become "pred_rf", "pred_xgb"
+)
+# ctx_stacked.feature_cols now includes "pred_rf" and "pred_xgb"
+```
+
+For multi-class probability predictions (2D arrays), each class gets its own column (e.g., `pred_rf_0`, `pred_rf_1`).
+
+### DataManager
+
+`DataManager` handles all cross-validation splitting logic. It is created automatically by the fluent API, but can be used directly:
+
+```python
+from sklearn_meta.core.data.manager import DataManager
+from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+
+cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED, random_state=42)
+manager = DataManager(cv_config)
+
+# Create CV folds
+folds = manager.create_folds(ctx)
+for fold in folds:
+    print(f"Fold {fold.fold_idx}: {fold.n_train} train, {fold.n_val} val")
+
+# Split a context into train/val for a specific fold
+train_ctx, val_ctx = manager.align_to_fold(ctx, folds[0])
+
+# Create nested folds (requires inner_cv in config)
+nested_config = cv_config.with_inner_cv(n_splits=3)
+nested_manager = DataManager(nested_config)
+nested_folds = nested_manager.create_nested_folds(ctx)
+for nf in nested_folds:
+    print(f"Outer fold {nf.fold_idx}, {nf.n_inner_folds} inner folds")
+```
+
+### Out-of-Fold Predictions
+
+The DataManager routes per-fold validation predictions into a single out-of-fold (OOF) array where each sample's prediction comes from a model that never saw it during training:
+
+```python
+oof_predictions = manager.route_oof_predictions(ctx, fold_results)
+
+# Or aggregate into a full CVResult
+cv_result = manager.aggregate_cv_result("rf", fold_results, ctx)
+print(cv_result.mean_score, cv_result.std_score)
+print(cv_result.oof_predictions.shape)
+```
 
 ## Defining Models
 
