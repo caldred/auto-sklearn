@@ -441,6 +441,7 @@ class GraphBuilder:
         final_n_estimators: Optional[int] = None,
         estimator_scaling_search: bool = False,
         estimator_scaling_factors: Optional[List[int]] = None,
+        show_progress: bool = False,
     ) -> GraphBuilder:
         """
         Configure hyperparameter tuning.
@@ -465,6 +466,7 @@ class GraphBuilder:
                 stopping if performance degrades.
             estimator_scaling_factors: Custom scaling factors to search
                 (default: [2, 5, 10, 20]).
+            show_progress: If True, surface Optuna progress in terminal output.
 
         Returns:
             Self for chaining.
@@ -486,6 +488,7 @@ class GraphBuilder:
             final_n_estimators=final_n_estimators,
             estimator_scaling_search=estimator_scaling_search,
             estimator_scaling_factors=estimator_scaling_factors,
+            show_progress=show_progress,
         )
         self._n_parallel_trials = n_parallel_trials
 
@@ -605,7 +608,10 @@ class GraphBuilder:
             tuning_config.custom_reparameterizations = self._custom_reparameterizations
 
         data_manager = DataManager(cv_config)
-        backend = search_backend or OptunaBackend(n_jobs=self._n_parallel_trials)
+        backend = search_backend or OptunaBackend(
+            n_jobs=self._n_parallel_trials,
+            show_progress_bar=tuning_config.show_progress,
+        )
 
         return TuningOrchestrator(
             graph=graph,

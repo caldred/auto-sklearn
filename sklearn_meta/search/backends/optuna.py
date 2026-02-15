@@ -18,10 +18,6 @@ if TYPE_CHECKING:
     from sklearn_meta.search.space import SearchSpace
 
 
-# Suppress Optuna's verbose logging by default
-optuna.logging.set_verbosity(optuna.logging.WARNING)
-
-
 class OptunaBackend(SearchBackend):
     """
     Optuna-based hyperparameter optimization backend.
@@ -37,6 +33,8 @@ class OptunaBackend(SearchBackend):
         sampler: Optional[optuna.samplers.BaseSampler] = None,
         pruner: Optional[optuna.pruners.BasePruner] = None,
         n_jobs: int = 1,
+        show_progress_bar: bool = False,
+        verbosity: Optional[int] = None,
     ) -> None:
         """
         Initialize the Optuna backend.
@@ -47,15 +45,28 @@ class OptunaBackend(SearchBackend):
             sampler: Optional custom Optuna sampler.
             pruner: Optional Optuna pruner for early stopping.
             n_jobs: Number of parallel jobs for optimization trials.
+            show_progress_bar: Whether to display Optuna progress bars.
+            verbosity: Optuna logging verbosity level (e.g., WARNING, INFO).
+                Defaults to INFO when show_progress_bar=True, else WARNING.
         """
         super().__init__(direction=direction, random_state=random_state)
 
         self.sampler = sampler or TPESampler(seed=random_state)
         self.pruner = pruner
         self._n_jobs = n_jobs
+        self._show_progress_bar = show_progress_bar
 
         self._study: Optional[optuna.Study] = None
         self._current_trial: Optional[optuna.Trial] = None
+
+        # Set global Optuna verbosity for current process.
+        if verbosity is None:
+            verbosity = (
+                optuna.logging.INFO
+                if show_progress_bar
+                else optuna.logging.WARNING
+            )
+        optuna.logging.set_verbosity(verbosity)
 
     def optimize(
         self,
@@ -131,7 +142,7 @@ class OptunaBackend(SearchBackend):
             timeout=timeout,
             callbacks=optuna_callbacks if optuna_callbacks else None,
             n_jobs=self._n_jobs,
-            show_progress_bar=False,
+            show_progress_bar=self._show_progress_bar,
         )
 
         # Convert Optuna trials to TrialResults

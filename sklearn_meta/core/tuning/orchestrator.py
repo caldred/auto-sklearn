@@ -56,6 +56,7 @@ class TuningConfig:
             scaling after tuning. Tests multipliers [2, 5, 10, 20] with early stopping
             if performance degrades. Overrides tuning_n_estimators/final_n_estimators.
         estimator_scaling_factors: Custom scaling factors to search (default: [2, 5, 10, 20]).
+        show_progress: If True, surface Optuna progress in terminal output.
     """
 
     strategy: OptimizationStrategy = OptimizationStrategy.LAYER_BY_LAYER
@@ -73,6 +74,7 @@ class TuningConfig:
     final_n_estimators: Optional[int] = None
     estimator_scaling_search: bool = False
     estimator_scaling_factors: Optional[List[int]] = None
+    show_progress: bool = False
 
 
 @dataclass
