@@ -47,34 +47,35 @@ print(f"Selected features: {fitted_node.selected_features}")
 
 ### Shadow Features (default)
 
-Shadow features are random permutations of real features. If a real feature is truly informative, its importance should exceed that of random noise.
+Shadow features are synthetic noise columns whose information structure (entropy) is matched to the real features. Features are grouped by entropy into clusters, and a fixed number of shadow features are generated per cluster -- not one per real feature. If a real feature can't beat its entropy-matched shadow, it's likely not generalizing.
 
 ```python
 .with_feature_selection(
     method="shadow",
-    n_shadows=5,            # Number of shadow copies per feature
-    threshold_mult=1.414,   # Feature must beat threshold_mult * max shadow importance
+    n_shadows=5,            # Number of shadow features per entropy cluster
+    threshold_mult=1.414,   # Feature must beat threshold_mult * its shadow's importance
 )
 ```
 
 ```mermaid
 graph TB
-    subgraph "Original Features"
-        F1[Feature 1<br/>Important]
-        F2[Feature 2<br/>Important]
-        F3[Feature 3<br/>Noise]
+    subgraph "1. Cluster Features by Entropy"
+        F1[Feature 1<br/>High entropy] --> C1[Cluster A]
+        F2[Feature 2<br/>High entropy] --> C1
+        F3[Feature 3<br/>Low entropy] --> C2[Cluster B]
+        F4[Feature 4<br/>Low entropy] --> C2
     end
 
-    subgraph "Shadow Features (shuffled)"
-        S1[Shadow 1<br/>Random]
-        S2[Shadow 2<br/>Random]
-        S3[Shadow 3<br/>Random]
+    subgraph "2. Generate Shadows per Cluster"
+        C1 --> S1[Shadow A<br/>Gaussian noise]
+        C2 --> S2[Shadow B<br/>Concentrated noise]
     end
 
-    subgraph "Comparison"
-        F1 --> |importance > max shadow| K[Keep]
-        F2 --> |importance > max shadow| K
-        F3 --> |importance < max shadow| D[Drop]
+    subgraph "3. Compare Each Feature to Its Shadow"
+        F1 --> |importance > shadow A| K[Keep]
+        F2 --> |importance > shadow A| K
+        F3 --> |importance < shadow B| D[Drop]
+        F4 --> |importance > shadow B| K
     end
 ```
 
@@ -106,42 +107,52 @@ A simpler method that fits the model once and drops features below a percentile 
 
 ## How Shadow Features Work
 
-### Step 1: Create Shadow Features
+### Step 1: Compute Entropy and Cluster Features
 
-For each original feature, create shadows by random permutation:
+Each feature's entropy is estimated using quantile-based discretization (256 quantiles). Features are then grouped into `n_clusters` clusters using KMeans on their entropy values, so features with similar information structure end up together.
 
 ```
-Original:  [1, 2, 3, 4, 5]
-Shadow:    [3, 5, 1, 4, 2]  # Same values, random order
+Feature entropies:
+  feature_A: 5.2  (high entropy)  ─┐
+  feature_B: 4.8  (high entropy)  ─┤── Cluster 1
+  feature_C: 1.1  (low entropy)   ─┐
+  feature_D: 0.9  (low entropy)   ─┤── Cluster 2
 ```
 
-Shadow features have:
-- Same distribution as the original
-- Zero true predictive power
-- Importance only from random chance
+### Step 2: Generate Shadow Features per Cluster
 
-Multiple shadows (`n_shadows`) are created per feature for more stable estimates.
+For each cluster, `n_shadows` synthetic noise features are created with a distribution that matches the cluster's mean entropy:
 
-### Step 2: Fit Model and Get Importances
+- **High entropy** (>4): Gaussian noise
+- **Medium entropy** (2-4): Exponential noise
+- **Low entropy** (<2): Concentrated categorical noise
 
-Train the model on original + shadow features together:
+This is different from Boruta-style approaches that shuffle each real feature. Here, a fixed number of calibrated noise columns are created per entropy group, keeping the augmented dataset compact.
+
+### Step 3: Fit Model on Augmented Data
+
+Train the model on original features + shadow features together:
 
 ```python
-X_combined = [original_features | shadow_features]
-model.fit(X_combined, y)
-importances = model.feature_importances_
+X_augmented = [original_features | shadow_features]
+model.fit(X_augmented, y)
 ```
 
-### Step 3: Compare to Shadow Maximum
+### Step 4: Compare Each Feature to Its Matched Shadow
 
-The maximum shadow importance represents the "noise floor":
+Each real feature is compared against the first shadow in its entropy cluster:
 
 ```python
-shadow_max = max(shadow_importances)
-threshold = shadow_max * threshold_mult  # e.g., 1.414
-
-keep = [f for f in features if importance[f] > threshold]
+for feature in real_features:
+    shadow = feature_to_shadow[feature]  # matched by entropy cluster
+    threshold = threshold_mult * shadow_importance[shadow]
+    if feature_importance[feature] >= threshold:
+        keep(feature)
+    else:
+        drop(feature)
 ```
+
+The key insight: random noise with similar entropy provides a calibrated baseline. A feature that can't beat calibrated noise at its own entropy level is likely not contributing real signal.
 
 ---
 
@@ -166,14 +177,17 @@ graph LR
 
 ### Entropy Computation
 
+The implementation uses quantile-based entropy estimation with 256 quantile levels:
+
 ```python
-# Discretize continuous feature
-bins = np.histogram_bin_edges(feature, bins='auto')
-hist, _ = np.histogram(feature, bins=bins)
-probs = hist / hist.sum()
+# Quantile-based entropy estimation
+qs = np.linspace(0, 1, 256)
+q_values = col.quantile(q=qs)
+_, counts = np.unique(q_values, return_counts=True)
+p = counts / counts.sum()
 
 # Shannon entropy
-entropy = -sum(p * log(p) for p in probs if p > 0)
+entropy = -sum(p * log2(p) for p in probs if p > 0)
 ```
 
 ---
