@@ -464,10 +464,15 @@ class TuningOrchestrator:
 
             # Retune if configured
             if self.tuning_config.feature_selection.retune_after_pruning:
-                if search_space and len(search_space) > 0:
+                # Use the original (non-reparameterized) space for narrowing,
+                # since best_params contains original param names.
+                retune_space = (
+                    reparam_space.original_space if reparam_space else search_space
+                )
+                if retune_space and len(retune_space) > 0:
                     # Narrow search space around previous best, biased towards less regularization
                     # (since removing features is itself a form of regularization)
-                    narrowed_space = search_space.narrow_around(
+                    narrowed_space = retune_space.narrow_around(
                         center=best_params,
                         factor=0.5,
                         regularization_bias=0.25,
