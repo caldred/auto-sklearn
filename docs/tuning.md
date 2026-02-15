@@ -133,7 +133,6 @@ from sklearn_meta.core.tuning.strategy import OptimizationStrategy
 | Strategy | Description |
 |----------|-------------|
 | `LAYER_BY_LAYER` | Tune nodes one layer at a time (default). Base models are tuned first, then meta-learners use their OOF predictions. |
-| `FULL_GRAPH` | Tune all nodes jointly in a single optimization pass. |
 | `GREEDY` | Tune each node greedily in topological order. |
 | `NONE` | Skip tuning; use default or provided parameters. |
 

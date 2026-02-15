@@ -19,7 +19,7 @@ class SearchSpace:
     Backend-agnostic hyperparameter search space.
 
     This class provides a unified interface for defining search spaces
-    that can be converted to different optimization backends (Optuna, Hyperopt, etc.).
+    that can be converted to different optimization backends (e.g., Optuna).
 
     Example:
         space = SearchSpace()
@@ -30,8 +30,6 @@ class SearchSpace:
         # Sample using Optuna
         params = space.sample_optuna(trial)
 
-        # Or convert to Hyperopt space
-        hp_space = space.to_hyperopt()
     """
 
     def __init__(self) -> None:
@@ -188,20 +186,6 @@ class SearchSpace:
             else:
                 params[name] = param.sample_optuna(trial)
         return params
-
-    def to_hyperopt(self) -> Dict[str, Any]:
-        """
-        Convert to Hyperopt search space.
-
-        Returns:
-            Dictionary suitable for Hyperopt's fmin.
-        """
-        space = {}
-        for name, param in self._parameters.items():
-            if not isinstance(param, ConditionalParameter):
-                space[name] = param.to_hyperopt()
-        # Note: Conditional parameters need special handling in Hyperopt
-        return space
 
     def get_parameter(self, name: str) -> Optional[SearchParameter]:
         """Get a parameter by name."""

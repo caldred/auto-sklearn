@@ -37,7 +37,7 @@ class TuningConfig:
     Configuration for the tuning process.
 
     Attributes:
-        strategy: How to optimize (layer-by-layer, full-graph, etc.).
+        strategy: How to optimize (layer-by-layer, greedy, or none).
         n_trials: Number of optimization trials per node.
         timeout: Optional timeout in seconds for optimization.
         early_stopping_rounds: Stop if no improvement for this many trials.
@@ -285,11 +285,6 @@ class TuningOrchestrator:
             fitted_nodes = self._fit_greedy(ctx)
         elif self.tuning_config.strategy == OptimizationStrategy.NONE:
             fitted_nodes = self._fit_no_tuning(ctx)
-        elif self.tuning_config.strategy == OptimizationStrategy.FULL_GRAPH:
-            raise NotImplementedError(
-                "FULL_GRAPH strategy is not yet implemented. "
-                "Use LAYER_BY_LAYER (recommended) or GREEDY instead."
-            )
         else:
             raise ValueError(
                 f"Unsupported optimization strategy: {self.tuning_config.strategy}"

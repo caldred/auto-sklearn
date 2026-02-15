@@ -322,14 +322,3 @@ class TestSearchParameterBase:
             assert hasattr(param, "sample_optuna")
             assert callable(param.sample_optuna)
 
-    def test_parameter_has_to_hyperopt(self):
-        """Verify all parameters have to_hyperopt method."""
-        params = [
-            FloatParameter(name="a", low=0.0, high=1.0),
-            IntParameter(name="b", low=1, high=10),
-            CategoricalParameter(name="c", choices=["x", "y"]),
-        ]
-
-        for param in params:
-            assert hasattr(param, "to_hyperopt")
-            assert callable(param.to_hyperopt)

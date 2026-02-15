@@ -17,14 +17,6 @@ class OptimizationStrategy(Enum):
     optimizing a model, its dependencies are already tuned.
     """
 
-    FULL_GRAPH = "full_graph"
-    """
-    Optimize all models jointly in a single search space.
-
-    This can find better global optima but is more expensive and
-    harder to scale. Useful for small graphs with strong interactions.
-    """
-
     GREEDY = "greedy"
     """
     Optimize models one at a time in topological order.

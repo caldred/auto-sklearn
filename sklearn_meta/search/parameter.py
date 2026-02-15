@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple, Union
@@ -23,11 +22,6 @@ class SearchParameter(ABC):
     @abstractmethod
     def sample_optuna(self, trial) -> Any:
         """Sample a value using Optuna trial."""
-        pass
-
-    @abstractmethod
-    def to_hyperopt(self) -> Any:
-        """Convert to Hyperopt search space."""
         pass
 
     @abstractmethod
@@ -68,16 +62,6 @@ class FloatParameter(SearchParameter):
             )
         return trial.suggest_float(self.name, self.low, self.high, log=self.log)
 
-    def to_hyperopt(self) -> Any:
-        """Convert to Hyperopt space."""
-        from hyperopt import hp
-
-        if self.log:
-            return hp.loguniform(self.name, np.log(self.low), np.log(self.high))
-        if self.step is not None:
-            return hp.quniform(self.name, self.low, self.high, self.step)
-        return hp.uniform(self.name, self.low, self.high)
-
     def __repr__(self) -> str:
         log_str = ", log" if self.log else ""
         step_str = f", step={self.step}" if self.step else ""
@@ -115,16 +99,6 @@ class IntParameter(SearchParameter):
             self.name, self.low, self.high, step=self.step, log=self.log
         )
 
-    def to_hyperopt(self) -> Any:
-        """Convert to Hyperopt space."""
-        from hyperopt import hp
-        import numpy as np
-
-        if self.log:
-            # Hyperopt doesn't have direct log int, so use qloguniform
-            return hp.qloguniform(self.name, np.log(self.low), np.log(self.high), self.step)
-        return hp.quniform(self.name, self.low, self.high, self.step)
-
     def __repr__(self) -> str:
         log_str = ", log" if self.log else ""
         step_str = f", step={self.step}" if self.step > 1 else ""
@@ -151,12 +125,6 @@ class CategoricalParameter(SearchParameter):
     def sample_optuna(self, trial) -> Any:
         """Sample using Optuna trial."""
         return trial.suggest_categorical(self.name, self.choices)
-
-    def to_hyperopt(self) -> Any:
-        """Convert to Hyperopt space."""
-        from hyperopt import hp
-
-        return hp.choice(self.name, self.choices)
 
     def __repr__(self) -> str:
         choices_str = ", ".join(str(c) for c in self.choices[:3])
@@ -190,15 +158,6 @@ class ConditionalParameter(SearchParameter):
         This method assumes the condition is met.
         """
         return self.parameter.sample_optuna(trial)
-
-    def to_hyperopt(self) -> Any:
-        """
-        Convert to Hyperopt space.
-
-        Note: Hyperopt handles conditionals differently.
-        This returns the inner parameter's space.
-        """
-        return self.parameter.to_hyperopt()
 
     def __repr__(self) -> str:
         return f"Conditional({self.name} if {self.parent_name}={self.parent_value}: {self.parameter})"

@@ -70,7 +70,3 @@ class Executor(ABC):
     def n_workers(self) -> int:
         """Number of workers available."""
         return 1
-
-    def is_distributed(self) -> bool:
-        """Whether this executor runs on multiple machines."""
-        return False

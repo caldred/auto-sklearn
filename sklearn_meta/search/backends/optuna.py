@@ -218,14 +218,6 @@ class OptunaBackend(SearchBackend):
         self._current_trial.report(value, step)
         return self._current_trial.should_prune()
 
-    def supports_pruning(self) -> bool:
-        """Whether this backend supports trial pruning."""
-        return self.pruner is not None
-
-    def supports_parallel(self) -> bool:
-        """Whether this backend supports parallel optimization."""
-        return True
-
     def get_state(self) -> Dict[str, Any]:
         """Get the current state for serialization."""
         if self._study is None:

@@ -242,9 +242,6 @@ ctx.with_soft_targets(soft_targets) -> DataContext
 # Return new DataContext with updated metadata (key-value pair)
 ctx.with_metadata(key: str, value: Any) -> DataContext
 
-# Return new DataContext with replacement feature matrix
-ctx.with_X(X) -> DataContext
-
 # Return new DataContext with replacement target
 ctx.with_y(y) -> DataContext
 
@@ -498,7 +495,6 @@ TuningConfig(
 | Value | Description |
 |-------|-------------|
 | `LAYER_BY_LAYER` | Tune each graph layer sequentially |
-| `FULL_GRAPH` | Tune all nodes jointly |
 | `GREEDY` | Greedily tune one node at a time |
 | `NONE` | Skip tuning, use fixed params only |
 
@@ -978,16 +974,12 @@ FitCache(
 ### ArtifactStore
 
 ```python
-from sklearn_meta.persistence.store import ArtifactStore, ArtifactMetadata
+from sklearn_meta.persistence.store import ArtifactStore
 ```
 
-File-based storage for models, parameters, and fitted graphs with metadata tracking.
+Abstract interface for storing models, parameters, and CV ensembles. Subclasses implement a concrete backend.
 
-```python
-ArtifactStore(base_path: str = ".sklearn_meta_artifacts")
-```
-
-**Methods:**
+**Abstract Methods:**
 ```python
 # Save a fitted model
 save_model(
@@ -1015,37 +1007,14 @@ save_fitted_graph(
     tags: dict[str, str] | None = None,
 ) -> str  # Returns graph artifact ID
 
-# Save hyperparameters
-save_params(
-    params: dict,
-    node_name: str,
-    description: str = "",
-) -> str
-
-# Load saved parameters
-load_params(artifact_id: str) -> dict
-
 # List stored artifacts
 list_artifacts(
     artifact_type: str | None = None,  # "model", "params", "graph"
     node_name: str | None = None,
-) -> list[ArtifactMetadata]
+) -> list[dict]
 
 # Delete an artifact
 delete_artifact(artifact_id: str) -> bool
-```
-
-**ArtifactMetadata:**
-```python
-@dataclass
-class ArtifactMetadata:
-    artifact_id: str
-    artifact_type: str
-    created_at: str
-    node_name: str | None
-    params: dict
-    metrics: dict[str, float]
-    tags: dict[str, str]
 ```
 
 ---
@@ -1115,7 +1084,6 @@ class Executor(ABC):
     shutdown(wait: bool = True) -> None
 
     n_workers: int
-    is_distributed() -> bool
 ```
 
 **LocalExecutor:**
@@ -1188,7 +1156,7 @@ from sklearn_meta.plugins.xgboost.importance import XGBImportancePlugin
 
 # Persistence
 from sklearn_meta import FitCache, AuditLogger
-from sklearn_meta.persistence.store import ArtifactStore, ArtifactMetadata
+from sklearn_meta.persistence.store import ArtifactStore
 
 # Execution
 from sklearn_meta.execution.local import LocalExecutor, SequentialExecutor

@@ -72,10 +72,6 @@ class DataContext:
                 f"Got df: {len(self.df)}, soft_targets: {len(self.soft_targets)}"
             )
 
-    # -------------------------------------------------------------------------
-    # Factory classmethods
-    # -------------------------------------------------------------------------
-
     @classmethod
     def from_Xy(
         cls,
@@ -86,11 +82,7 @@ class DataContext:
         indices: Optional[np.ndarray] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> DataContext:
-        """
-        Construct a DataContext from separate X, y, groups.
-
-        Backward-compatible factory that mirrors the old constructor signature.
-        """
+        """Construct a DataContext from separate X, y, groups."""
         df = X.copy()
         feature_cols = tuple(X.columns)
 
@@ -126,25 +118,21 @@ class DataContext:
             metadata=metadata or {},
         )
 
-    # -------------------------------------------------------------------------
-    # Backward-compatible properties
-    # -------------------------------------------------------------------------
-
     @property
     def X(self) -> pd.DataFrame:
-        """Feature DataFrame (backward-compatible)."""
+        """Feature DataFrame."""
         return self.df[list(self.feature_cols)]
 
     @property
     def y(self) -> Optional[pd.Series]:
-        """Target Series (backward-compatible)."""
+        """Target Series."""
         if self.target_col is None:
             return None
         return self.df[self.target_col]
 
     @property
     def groups(self) -> Optional[pd.Series]:
-        """Group labels Series (backward-compatible)."""
+        """Group labels Series."""
         if self.group_col is None:
             return None
         return self.df[self.group_col]
@@ -163,10 +151,6 @@ class DataContext:
     def feature_names(self) -> list[str]:
         """List of feature names."""
         return list(self.feature_cols)
-
-    # -------------------------------------------------------------------------
-    # with_* methods (return new DataContext)
-    # -------------------------------------------------------------------------
 
     def with_feature_cols(self, feature_cols: list[str]) -> DataContext:
         """Create a new context with updated feature columns."""
@@ -278,35 +262,8 @@ class DataContext:
             metadata=new_metadata,
         )
 
-    # -------------------------------------------------------------------------
-    # Backward-compatible with_X / with_y
-    # -------------------------------------------------------------------------
-
-    def with_X(self, X: pd.DataFrame) -> DataContext:
-        """Create a new context with updated features (backward-compatible)."""
-        new_df = self.df.copy()
-        # Remove old feature columns not in new X
-        old_only = set(self.feature_cols) - set(X.columns)
-        for col in old_only:
-            if col in new_df.columns:
-                new_df = new_df.drop(columns=[col])
-        # Update / add new feature columns
-        for col in X.columns:
-            new_df[col] = X[col].values
-
-        return DataContext(
-            df=new_df,
-            feature_cols=tuple(X.columns),
-            target_col=self.target_col,
-            group_col=self.group_col,
-            base_margin=self.base_margin,
-            soft_targets=self.soft_targets,
-            indices=self.indices,
-            metadata=self.metadata,
-        )
-
     def with_y(self, y: pd.Series) -> DataContext:
-        """Create a new context with updated target (backward-compatible)."""
+        """Create a new context with updated target."""
         target_name = y.name if y.name else "__target__"
         target_col = target_name if target_name not in self.feature_cols else "__target__"
         new_df = self.df.copy()
@@ -328,10 +285,6 @@ class DataContext:
             indices=self.indices,
             metadata=self.metadata,
         )
-
-    # -------------------------------------------------------------------------
-    # Augmentation / stacking
-    # -------------------------------------------------------------------------
 
     def augment_with_predictions(
         self, predictions: Dict[str, np.ndarray], prefix: str = "pred_"
@@ -373,10 +326,6 @@ class DataContext:
             indices=self.indices,
             metadata=self.metadata,
         )
-
-    # -------------------------------------------------------------------------
-    # Copy
-    # -------------------------------------------------------------------------
 
     def copy(self) -> DataContext:
         """Create a shallow copy of the context."""

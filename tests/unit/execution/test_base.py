@@ -171,12 +171,6 @@ class TestExecutorDefaultMethods:
         # Access via class attribute
         assert Executor.n_workers.fget(ConcreteExecutor(n_workers=1)) == 1
 
-    def test_is_distributed_default_false(self):
-        """Verify is_distributed returns False by default."""
-        executor = ConcreteExecutor()
-
-        assert executor.is_distributed() is False
-
 
 class TestExecutorContextManager:
     """Tests for Executor context manager protocol."""

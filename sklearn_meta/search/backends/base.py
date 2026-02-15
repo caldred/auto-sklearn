@@ -80,7 +80,7 @@ class SearchBackend(ABC):
     Abstract base class for hyperparameter optimization backends.
 
     Subclasses implement the actual optimization logic using different
-    libraries (Optuna, Hyperopt, etc.).
+    libraries (e.g., Optuna).
     """
 
     def __init__(
@@ -153,14 +153,6 @@ class SearchBackend(ABC):
             value: Objective value.
         """
         pass
-
-    def supports_pruning(self) -> bool:
-        """Whether this backend supports trial pruning."""
-        return False
-
-    def supports_parallel(self) -> bool:
-        """Whether this backend supports parallel optimization."""
-        return False
 
     @abstractmethod
     def get_state(self) -> Dict[str, Any]:

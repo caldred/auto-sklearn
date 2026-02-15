@@ -374,34 +374,6 @@ class TestDataContextCopy:
         assert copy_ctx.metadata == ctx.metadata
 
 
-class TestDataContextWithX:
-    """Tests for DataContext.with_X()."""
-
-    def test_with_x_replaces_features(self, classification_data):
-        """Verify with_X replaces the feature DataFrame."""
-        X, y = classification_data
-        ctx = DataContext.from_Xy(X, y)
-
-        new_X = pd.DataFrame(
-            np.random.randn(len(X), 5),
-            columns=[f"new_{i}" for i in range(5)],
-        )
-        new_ctx = ctx.with_X(new_X)
-
-        assert new_ctx.n_features == 5
-        pd.testing.assert_frame_equal(new_ctx.X, new_X)
-
-    def test_with_x_preserves_y(self, classification_data):
-        """Verify with_X preserves the target."""
-        X, y = classification_data
-        ctx = DataContext.from_Xy(X, y)
-
-        new_X = pd.DataFrame(np.random.randn(len(X), 5))
-        new_ctx = ctx.with_X(new_X)
-
-        pd.testing.assert_series_equal(new_ctx.y, y, check_names=False)
-
-
 class TestDataContextWithY:
     """Tests for DataContext.with_y()."""
 
@@ -547,16 +519,6 @@ class TestDataContextSoftTargets:
 
         np.testing.assert_array_equal(new_ctx.soft_targets, st)
 
-    def test_soft_targets_preserved_in_with_X(self, classification_data):
-        """Verify soft_targets propagated through with_X."""
-        X, y = classification_data
-        st = np.random.rand(len(X))
-        ctx = DataContext.from_Xy(X, y).with_soft_targets(st)
-
-        new_X = pd.DataFrame(np.random.randn(len(X), 5))
-        new_ctx = ctx.with_X(new_X)
-
-        np.testing.assert_array_equal(new_ctx.soft_targets, st)
 
     def test_soft_targets_preserved_in_with_y(self, classification_data):
         """Verify soft_targets propagated through with_y."""
