@@ -3,10 +3,56 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 import optuna
 from optuna.samplers import TPESampler
+
+
+class _FloatPrecisionFormatter(logging.Formatter):
+    """Formatter that truncates floats in Optuna log messages.
+
+    Uses different precision for loss values vs hyperparameters:
+    - Loss/score values (before "and parameters:") use `score_precision`
+    - Hyperparameter values (after "and parameters:") use `param_precision`
+    """
+
+    _FLOAT_RE = re.compile(r"\d+\.\d{5,}")
+
+    def __init__(self, score_precision: int = 8, param_precision: int = 4, **kwargs):
+        super().__init__(**kwargs)
+        self.score_precision = score_precision
+        self.param_precision = param_precision
+
+    def _truncate(self, text: str, precision: int) -> str:
+        return self._FLOAT_RE.sub(
+            lambda m: f"{float(m.group()):.{precision}f}", text
+        )
+
+    def format(self, record: logging.LogRecord) -> str:
+        formatted = super().format(record)
+        # Split on "and parameters:" to apply different precision,
+        # then split on "Best is" to restore score precision for the tail.
+        sep = "and parameters:"
+        if sep in formatted:
+            score_part, rest = formatted.split(sep, 1)
+            best_sep = ". Best is"
+            if best_sep in rest:
+                param_part, best_part = rest.split(best_sep, 1)
+                return (
+                    self._truncate(score_part, self.score_precision)
+                    + sep
+                    + self._truncate(param_part, self.param_precision)
+                    + best_sep
+                    + self._truncate(best_part, self.score_precision)
+                )
+            return (
+                self._truncate(score_part, self.score_precision)
+                + sep
+                + self._truncate(rest, self.param_precision)
+            )
+        return self._truncate(formatted, self.score_precision)
 
 from sklearn_meta.search.backends.base import (
     OptimizationResult,
@@ -67,6 +113,12 @@ class OptunaBackend(SearchBackend):
                 else optuna.logging.WARNING
             )
         optuna.logging.set_verbosity(verbosity)
+
+        # Apply float precision formatter to Optuna's logger handlers.
+        _optuna_logger = optuna.logging.get_logger("optuna")
+        _formatter = _FloatPrecisionFormatter(score_precision=8, param_precision=4)
+        for handler in _optuna_logger.handlers:
+            handler.setFormatter(_formatter)
 
     def optimize(
         self,
