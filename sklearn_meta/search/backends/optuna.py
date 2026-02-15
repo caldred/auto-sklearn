@@ -20,7 +20,7 @@ class _FloatPrecisionFormatter(logging.Formatter):
 
     _FLOAT_RE = re.compile(r"\d+\.\d{5,}")
 
-    def __init__(self, score_precision: int = 8, param_precision: int = 4, **kwargs):
+    def __init__(self, score_precision: int = 6, param_precision: int = 3, **kwargs):
         super().__init__(**kwargs)
         self.score_precision = score_precision
         self.param_precision = param_precision
@@ -116,7 +116,7 @@ class OptunaBackend(SearchBackend):
 
         # Apply float precision formatter to Optuna's logger handlers.
         _optuna_logger = optuna.logging.get_logger("optuna")
-        _formatter = _FloatPrecisionFormatter(score_precision=8, param_precision=4)
+        _formatter = _FloatPrecisionFormatter(score_precision=6, param_precision=3)
         for handler in _optuna_logger.handlers:
             handler.setFormatter(_formatter)
 
