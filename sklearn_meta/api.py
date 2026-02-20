@@ -502,17 +502,22 @@ class GraphBuilder:
         retune_after_pruning: bool = True,
         min_features: int = 1,
         max_features: Optional[int] = None,
+        feature_groups: Optional[Dict[str, List[str]]] = None,
     ) -> GraphBuilder:
         """
         Configure feature selection.
 
         Args:
             method: Selection method ("shadow", "permutation", "threshold").
-            n_shadows: Number of shadow features (for shadow method).
+            n_shadows: Number of shadow rounds (for shadow method). Each round
+                shadows roughly `1 / n_shadows` of features.
             threshold_mult: Multiplier for shadow threshold.
             retune_after_pruning: Whether to retune after feature selection.
             min_features: Minimum features to keep.
             max_features: Maximum features to keep.
+            feature_groups: Optional mapping of group name to feature list.
+                Features in a group are selected/dropped together using
+                their averaged importance.
 
         Returns:
             Self for chaining.
@@ -525,6 +530,7 @@ class GraphBuilder:
             retune_after_pruning=retune_after_pruning,
             min_features=min_features,
             max_features=max_features,
+            feature_groups=feature_groups,
         )
 
         return self

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import sys
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 import optuna
@@ -92,15 +94,26 @@ class OptunaBackend(SearchBackend):
             pruner: Optional Optuna pruner for early stopping.
             n_jobs: Number of parallel jobs for optimization trials.
             show_progress_bar: Whether to display Optuna progress bars.
+                Progress bars are only enabled on interactive streams by
+                default; set SKLEARN_META_FORCE_PROGRESS_BAR=1 to override.
             verbosity: Optuna logging verbosity level (e.g., WARNING, INFO).
-                Defaults to INFO when show_progress_bar=True, else WARNING.
+                Defaults to INFO when progress bars are enabled, else WARNING.
         """
         super().__init__(direction=direction, random_state=random_state)
 
         self.sampler = sampler or TPESampler(seed=random_state)
         self.pruner = pruner
         self._n_jobs = n_jobs
-        self._show_progress_bar = show_progress_bar
+        # Progress bars rely on carriage returns. Enable by default for interactive
+        # streams, with an env override for shells where TTY detection is imperfect.
+        force_progress = os.getenv("SKLEARN_META_FORCE_PROGRESS_BAR", "").lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        interactive_stream = sys.stderr.isatty() or sys.stdout.isatty()
+        self._show_progress_bar = bool(show_progress_bar and (force_progress or interactive_stream))
 
         self._study: Optional[optuna.Study] = None
         self._current_trial: Optional[optuna.Trial] = None
@@ -109,7 +122,7 @@ class OptunaBackend(SearchBackend):
         if verbosity is None:
             verbosity = (
                 optuna.logging.INFO
-                if show_progress_bar
+                if self._show_progress_bar
                 else optuna.logging.WARNING
             )
         optuna.logging.set_verbosity(verbosity)

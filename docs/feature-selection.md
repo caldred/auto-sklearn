@@ -30,6 +30,10 @@ result = (
         n_shadows=5,
         threshold_mult=1.414,
         retune_after_pruning=True,
+        feature_groups={
+            "gender_ohe": ["gender_f", "gender_m"],
+            "state_ohe": ["state_ca", "state_ny", "state_tx"],
+        },
     )
     .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
     .with_cv(n_splits=5)
@@ -47,35 +51,39 @@ print(f"Selected features: {fitted_node.selected_features}")
 
 ### Shadow Features (default)
 
-Shadow features are synthetic noise columns whose information structure (entropy) is matched to the real features. Features are grouped by entropy into clusters, and a fixed number of shadow features are generated per cluster -- not one per real feature. If a real feature can't beat its entropy-matched shadow, it's likely not generalizing.
+Shadow selection uses paired synthetic noise baselines. Across `n_shadows`
+rounds, each real feature (or explicit feature group) is compared against a
+paired shadow baseline. If the real signal cannot beat its paired shadow, it is
+unlikely to generalize.
 
 ```python
 .with_feature_selection(
     method="shadow",
-    n_shadows=5,            # Number of shadow features per entropy cluster
+    n_shadows=5,            # Number of shadow rounds
     threshold_mult=1.414,   # Feature must beat threshold_mult * its shadow's importance
 )
 ```
 
 ```mermaid
 graph TB
-    subgraph "1. Cluster Features by Entropy"
-        F1[Feature 1<br/>High entropy] --> C1[Cluster A]
-        F2[Feature 2<br/>High entropy] --> C1
-        F3[Feature 3<br/>Low entropy] --> C2[Cluster B]
-        F4[Feature 4<br/>Low entropy] --> C2
+    subgraph "1. Build Shadow Rounds"
+        F1[Feature / Group 1] --> R1[Round 1]
+        F2[Feature / Group 2] --> R2[Round 2]
+        F3[Feature / Group 3] --> R3[Round 3]
     end
 
-    subgraph "2. Generate Shadows per Cluster"
-        C1 --> S1[Shadow A<br/>Gaussian noise]
-        C2 --> S2[Shadow B<br/>Concentrated noise]
+    subgraph "2. Fit With Paired Shadows"
+        R1 --> S1[Paired shadow baseline]
+        R2 --> S2[Paired shadow baseline]
+        R3 --> S3[Paired shadow baseline]
     end
 
-    subgraph "3. Compare Each Feature to Its Shadow"
-        F1 --> |importance > shadow A| K[Keep]
-        F2 --> |importance > shadow A| K
-        F3 --> |importance < shadow B| D[Drop]
-        F4 --> |importance > shadow B| K
+    subgraph "3. Compare and Prune"
+        S1 --> C[real >= mult * shadow]
+        S2 --> C
+        S3 --> C
+        C --> K[Keep]
+        C --> D[Drop]
     end
 ```
 
@@ -105,90 +113,72 @@ A simpler method that fits the model once and drops features below a percentile 
 
 ---
 
-## How Shadow Features Work
+## Feature Groups
 
-### Step 1: Compute Entropy and Cluster Features
-
-Each feature's entropy is estimated using quantile-based discretization (256 quantiles). Features are then grouped into `n_clusters` clusters using KMeans on their entropy values, so features with similar information structure end up together.
-
-```
-Feature entropies:
-  feature_A: 5.2  (high entropy)  ─┐
-  feature_B: 4.8  (high entropy)  ─┤── Cluster 1
-  feature_C: 1.1  (low entropy)   ─┐
-  feature_D: 0.9  (low entropy)   ─┤── Cluster 2
-```
-
-### Step 2: Generate Shadow Features per Cluster
-
-For each cluster, `n_shadows` synthetic noise features are created with a distribution that matches the cluster's mean entropy:
-
-- **High entropy** (>4): Gaussian noise
-- **Medium entropy** (2-4): Exponential noise
-- **Low entropy** (<2): Concentrated categorical noise
-
-This is different from Boruta-style approaches that shuffle each real feature. Here, a fixed number of calibrated noise columns are created per entropy group, keeping the augmented dataset compact.
-
-### Step 3: Fit Model on Augmented Data
-
-Train the model on original features + shadow features together:
+Use `feature_groups` when multiple columns should be treated as one logical feature (for example, one-hot encoded categories, target-encoded variants, or related interaction bundles).
 
 ```python
-X_augmented = [original_features | shadow_features]
-model.fit(X_augmented, y)
+.with_feature_selection(
+    method="threshold",
+    threshold_percentile=20,
+    feature_groups={
+        "city_ohe": ["city_sf", "city_ny", "city_la"],
+        "device_ohe": ["device_mobile", "device_desktop"],
+    },
+)
 ```
 
-### Step 4: Compare Each Feature to Its Matched Shadow
+With groups enabled:
 
-Each real feature is compared against the first shadow in its entropy cluster:
-
-```python
-for feature in real_features:
-    shadow = feature_to_shadow[feature]  # matched by entropy cluster
-    threshold = threshold_mult * shadow_importance[shadow]
-    if feature_importance[feature] >= threshold:
-        keep(feature)
-    else:
-        drop(feature)
-```
-
-The key insight: random noise with similar entropy provides a calibrated baseline. A feature that can't beat calibrated noise at its own entropy level is likely not contributing real signal.
+- Importances are averaged within each group.
+- Selection thresholds are applied at group level.
+- Groups are added or removed atomically (never partially selected).
+- `min_features` and `max_features` constraints still apply, but groups are never split.
 
 ---
 
-## Entropy Matching
+## How Shadow Features Work
 
-### Why Entropy Matters
+### Step 1: Build Round Plan
 
-Shadow features should have the **same entropy** (information content) as original features. Otherwise, comparison is unfair.
+`n_shadows` controls the number of rounds. Each round shadows approximately
+`1 / n_shadows` of active candidates so every candidate gets repeated paired
+comparisons without exploding feature count.
 
-```mermaid
-graph LR
-    subgraph "Low Entropy"
-        A[0, 0, 0, 1, 0, 0]
-    end
+### Step 2: Generate Paired Shadows
 
-    subgraph "High Entropy"
-        B[0.2, 0.8, 0.1, 0.9, 0.5, 0.3]
-    end
+For a selected candidate in a round, sklearn-meta samples latent correlated
+noise and then rank-maps it to the candidate's empirical distribution. This
+keeps the shadow baseline realistic for that candidate.
 
-    A --> |Different noise levels| C[Unfair comparison]
-```
+### Step 3: Fit on Augmented Data Per Round
 
-### Entropy Computation
-
-The implementation uses quantile-based entropy estimation with 256 quantile levels:
+Each round fits the model on:
 
 ```python
-# Quantile-based entropy estimation
-qs = np.linspace(0, 1, 256)
-q_values = col.quantile(q=qs)
-_, counts = np.unique(q_values, return_counts=True)
-p = counts / counts.sum()
-
-# Shannon entropy
-entropy = -sum(p * log2(p) for p in probs if p > 0)
+X_augmented = [original_features | round_shadow_features]
+model.fit(X_augmented, y)
 ```
+
+Real and paired-shadow importances are collected round by round and averaged.
+
+### Step 4: Compare Against Paired Shadow Threshold
+
+```python
+threshold = threshold_mult * paired_shadow_importance
+keep_if_real_ge_threshold = real_importance >= threshold
+```
+
+Candidates that fail this paired baseline are dropped.
+
+### Grouped Cutover Behavior
+
+When explicit `feature_groups` are provided:
+
+- A group gets one shadow representative (not one per member feature).
+- Group real importance is computed as the mean of member importances.
+- Group thresholds use that group's single paired shadow importance.
+- The whole group is kept or dropped atomically.
 
 ---
 
@@ -229,12 +219,15 @@ from sklearn_meta.selection.selector import FeatureSelectionConfig
 config = FeatureSelectionConfig(
     enabled=True,
     method="shadow",           # "shadow", "permutation", or "threshold"
-    n_shadows=5,               # Number of shadow copies (shadow method)
-    threshold_mult=1.414,      # Multiplier for shadow max threshold
+    n_shadows=5,               # Number of shadow rounds
+    threshold_mult=1.414,      # Multiplier for paired shadow threshold
     threshold_percentile=10.0, # Percentile cutoff (permutation/threshold methods)
     retune_after_pruning=True, # Re-tune after feature pruning
     min_features=1,            # Minimum features to keep
     max_features=None,         # Maximum features to keep (None = no limit)
+    feature_groups={           # Optional grouped feature selection
+        "city_ohe": ["city_sf", "city_ny", "city_la"],
+    },
     random_state=42,
 )
 ```
@@ -243,12 +236,13 @@ config = FeatureSelectionConfig(
 |-----------|-------------|---------|
 | `enabled` | Whether feature selection is active | `True` |
 | `method` | Selection method: `"shadow"`, `"permutation"`, `"threshold"` | `"shadow"` |
-| `n_shadows` | Number of shadow features per real feature | `5` |
-| `threshold_mult` | Multiplier for shadow max threshold | `1.414` |
+| `n_shadows` | Number of shadow rounds | `5` |
+| `threshold_mult` | Multiplier for paired shadow threshold | `1.414` |
 | `threshold_percentile` | Percentile cutoff for permutation/threshold methods | `10.0` |
 | `retune_after_pruning` | Whether to retune hyperparameters after selection | `True` |
 | `min_features` | Minimum number of features to keep | `1` |
 | `max_features` | Maximum number of features to keep (`None` = unlimited) | `None` |
+| `feature_groups` | Optional `{group_name: [feature, ...]}` map for atomic grouped selection | `None` |
 | `random_state` | Random seed for reproducibility | `42` |
 
 ### Tuning the Threshold Multiplier
@@ -299,6 +293,7 @@ config = FeatureSelectionConfig(
     method="shadow",
     n_shadows=5,
     threshold_mult=1.414,
+    feature_groups={"city_ohe": ["city_sf", "city_ny", "city_la"]},
 )
 
 selector = FeatureSelector(config)
@@ -429,13 +424,27 @@ Prevent over-pruning or under-pruning with min/max bounds:
 )
 ```
 
-### 4. Match Method to Use Case
+### 4. Group Related Columns
+
+For encoded categoricals or engineered bundles, configure `feature_groups` so related columns move together:
+
+```python
+.with_feature_selection(
+    method="shadow",
+    feature_groups={
+        "state_ohe": ["state_ca", "state_ny", "state_tx"],
+        "device_ohe": ["device_mobile", "device_desktop"],
+    },
+)
+```
+
+### 5. Match Method to Use Case
 
 - **Shadow** (default): Best for tree-based models with native feature importances. Most statistically rigorous.
 - **Permutation**: Model-agnostic. Works with any estimator. Better for models without `feature_importances_`.
 - **Threshold**: Fastest. Good for quick exploration when you trust the model's native importances.
 
-### 5. Validate Selection
+### 6. Validate Selection
 
 Always compare model performance with and without selection to confirm the pruning helps:
 

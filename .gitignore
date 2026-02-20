@@ -48,6 +48,7 @@ Thumbs.db
 
 # Artifacts
 .auto_sklearn_artifacts/
+uv.lock
 
 # Claude
 .claude/

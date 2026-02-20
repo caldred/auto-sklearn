@@ -56,6 +56,7 @@ with_feature_selection(
     retune_after_pruning: bool = True,
     min_features: int = 1,
     max_features: int | None = None,
+    feature_groups: dict[str, list[str]] | None = None,
 ) -> GraphBuilder
 
 # Configure reparameterization
@@ -821,6 +822,7 @@ class FeatureSelectionConfig:
     retune_after_pruning: bool = True
     min_features: int = 1
     max_features: int | None = None
+    feature_groups: dict[str, list[str]] | None = None
     random_state: int = 42
 ```
 
@@ -836,16 +838,26 @@ from sklearn_meta.selection.shadow import ShadowFeatureSelector
 ShadowFeatureSelector(
     importance_extractor: ImportanceExtractor | None = None,
     n_shadows: int = 5,
-    n_clusters: int = 5,
     threshold_mult: float = 1.414,
     random_state: int = 42,
+    covariance_sample_size: int = 50000,
 )
 ```
 
 **Methods:**
 ```python
-# Fit model with shadow features and return detailed selection result
+# Fit model with paired shadows and return detailed selection result
 fit_select(model, X, y, feature_cols=None, importance_type="gain") -> ShadowResult
+
+# Fit model with one shadow representative per group
+fit_select_grouped(
+    model,
+    X,
+    y,
+    group_to_features,
+    feature_cols=None,
+    importance_type="gain",
+) -> ShadowResult
 
 # Convenience: return just the list of features to keep
 select_features(model, X, y, feature_cols=None) -> list[str]

@@ -433,18 +433,27 @@ Automatically drop uninformative features before final training. Three methods a
 
 ### Shadow Feature Selection (Recommended)
 
-Clusters features by entropy, then generates synthetic noise features matched to each cluster's entropy distribution. Each real feature is compared against its entropy-matched shadow -- features that can't beat calibrated noise at their own information level are dropped.
+Uses round-based paired shadows. Across `n_shadows` rounds, each real feature
+(or explicit feature group) is paired with synthetic noise and compared against
+its paired shadow importance. Features that cannot beat their calibrated
+shadow baseline are dropped.
 
 ```python
 .with_feature_selection(
     method="shadow",
-    n_shadows=5,                   # Number of shadow features per entropy cluster
+    n_shadows=5,                   # Number of shadow rounds
     threshold_mult=1.414,          # Multiplier on shadow importance threshold
     retune_after_pruning=True,     # Re-tune hyperparameters with selected features
     min_features=1,                # Never drop below this many features
     max_features=None,             # Optional upper bound
+    feature_groups={               # Optional: select/drop grouped features together
+        "gender_ohe": ["gender_f", "gender_m"],
+        "state_ohe": ["state_ca", "state_ny", "state_tx"],
+    },
 )
 ```
+
+Grouped features are scored by averaging member importances. Any group that passes or fails does so as a unit, so all group members are kept or dropped together.
 
 ### Permutation Importance
 
