@@ -16,6 +16,12 @@ from sklearn_meta.core.tuning.joint_quantile_orchestrator import (
 )
 from sklearn_meta.core.tuning.orchestrator import TuningConfig
 from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.search.space import SearchSpace
+from sklearn_meta.selection.selector import (
+    FeatureSelectionConfig,
+    FeatureSelectionResult,
+    FeatureSelector,
+)
 
 
 # =============================================================================
@@ -138,6 +144,20 @@ def joint_quantile_graph():
 
 
 @pytest.fixture
+def single_property_graph_with_search_space():
+    """Create a single-property graph with a tunable search space."""
+    search_space = SearchSpace().add_from_shorthand(max_depth=(3, 6))
+    config = JointQuantileConfig(
+        property_names=["y1"],
+        estimator_class=MockQuantileRegressor,
+        quantile_levels=[0.1, 0.5, 0.9],
+        search_space=search_space,
+        n_inference_samples=100,
+    )
+    return JointQuantileGraph(config)
+
+
+@pytest.fixture
 def data_manager():
     """Create a DataManager for testing."""
     cv_config = CVConfig(
@@ -223,6 +243,72 @@ class TestFittedQuantileNodeProperties:
         )
 
         assert fitted.n_folds == 3
+
+    def test_predict_quantiles_uses_selected_features(self, joint_quantile_graph):
+        """Inference should use the selected feature subset when present."""
+
+        class SpyModel:
+            def __init__(self):
+                self.seen_columns = None
+
+            def predict(self, X):
+                self.seen_columns = list(X.columns)
+                return np.zeros(len(X))
+
+        node = joint_quantile_graph.get_quantile_node("y1")
+        model = SpyModel()
+        fitted = FittedQuantileNode(
+            node=node,
+            quantile_models={0.5: [model]},
+            oof_quantile_predictions=np.zeros((5, 1)),
+            best_params={},
+            selected_features=["feature_1", "feature_3"],
+        )
+
+        X = pd.DataFrame(
+            np.random.randn(5, 5),
+            columns=[f"feature_{i}" for i in range(5)],
+        )
+        _ = fitted.predict_quantiles(X)
+
+        assert model.seen_columns == ["feature_1", "feature_3"]
+
+    def test_predict_quantiles_missing_selected_feature_raises(self, joint_quantile_graph):
+        """Inference should fail fast when a required selected feature is missing."""
+        node = joint_quantile_graph.get_quantile_node("y1")
+        fitted = FittedQuantileNode(
+            node=node,
+            quantile_models={0.5: [MockQuantileRegressor()]},
+            oof_quantile_predictions=np.zeros((5, 1)),
+            best_params={},
+            selected_features=["missing_feature"],
+        )
+
+        X = pd.DataFrame(np.random.randn(5, 2), columns=["feature_0", "feature_1"])
+        with pytest.raises(ValueError, match="Missing required selected feature columns"):
+            fitted.predict_quantiles(X)
+
+    def test_predict_quantiles_backward_compat_without_selected_features(
+        self, joint_quantile_graph
+    ):
+        """Older serialized objects without selected_features should still infer."""
+        class ConstantModel:
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        node = joint_quantile_graph.get_quantile_node("y1")
+        fitted = FittedQuantileNode(
+            node=node,
+            quantile_models={0.5: [ConstantModel()]},
+            oof_quantile_predictions=np.zeros((5, 1)),
+            best_params={},
+        )
+        # Simulate legacy payloads saved before selected_features existed.
+        delattr(fitted, "selected_features")
+
+        X = pd.DataFrame(np.random.randn(5, 2), columns=["feature_0", "feature_1"])
+        preds = fitted.predict_quantiles(X)
+        assert preds.shape == (5, 1)
 
 
 # =============================================================================
@@ -348,6 +434,120 @@ class TestJointQuantileOrchestratorFit:
 
         with pytest.raises(ValueError, match="Missing target"):
             orchestrator.fit(ctx, incomplete_targets)
+
+
+class TestJointQuantileOrchestratorFeatureSelection:
+    """Tests for joint-quantile feature selection integration."""
+
+    def test_feature_selection_runs_and_retunes_with_narrowed_space(
+        self,
+        joint_regression_data,
+        single_property_graph_with_search_space,
+        data_manager,
+        mock_backend,
+        monkeypatch,
+    ):
+        """Selection should run and trigger a narrowed-space median re-tune."""
+        X, targets = joint_regression_data
+        ctx = DataContext.from_Xy(X, targets["y1"])
+        fs_config = FeatureSelectionConfig(
+            enabled=True,
+            method="shadow",
+            retune_after_pruning=True,
+            min_features=1,
+        )
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            n_trials=1,
+            metric="neg_mean_squared_error",
+            greater_is_better=False,
+            verbose=0,
+            cv_config=CVConfig(
+                n_splits=3,
+                strategy=CVStrategy.RANDOM,
+                shuffle=True,
+                random_state=42,
+            ),
+            feature_selection=fs_config,
+        )
+
+        optimize_calls = []
+
+        def fake_optimize(self, node, ctx, tau, search_space_override=None):
+            optimize_calls.append(search_space_override)
+            return {"max_depth": 4}, None
+
+        def fake_select(self, node, ctx, params):
+            selected = [ctx.feature_cols[0], ctx.feature_cols[1]]
+            return FeatureSelectionResult(
+                selected_features=selected,
+                dropped_features=[f for f in ctx.feature_cols if f not in selected],
+                importances={f: 1.0 for f in ctx.feature_cols},
+                method_used="shadow",
+            )
+
+        monkeypatch.setattr(JointQuantileOrchestrator, "_optimize_at_quantile", fake_optimize)
+        monkeypatch.setattr(FeatureSelector, "select_for_node", fake_select)
+
+        orchestrator = JointQuantileOrchestrator(
+            graph=single_property_graph_with_search_space,
+            data_manager=data_manager,
+            search_backend=mock_backend,
+            tuning_config=tuning_config,
+        )
+        result = orchestrator.fit(ctx, {"y1": targets["y1"]})
+
+        fitted_node = result.get_node("y1")
+        assert fitted_node.selected_features == [ctx.feature_cols[0], ctx.feature_cols[1]]
+        assert len(optimize_calls) == 2
+        assert optimize_calls[0] is None
+        assert optimize_calls[1] is not None
+
+    def test_feature_selection_skipped_when_node_has_no_search_space(
+        self,
+        joint_regression_data,
+        joint_quantile_graph,
+        data_manager,
+        mock_backend,
+        monkeypatch,
+    ):
+        """No-search-space mode should skip feature selection for joint quantile nodes."""
+        X, targets = joint_regression_data
+        ctx = DataContext.from_Xy(X, targets["y1"])
+        fs_config = FeatureSelectionConfig(enabled=True, method="shadow")
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            n_trials=1,
+            metric="neg_mean_squared_error",
+            greater_is_better=False,
+            verbose=0,
+            cv_config=CVConfig(
+                n_splits=3,
+                strategy=CVStrategy.RANDOM,
+                shuffle=True,
+                random_state=42,
+            ),
+            feature_selection=fs_config,
+        )
+
+        called = {"select": False}
+
+        def fail_if_called(self, node, ctx, params):
+            called["select"] = True
+            raise AssertionError("Feature selector should not run without search space")
+
+        monkeypatch.setattr(FeatureSelector, "select_for_node", fail_if_called)
+
+        orchestrator = JointQuantileOrchestrator(
+            graph=joint_quantile_graph,
+            data_manager=data_manager,
+            search_backend=mock_backend,
+            tuning_config=tuning_config,
+        )
+        result = orchestrator.fit(ctx, targets)
+
+        assert called["select"] is False
+        assert result.get_node("y1").selected_features is None
 
 
 class TestJointQuantileOrchestratorConditionalContext:

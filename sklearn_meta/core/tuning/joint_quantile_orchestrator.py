@@ -19,6 +19,7 @@ from sklearn_meta.core.model.dependency import DependencyType
 from sklearn_meta.core.model.joint_quantile_graph import JointQuantileGraph
 from sklearn_meta.core.model.quantile_node import QuantileModelNode
 from sklearn_meta.core.tuning.orchestrator import TuningConfig
+from sklearn_meta.selection.selector import FeatureSelector
 
 if TYPE_CHECKING:
     from sklearn_meta.audit.logger import AuditLogger
@@ -41,6 +42,7 @@ class FittedQuantileNode:
                                  Shape: (n_samples, n_quantiles).
         best_params: Best hyperparameters (tuned at median).
         optimization_result: Full optimization results (optional).
+        selected_features: Features selected during feature selection (optional).
     """
 
     node: QuantileModelNode
@@ -48,6 +50,7 @@ class FittedQuantileNode:
     oof_quantile_predictions: np.ndarray
     best_params: Dict[str, Any]
     optimization_result: Optional[OptimizationResult] = None
+    selected_features: Optional[List[str]] = None
 
     @property
     def quantile_levels(self) -> List[float]:
@@ -75,13 +78,14 @@ class FittedQuantileNode:
         Returns:
             Predictions of shape (n_samples, n_quantiles).
         """
-        predictions = np.zeros((len(X), self.n_quantiles))
+        X_pred = self._prepare_features_for_prediction(X)
+        predictions = np.zeros((len(X_pred), self.n_quantiles))
 
         for q_idx, tau in enumerate(self.quantile_levels):
             # Average predictions across all fold models
             fold_preds = []
             for model in self.quantile_models[tau]:
-                fold_preds.append(model.predict(X))
+                fold_preds.append(model.predict(X_pred))
             predictions[:, q_idx] = np.mean(fold_preds, axis=0)
 
         return predictions
@@ -96,11 +100,33 @@ class FittedQuantileNode:
         Returns:
             Median predictions of shape (n_samples,).
         """
+        X_pred = self._prepare_features_for_prediction(X)
         median_tau = min(self.quantile_levels, key=lambda x: abs(x - 0.5))
         fold_preds = []
         for model in self.quantile_models[median_tau]:
-            fold_preds.append(model.predict(X))
+            fold_preds.append(model.predict(X_pred))
         return np.mean(fold_preds, axis=0)
+
+    def _prepare_features_for_prediction(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Filter inference features to the selected subset, if any."""
+        # Use getattr for backward compatibility with older serialized objects.
+        selected_features = getattr(self, "selected_features", None)
+        if selected_features is None:
+            return X
+
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError(
+                "This fitted quantile node requires a pandas DataFrame at prediction time "
+                "because feature selection was applied."
+            )
+
+        missing = [feature for feature in selected_features if feature not in X.columns]
+        if missing:
+            raise ValueError(
+                f"Missing required selected feature columns for '{self.node.name}': {missing}"
+            )
+
+        return X[selected_features]
 
 
 @dataclass
@@ -312,6 +338,7 @@ class JointQuantileOrchestrator:
         """
         # Step 1: Optimize hyperparameters at median quantile
         median_tau = node.median_quantile
+        selected_features = None
 
         if node.has_search_space:
             best_params, opt_result = self._optimize_at_quantile(
@@ -324,7 +351,61 @@ class JointQuantileOrchestrator:
         if self.tuning_config.verbose >= 1:
             logger.info(f"  Best params: {best_params}")
 
-        # Step 2: Train models for all quantile levels
+        # Step 2: Feature selection (optional), then optional re-tune on narrowed space
+        if (
+            self.tuning_config.feature_selection
+            and self.tuning_config.feature_selection.enabled
+        ):
+            if not node.has_search_space:
+                logger.info(
+                    "  Feature selection skipped for '%s': no search space "
+                    "(fixed/no-tune mode)",
+                    node.name,
+                )
+            else:
+                selector = FeatureSelector(self.tuning_config.feature_selection)
+                selection_result = selector.select_for_node(node, ctx, best_params)
+                selected_features = selection_result.selected_features
+
+                n_original = len(ctx.feature_cols)
+                n_selected = len(selected_features) if selected_features else n_original
+                dropped = (
+                    set(ctx.feature_cols) - set(selected_features)
+                    if selected_features
+                    else set()
+                )
+                logger.info(
+                    "  Feature selection for '%s': %d/%d features kept",
+                    node.name,
+                    n_selected,
+                    n_original,
+                )
+                if dropped:
+                    logger.info("    Dropped: %s", sorted(dropped))
+
+                if selected_features:
+                    ctx = ctx.with_feature_cols(selected_features)
+
+                if self.tuning_config.feature_selection.retune_after_pruning:
+                    narrowed_space = node.search_space.narrow_around(
+                        center=best_params,
+                        factor=0.5,
+                        regularization_bias=0.25,
+                    )
+                    if narrowed_space and len(narrowed_space) > 0:
+                        logger.info(
+                            "  Re-tuning '%s' at median quantile with %d selected features",
+                            node.name,
+                            len(ctx.feature_cols),
+                        )
+                        best_params, opt_result = self._optimize_at_quantile(
+                            node=node,
+                            ctx=ctx,
+                            tau=median_tau,
+                            search_space_override=narrowed_space,
+                        )
+
+        # Step 3: Train models for all quantile levels
         quantile_models: Dict[float, List[Any]] = {}
         oof_predictions_list = []
 
@@ -352,6 +433,7 @@ class JointQuantileOrchestrator:
             oof_quantile_predictions=oof_quantile_predictions,
             best_params=best_params,
             optimization_result=opt_result,
+            selected_features=selected_features,
         )
 
     def _optimize_at_quantile(
@@ -359,6 +441,7 @@ class JointQuantileOrchestrator:
         node: QuantileModelNode,
         ctx: DataContext,
         tau: float,
+        search_space_override: Optional[Any] = None,
     ) -> Tuple[Dict[str, Any], OptimizationResult]:
         """
         Optimize hyperparameters at a specific quantile level.
@@ -367,11 +450,13 @@ class JointQuantileOrchestrator:
             node: QuantileModelNode to optimize.
             ctx: Data context.
             tau: Quantile level for optimization.
+            search_space_override: Optional override search space (e.g. narrowed
+                around a previous optimum after feature pruning).
 
         Returns:
             Tuple of (best_params, optimization_result).
         """
-        search_space = node.search_space
+        search_space = search_space_override or node.search_space
 
         def objective(params: Dict[str, Any]) -> float:
             # Merge with fixed params and quantile-specific params

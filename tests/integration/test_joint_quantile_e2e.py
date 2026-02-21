@@ -18,6 +18,8 @@ from sklearn_meta.core.model.quantile_sampler import SamplingStrategy
 from sklearn_meta.core.tuning.joint_quantile_orchestrator import JointQuantileOrchestrator
 from sklearn_meta.core.tuning.orchestrator import TuningConfig
 from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.search.space import SearchSpace
+from sklearn_meta.selection.selector import FeatureSelectionConfig
 
 
 # =============================================================================
@@ -69,6 +71,7 @@ class MockQuantileRegressor:
             for i in range(X_arr.shape[1]):
                 corr = np.corrcoef(X_arr[:, i], y)[0, 1]
                 self._coef[i] = 0 if np.isnan(corr) else corr * self._y_std
+        self.feature_importances_ = np.abs(self._coef)
 
         return self
 
@@ -231,6 +234,56 @@ class TestJointQuantileE2E:
         # 7. Point predictions
         medians = fitted_graph.predict_median(X_test)
         assert medians.shape == (10, 3)
+
+    @pytest.mark.integration
+    def test_pipeline_with_feature_selection(self, synthetic_data, cv_config):
+        """Joint quantile pipeline should fit and infer with feature selection enabled."""
+        X, targets = synthetic_data
+
+        search_space = SearchSpace().add_from_shorthand(max_depth=(3, 8))
+        config = JointQuantileConfig(
+            property_names=["price", "volume"],
+            estimator_class=MockQuantileRegressor,
+            quantile_levels=[0.1, 0.5, 0.9],
+            search_space=search_space,
+            n_inference_samples=100,
+        )
+        graph = JointQuantileGraph(config)
+
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            n_trials=1,
+            metric="neg_mean_squared_error",
+            greater_is_better=False,
+            verbose=0,
+            cv_config=cv_config,
+            feature_selection=FeatureSelectionConfig(
+                enabled=True,
+                method="shadow",
+                n_shadows=3,
+                retune_after_pruning=True,
+                min_features=1,
+            ),
+        )
+
+        orchestrator = JointQuantileOrchestrator(
+            graph=graph,
+            data_manager=DataManager(cv_config),
+            search_backend=MockSearchBackend(),
+            tuning_config=tuning_config,
+        )
+
+        ctx = DataContext.from_Xy(X, targets["price"])
+        fit_result = orchestrator.fit(
+            ctx, {"price": targets["price"], "volume": targets["volume"]}
+        )
+
+        assert fit_result.get_node("price").selected_features is not None
+        assert fit_result.get_node("volume").selected_features is not None
+
+        fitted_graph = JointQuantileFittedGraph.from_fit_result(fit_result)
+        medians = fitted_graph.predict_median(X.iloc[:5])
+        assert medians.shape == (5, 2)
 
     @pytest.mark.integration
     def test_order_change_and_refit(self, synthetic_data, cv_config, tuning_config):

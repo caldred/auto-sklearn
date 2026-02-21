@@ -186,6 +186,37 @@ q90 = fitted.predict_quantile(X_test, q=0.9)  # 90th percentile
 
 ---
 
+## Feature Selection
+
+Joint quantile training supports the same feature-selection config used by
+`TuningOrchestrator`, via `TuningConfig.feature_selection`.
+
+```python
+from sklearn_meta.selection.selector import FeatureSelectionConfig
+
+tuning_config = TuningConfig(
+    n_trials=50,
+    cv_config=cv_config,
+    feature_selection=FeatureSelectionConfig(
+        enabled=True,
+        method="shadow",
+        n_shadows=5,
+        threshold_mult=1.414,
+        retune_after_pruning=True,
+        min_features=3,
+        # Optional: grouped selection
+        # feature_groups={"group_name": ["feature_a", "feature_b"]},
+    ),
+)
+```
+
+Behavior notes:
+- Feature selection runs per property node (after median-quantile tuning).
+- Downstream nodes can select conditional features (for example `cond_price`).
+- In fixed-parameter / no-search-space mode, feature selection is skipped.
+
+---
+
 ## Configuration Options
 
 ### JointQuantileConfig
