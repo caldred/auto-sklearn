@@ -111,7 +111,7 @@ tuning_config = TuningConfig(
 | `custom_reparameterizations` | Custom reparameterization functions | None |
 | `verbose` | Verbosity level | 1 |
 | `tuning_n_estimators` | n_estimators used during tuning (faster) | None |
-| `final_n_estimators` | n_estimators for final model (after tuning) | None |
+| `final_n_estimators` | n_estimators used in the final CV pass after tuning | None |
 | `estimator_scaling_search` | Search for optimal n_estimators scaling | False |
 | `estimator_scaling_factors` | Custom scaling factors to try | None |
 | `show_progress` | Display progress bar during tuning | False |
@@ -269,7 +269,7 @@ fitted_graph = orchestrator.fit(ctx)
 
 ## Estimator Scaling
 
-For boosting models (XGBoost, LightGBM, GradientBoosting), you often want to tune with fewer estimators for speed, then train the final model with more. `TuningConfig` supports this directly:
+For boosting models (XGBoost, LightGBM, GradientBoosting), you often want to tune with fewer estimators for speed, then use more estimators in the final CV pass. `TuningConfig` supports this directly:
 
 ### Fixed Scaling
 
@@ -279,7 +279,7 @@ tuning_config = TuningConfig(
     metric="roc_auc",
     greater_is_better=True,
     tuning_n_estimators=100,     # use 100 trees during tuning (fast)
-    final_n_estimators=1000,     # use 1000 trees for the final model
+    final_n_estimators=1000,     # use 1000 trees in the final CV pass
 )
 ```
 

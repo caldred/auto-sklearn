@@ -602,7 +602,7 @@ For full details including order search, quantile scaling, sampling strategies, 
 
 ## Estimator Scaling
 
-For boosting models, you can tune with a small number of estimators for speed, then scale up for the final model:
+For boosting models, you can tune with a small number of estimators for speed, then scale up for the final cross-validated models used at inference:
 
 ### Fixed Scaling
 
@@ -612,11 +612,11 @@ For boosting models, you can tune with a small number of estimators for speed, t
     metric="neg_log_loss",
     greater_is_better=False,
     tuning_n_estimators=100,     # Use 100 trees during tuning (fast)
-    final_n_estimators=500,      # Use 500 trees for the final model
+    final_n_estimators=500,      # Use 500 trees in the final CV pass
 )
 ```
 
-The learning rate is automatically scaled by `tuning_n_estimators / final_n_estimators` to maintain equivalent training.
+The learning rate is automatically scaled by `tuning_n_estimators / final_n_estimators` to maintain equivalent training during the final CV pass.
 
 ### Automatic Scaling Search
 
