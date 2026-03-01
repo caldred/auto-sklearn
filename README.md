@@ -70,6 +70,8 @@ sklearn-meta uses `DataContext` as an immutable container for datasets. It wraps
 The fluent API handles this for you when you call `.fit(X, y)`, but you can also create one directly:
 
 ```python
+from sklearn.ensemble import RandomForestClassifier
+from sklearn_meta import GraphBuilder
 from sklearn_meta.core.data.context import DataContext
 
 # From separate X, y, groups
@@ -89,6 +91,13 @@ ctx = DataContext(
     feature_cols=("feat_1", "feat_2", "feat_3"),
     target_col="target",
     group_col="patient_id",            # Optional
+)
+
+# Then fit through the fluent API without promoting every df column to a feature
+fitted = (
+    GraphBuilder("my_pipeline")
+    .add_model("rf", RandomForestClassifier)
+    .fit_context(ctx)
 )
 ```
 

@@ -647,7 +647,7 @@ class GraphBuilder:
         executor: Optional[Executor] = None,
     ) -> FittedGraph:
         """
-        Build graph and fit to data.
+        Build graph and fit to raw X/y data.
 
         Args:
             X: Features DataFrame.
@@ -669,13 +669,36 @@ class GraphBuilder:
         if groups is not None and not isinstance(groups, pd.Series):
             groups = pd.Series(groups)
 
-        # Validate inputs
-        if X.shape[0] == 0:
-            raise ValueError("X cannot be empty")
-        if X.shape[1] == 0:
-            raise ValueError("X must have at least one feature")
-
         ctx = DataContext.from_Xy(X=X, y=y, groups=groups)
+        return self.fit_context(ctx, search_backend=search_backend, executor=executor)
+
+    def fit_context(
+        self,
+        ctx: DataContext,
+        search_backend: Optional[SearchBackend] = None,
+        executor: Optional[Executor] = None,
+    ) -> FittedGraph:
+        """
+        Build graph and fit to data.
+
+        Args:
+            ctx: Data context containing features, target, and optional
+                non-feature columns.
+            search_backend: Search backend to use.
+            executor: Optional executor for parallel execution.
+
+        Returns:
+            FittedGraph with trained models.
+        """
+        if not isinstance(ctx, DataContext):
+            raise TypeError("ctx must be a DataContext")
+
+        # Validate inputs
+        if ctx.n_samples == 0:
+            raise ValueError("ctx cannot be empty")
+        if ctx.n_features == 0:
+            raise ValueError("ctx must have at least one feature")
+
         orchestrator = self.create_orchestrator(search_backend, executor)
 
         return orchestrator.fit(ctx)

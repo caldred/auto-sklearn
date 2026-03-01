@@ -81,6 +81,13 @@ fit(
     search_backend=None,
     executor=None,
 ) -> FittedGraph
+
+# Build and fit from a preconstructed DataContext
+fit_context(
+    ctx: DataContext,
+    search_backend=None,
+    executor=None,
+) -> FittedGraph
 ```
 
 ### NodeBuilder
