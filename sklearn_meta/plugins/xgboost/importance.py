@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING
 
 from sklearn_meta.plugins.base import ModelPlugin
+from sklearn_meta.plugins.xgboost import XGBOOST_CLASS_NAMES
 from sklearn_meta.selection.importance import ImportanceExtractor
 
 if TYPE_CHECKING:
@@ -13,6 +14,13 @@ if TYPE_CHECKING:
     from sklearn_meta.core.model.node import ModelNode
 
 logger = logging.getLogger(__name__)
+
+
+def _get_model_meta(model) -> dict:
+    """Get or create the sklearn_meta metadata dict on a model."""
+    if not hasattr(model, "_sklearn_meta_meta"):
+        model._sklearn_meta_meta = {}
+    return model._sklearn_meta_meta
 
 
 class XGBImportanceExtractor(ImportanceExtractor):
@@ -108,7 +116,7 @@ class XGBImportancePlugin(ModelPlugin):
     def applies_to(self, estimator_class: Type) -> bool:
         """Check if estimator is XGBoost."""
         class_name = estimator_class.__name__
-        return class_name in ("XGBClassifier", "XGBRegressor", "XGBRanker")
+        return class_name in XGBOOST_CLASS_NAMES
 
     def post_fit(
         self,
@@ -134,11 +142,9 @@ class XGBImportancePlugin(ModelPlugin):
         )
 
         # Store in model for later retrieval
-        if not hasattr(model, "_sklearn_meta_meta"):
-            model._sklearn_meta_meta = {}
-
-        model._sklearn_meta_meta["feature_importance"] = importance
-        model._sklearn_meta_meta["importance_type"] = self.importance_type
+        meta = _get_model_meta(model)
+        meta["feature_importance"] = importance
+        meta["importance_type"] = self.importance_type
 
         # Warn about zero-importance features if enabled
         if self.prune_zero_importance:
@@ -168,10 +174,10 @@ class XGBImportancePlugin(ModelPlugin):
             Dictionary of feature importances.
         """
         # Check for cached importance
-        if hasattr(model, "_sklearn_meta_meta"):
-            cached = model._sklearn_meta_meta.get("feature_importance")
-            if cached is not None:
-                return cached
+        meta = _get_model_meta(model)
+        cached = meta.get("feature_importance")
+        if cached is not None:
+            return cached
 
         # Extract fresh
         if feature_names is None:

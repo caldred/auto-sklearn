@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -68,8 +69,8 @@ class AuditLogger:
             name: Logger name.
         """
         self.name = name
-        self._fold_logs: List[FoldLog] = []
-        self._trial_logs: List[TrialLog] = []
+        self._fold_logs: deque[FoldLog] = deque(maxlen=10000)
+        self._trial_logs: deque[TrialLog] = deque(maxlen=10000)
 
         # Set up Python logger
         self._logger = logging.getLogger(name)

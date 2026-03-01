@@ -178,7 +178,7 @@ class FoldResult:
     model: object
     val_predictions: np.ndarray
     val_score: float
-    train_score: Optional[float] = None
+    train_score: Optional[float] = None  # Reserved for future use; currently always None.
     fit_time: float = 0.0
     predict_time: float = 0.0
     params: dict = field(default_factory=dict)

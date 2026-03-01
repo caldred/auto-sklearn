@@ -21,7 +21,6 @@ class PluginRegistry:
     def __init__(self) -> None:
         """Initialize an empty registry."""
         self._plugins: Dict[str, ModelPlugin] = {}
-        self._plugin_order: List[str] = []
 
     def register(
         self,
@@ -42,12 +41,12 @@ class PluginRegistry:
         if plugin_name in self._plugins:
             raise ValueError(f"Plugin '{plugin_name}' is already registered")
 
-        self._plugins[plugin_name] = plugin
-
         if priority == -1:
-            self._plugin_order.append(plugin_name)
+            self._plugins[plugin_name] = plugin
         else:
-            self._plugin_order.insert(priority, plugin_name)
+            items = list(self._plugins.items())
+            items.insert(priority, (plugin_name, plugin))
+            self._plugins = dict(items)
 
     def unregister(self, name: str) -> Optional[ModelPlugin]:
         """
@@ -63,7 +62,6 @@ class PluginRegistry:
             return None
 
         plugin = self._plugins.pop(name)
-        self._plugin_order.remove(name)
         return plugin
 
     def get(self, name: str) -> Optional[ModelPlugin]:
@@ -89,8 +87,7 @@ class PluginRegistry:
             List of applicable plugins in priority order.
         """
         applicable = []
-        for name in self._plugin_order:
-            plugin = self._plugins[name]
+        for name, plugin in self._plugins.items():
             try:
                 if plugin.applies_to(estimator_class):
                     applicable.append(plugin)
@@ -115,10 +112,22 @@ class PluginRegistry:
                 plugins.append(self._plugins[name])
         return plugins
 
+    def apply_modify_fit_params(self, estimator_class, fit_params, ctx):
+        """Apply all matching plugins' modify_fit_params hooks."""
+        for plugin in self.get_plugins_for(estimator_class):
+            fit_params = plugin.modify_fit_params(fit_params, ctx)
+        return fit_params
+
+    def apply_post_fit(self, estimator_class, model, node, ctx):
+        """Apply all matching plugins' post_fit hooks."""
+        for plugin in self.get_plugins_for(estimator_class):
+            model = plugin.post_fit(model, node, ctx)
+        return model
+
     @property
     def plugin_names(self) -> List[str]:
         """List of registered plugin names in priority order."""
-        return list(self._plugin_order)
+        return list(self._plugins.keys())
 
     def __len__(self) -> int:
         """Number of registered plugins."""
@@ -129,7 +138,7 @@ class PluginRegistry:
         return name in self._plugins
 
     def __repr__(self) -> str:
-        return f"PluginRegistry(plugins={self._plugin_order})"
+        return f"PluginRegistry(plugins={list(self._plugins.keys())})"
 
 
 # Global default registry

@@ -47,6 +47,21 @@ class ModelGraph:
             raise ValueError(f"Node '{node.name}' already exists in graph")
         self._nodes[node.name] = node
 
+    def _can_reach(self, source: str, target: str) -> bool:
+        """Check if source can reach target via existing forward edges (DFS)."""
+        visited: Set[str] = set()
+        stack = [source]
+        while stack:
+            node = stack.pop()
+            if node == target:
+                return True
+            if node in visited:
+                continue
+            visited.add(node)
+            for edge in self._adjacency.get(node, []):
+                stack.append(edge.target)
+        return False
+
     def add_edge(self, edge: DependencyEdge) -> None:
         """
         Add a dependency edge to the graph.
@@ -62,22 +77,16 @@ class ModelGraph:
         if edge.target not in self._nodes:
             raise ValueError(f"Target node '{edge.target}' not found in graph")
 
-        # Add edge
-        self._edges.append(edge)
-        self._adjacency[edge.source].append(edge)
-        self._reverse_adjacency[edge.target].append(edge)
-
-        # Check for cycles
-        try:
-            self.topological_order()
-        except CycleError:
-            # Remove the edge that caused the cycle
-            self._edges.pop()
-            self._adjacency[edge.source].pop()
-            self._reverse_adjacency[edge.target].pop()
+        # Check for cycles before adding: would target -> source path exist?
+        if self._can_reach(edge.target, edge.source):
             raise CycleError(
                 f"Adding edge {edge.source} -> {edge.target} would create a cycle"
             )
+
+        # Safe to add edge
+        self._edges.append(edge)
+        self._adjacency[edge.source].append(edge)
+        self._reverse_adjacency[edge.target].append(edge)
 
     def get_node(self, name: str) -> ModelNode:
         """

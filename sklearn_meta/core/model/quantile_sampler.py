@@ -147,6 +147,44 @@ class ParametricSampler(QuantileSamplerBase):
         self._params: Optional[Tuple] = None
         self._dist = None
 
+    def _fit_parametric(
+        self,
+        dist_func,
+        initial_params: list,
+        quantile_levels: np.ndarray,
+        quantile_values: np.ndarray,
+        objective,
+    ) -> None:
+        """
+        Common optimization logic for fitting a parametric distribution.
+
+        Args:
+            dist_func: scipy.stats distribution object.
+            initial_params: Initial parameter guess for the optimizer.
+            quantile_levels: Array of quantile levels.
+            quantile_values: Array of quantile values.
+            objective: Objective function to minimize.
+        """
+        from scipy.optimize import minimize
+
+        self._dist = dist_func
+        result = minimize(objective, initial_params, method="Nelder-Mead")
+        self._params = tuple(result.x)
+
+    def _compute_initial_loc_scale(
+        self,
+        quantile_levels: np.ndarray,
+        quantile_values: np.ndarray,
+    ) -> Tuple[float, float]:
+        """Compute initial loc and scale estimates from median and IQR."""
+        median_idx = np.argmin(np.abs(quantile_levels - 0.5))
+        loc_init = quantile_values[median_idx]
+        q25_idx = np.argmin(np.abs(quantile_levels - 0.25))
+        q75_idx = np.argmin(np.abs(quantile_levels - 0.75))
+        iqr = quantile_values[q75_idx] - quantile_values[q25_idx]
+        scale_init = max(iqr / 1.35, 0.01)
+        return loc_init, scale_init
+
     def fit(
         self,
         quantile_levels: np.ndarray,
@@ -155,16 +193,14 @@ class ParametricSampler(QuantileSamplerBase):
         """Fit the parametric distribution to match the quantiles."""
         try:
             from scipy import stats
-            from scipy.optimize import minimize
         except ImportError:
             raise ImportError("scipy is required for parametric sampling")
 
         quantile_levels = np.asarray(quantile_levels)
         quantile_values = np.asarray(quantile_values)
+        loc_init, scale_init = self._compute_initial_loc_scale(quantile_levels, quantile_values)
 
         if self._distribution == "normal":
-            self._dist = stats.norm
-            # Fit normal: minimize squared error between predicted and actual quantiles
             def objective(params):
                 loc, scale = params
                 if scale <= 0:
@@ -172,20 +208,12 @@ class ParametricSampler(QuantileSamplerBase):
                 predicted = stats.norm.ppf(quantile_levels, loc=loc, scale=scale)
                 return np.sum((predicted - quantile_values) ** 2)
 
-            # Initial guess from median and IQR
-            median_idx = np.argmin(np.abs(quantile_levels - 0.5))
-            loc_init = quantile_values[median_idx]
-            q25_idx = np.argmin(np.abs(quantile_levels - 0.25))
-            q75_idx = np.argmin(np.abs(quantile_levels - 0.75))
-            iqr = quantile_values[q75_idx] - quantile_values[q25_idx]
-            scale_init = max(iqr / 1.35, 0.01)  # IQR = 1.35 * sigma for normal
-
-            result = minimize(objective, [loc_init, scale_init], method="Nelder-Mead")
-            self._params = tuple(result.x)
+            self._fit_parametric(
+                stats.norm, [loc_init, scale_init],
+                quantile_levels, quantile_values, objective,
+            )
 
         elif self._distribution == "skew_normal":
-            self._dist = stats.skewnorm
-
             def objective(params):
                 a, loc, scale = params
                 if scale <= 0:
@@ -193,20 +221,12 @@ class ParametricSampler(QuantileSamplerBase):
                 predicted = stats.skewnorm.ppf(quantile_levels, a, loc=loc, scale=scale)
                 return np.sum((predicted - quantile_values) ** 2)
 
-            # Initial guess
-            median_idx = np.argmin(np.abs(quantile_levels - 0.5))
-            loc_init = quantile_values[median_idx]
-            q25_idx = np.argmin(np.abs(quantile_levels - 0.25))
-            q75_idx = np.argmin(np.abs(quantile_levels - 0.75))
-            iqr = quantile_values[q75_idx] - quantile_values[q25_idx]
-            scale_init = max(iqr / 1.35, 0.01)
-
-            result = minimize(objective, [0, loc_init, scale_init], method="Nelder-Mead")
-            self._params = tuple(result.x)
+            self._fit_parametric(
+                stats.skewnorm, [0, loc_init, scale_init],
+                quantile_levels, quantile_values, objective,
+            )
 
         elif self._distribution == "johnson_su":
-            self._dist = stats.johnsonsu
-
             def objective(params):
                 a, b, loc, scale = params
                 if b <= 0 or scale <= 0:
@@ -220,18 +240,10 @@ class ParametricSampler(QuantileSamplerBase):
                     logger.debug(f"Johnson SU fitting failed: {e}")
                     return np.inf
 
-            # Initial guess
-            median_idx = np.argmin(np.abs(quantile_levels - 0.5))
-            loc_init = quantile_values[median_idx]
-            q25_idx = np.argmin(np.abs(quantile_levels - 0.25))
-            q75_idx = np.argmin(np.abs(quantile_levels - 0.75))
-            iqr = quantile_values[q75_idx] - quantile_values[q25_idx]
-            scale_init = max(iqr / 1.35, 0.01)
-
-            result = minimize(
-                objective, [0, 1, loc_init, scale_init], method="Nelder-Mead"
+            self._fit_parametric(
+                stats.johnsonsu, [0, 1, loc_init, scale_init],
+                quantile_levels, quantile_values, objective,
             )
-            self._params = tuple(result.x)
 
         else:
             raise ValueError(f"Unknown distribution: {self._distribution}")
@@ -496,10 +508,16 @@ class QuantileSampler:
         if quantile_predictions.ndim == 1:
             return np.interp(0.5, quantile_levels, quantile_predictions)
 
-        n_data_points = quantile_predictions.shape[0]
-        medians = np.zeros(n_data_points)
-        for i in range(n_data_points):
-            medians[i] = np.interp(0.5, quantile_levels, quantile_predictions[i])
+        # Vectorized interpolation for batch
+        quantile_levels_arr = np.asarray(quantile_levels)
+        idx = np.searchsorted(quantile_levels_arr, 0.5)
+        if idx == 0:
+            medians = quantile_predictions[:, 0]
+        elif idx >= len(quantile_levels_arr):
+            medians = quantile_predictions[:, -1]
+        else:
+            t = (0.5 - quantile_levels_arr[idx - 1]) / (quantile_levels_arr[idx] - quantile_levels_arr[idx - 1])
+            medians = quantile_predictions[:, idx - 1] * (1 - t) + quantile_predictions[:, idx] * t
         return medians
 
     def get_quantile(
@@ -525,10 +543,16 @@ class QuantileSampler:
         if quantile_predictions.ndim == 1:
             return np.interp(q, quantile_levels, quantile_predictions)
 
-        n_data_points = quantile_predictions.shape[0]
-        values = np.zeros(n_data_points)
-        for i in range(n_data_points):
-            values[i] = np.interp(q, quantile_levels, quantile_predictions[i])
+        # Vectorized interpolation for batch
+        quantile_levels_arr = np.asarray(quantile_levels)
+        idx = np.searchsorted(quantile_levels_arr, q)
+        if idx == 0:
+            values = quantile_predictions[:, 0]
+        elif idx >= len(quantile_levels_arr):
+            values = quantile_predictions[:, -1]
+        else:
+            t = (q - quantile_levels_arr[idx - 1]) / (quantile_levels_arr[idx] - quantile_levels_arr[idx - 1])
+            values = quantile_predictions[:, idx - 1] * (1 - t) + quantile_predictions[:, idx] * t
         return values
 
     @property

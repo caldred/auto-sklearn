@@ -397,6 +397,9 @@ class ReparameterizedSpace:
         for reparam in reparameterizations:
             self._reparam_params.update(reparam.original_params)
 
+        # Cache the transformed space since it doesn't change
+        self._transformed_space = self.build_transformed_space()
+
     def build_transformed_space(self) -> SearchSpace:
         """
         Build a new SearchSpace in the transformed coordinates.
@@ -444,7 +447,7 @@ class ReparameterizedSpace:
         Returns:
             Dictionary of original parameter values.
         """
-        transformed_space = self.build_transformed_space()
+        transformed_space = self._transformed_space
         transformed_sample = transformed_space.sample_optuna(trial)
 
         return self.inverse_transform(transformed_sample)

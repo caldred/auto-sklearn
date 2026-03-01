@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Type, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -11,20 +12,11 @@ if TYPE_CHECKING:
     from sklearn_meta.search.space import SearchSpace
 
 
-class OutputType:
-    """Output types for model nodes."""
-
+class OutputType(str, Enum):
     PREDICTION = "prediction"
-    """Raw predictions (for regression or binary classification)."""
-
     PROBA = "proba"
-    """Class probabilities (for classification)."""
-
     TRANSFORM = "transform"
-    """Transformed features (for preprocessors/transformers)."""
-
     QUANTILES = "quantiles"
-    """Quantile predictions (for quantile regression)."""
 
 
 @dataclass
@@ -52,7 +44,7 @@ class ModelNode:
     name: str
     estimator_class: Type
     search_space: Optional[SearchSpace] = None
-    output_type: str = OutputType.PREDICTION
+    output_type: OutputType = OutputType.PREDICTION
     condition: Optional[Callable[[DataContext], bool]] = None
     plugins: List[str] = field(default_factory=list)
     fixed_params: Dict[str, Any] = field(default_factory=dict)

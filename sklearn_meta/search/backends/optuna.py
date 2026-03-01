@@ -60,6 +60,7 @@ from sklearn_meta.search.backends.base import (
     OptimizationResult,
     SearchBackend,
     TrialResult,
+    TrialState,
 )
 
 if TYPE_CHECKING:
@@ -316,7 +317,7 @@ class OptunaBackend(SearchBackend):
 
         # Replay trials
         for trial_data in state.get("trials", []):
-            if trial_data["state"] == "COMPLETE" and trial_data["value"] is not None:
+            if trial_data["state"] == TrialState.COMPLETE and trial_data["value"] is not None:
                 self._study.add_trial(
                     optuna.trial.create_trial(
                         params=trial_data["params"],

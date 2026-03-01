@@ -235,31 +235,26 @@ class FitCache:
 
     def _enforce_size_limit(self) -> None:
         """Remove oldest entries if cache exceeds size limit."""
-        total_size = sum(
-            f.stat().st_size for f in self.cache_dir.glob("*.pkl")
-        )
+        cache_files = list(self.cache_dir.glob("*.pkl"))
+        if not cache_files:
+            return
+
+        file_stats = [(f, f.stat()) for f in cache_files]
+        total_size = sum(s.st_size for _, s in file_stats)
         max_size_bytes = self.max_size_mb * 1024 * 1024
 
         if total_size <= max_size_bytes:
             return
 
-        # Sort by modification time and remove oldest
-        cache_files = sorted(
-            self.cache_dir.glob("*.pkl"),
-            key=lambda f: f.stat().st_mtime,
-        )
+        file_stats.sort(key=lambda x: x[1].st_mtime)
 
-        for cache_file in cache_files:
-            if total_size <= max_size_bytes * 0.8:  # Free up to 80%
+        for cache_file, stat in file_stats:
+            if total_size <= max_size_bytes * 0.8:
                 break
 
-            file_size = cache_file.stat().st_size
             cache_file.unlink()
-            total_size -= file_size
-
-            # Also remove from memory cache
-            key = cache_file.stem
-            self._memory_cache.pop(key, None)
+            total_size -= stat.st_size
+            self._memory_cache.pop(cache_file.stem, None)
 
     def stats(self) -> Dict[str, Any]:
         """Get cache statistics."""

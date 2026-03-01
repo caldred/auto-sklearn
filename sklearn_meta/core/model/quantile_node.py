@@ -143,32 +143,8 @@ class QuantileModelNode(ModelNode):
         tau: float,
         params: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        """
-        Create an estimator configured for a specific quantile level.
-
-        Args:
-            tau: Quantile level (0 < tau < 1).
-            params: Additional hyperparameters to use.
-
-        Returns:
-            Configured estimator instance for quantile regression.
-        """
-        # Start with fixed params
-        all_params = dict(self.fixed_params)
-
-        # Apply quantile scaling if configured
-        if self.quantile_scaling:
-            scaled_params = self.quantile_scaling.get_params_for_quantile(tau)
-            all_params.update(scaled_params)
-
-        # Apply user-provided params
-        if params:
-            all_params.update(params)
-
-        # Set quantile-specific parameters for XGBoost
-        all_params["objective"] = self.xgboost_objective
-        all_params["quantile_alpha"] = tau
-
+        """Create an estimator configured for a specific quantile level."""
+        all_params = self.get_params_for_quantile(tau, params)
         return self.estimator_class(**all_params)
 
     def get_params_for_quantile(

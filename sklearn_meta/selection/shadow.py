@@ -5,15 +5,12 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
 from sklearn_meta.selection.importance import ImportanceExtractor, ImportanceRegistry
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -208,15 +205,18 @@ class ShadowFeatureSelector:
                 feature_cols=feature_cols,
                 rng=np.random.default_rng(self.random_state + round_idx + 1),
             )
-            X_augmented = X_base.copy()
             round_shadow_map: Dict[str, str] = {}
+            shadow_cols: Dict[str, np.ndarray] = {}
 
             for feat in selected:
                 idx = feature_idx[feat]
                 shadow_name = f"__shadow_r{round_idx}_{idx}__"
                 ref = pd.to_numeric(X_base[feat], errors="coerce").fillna(0.0).to_numpy(dtype=float)
-                X_augmented[shadow_name] = self._map_to_empirical_distribution(z_shadow[:, idx], ref)
+                shadow_cols[shadow_name] = self._map_to_empirical_distribution(z_shadow[:, idx], ref)
                 round_shadow_map[feat] = shadow_name
+
+            shadow_df = pd.DataFrame(shadow_cols, index=X_base.index)
+            X_augmented = pd.concat([X_base, shadow_df], axis=1)
 
             model.fit(X_augmented, y)
             all_importance = extractor.extract(
@@ -432,18 +432,21 @@ class ShadowFeatureSelector:
                 feature_cols=group_names,
                 rng=np.random.default_rng(self.random_state + round_idx + 1),
             )
-            X_augmented = X_base.copy()
             round_shadow_map: Dict[str, str] = {}
+            shadow_cols: Dict[str, np.ndarray] = {}
 
             for group_name in selected_groups:
                 idx = group_idx[group_name]
                 shadow_name = f"__shadow_group_r{round_idx}_{idx}__"
                 ref = X_group[group_name].to_numpy(dtype=float)
-                X_augmented[shadow_name] = self._map_to_empirical_distribution(
+                shadow_cols[shadow_name] = self._map_to_empirical_distribution(
                     z_shadow[:, idx],
                     ref,
                 )
                 round_shadow_map[group_name] = shadow_name
+
+            shadow_df = pd.DataFrame(shadow_cols, index=X_base.index)
+            X_augmented = pd.concat([X_base, shadow_df], axis=1)
 
             model.fit(X_augmented, y)
             all_importance = extractor.extract(

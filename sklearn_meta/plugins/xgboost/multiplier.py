@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING
 import numpy as np
 
 from sklearn_meta.plugins.base import ModelPlugin
+from sklearn_meta.plugins.xgboost import XGBOOST_CLASS_NAMES
 
 if TYPE_CHECKING:
     from sklearn_meta.core.data.context import DataContext
@@ -57,7 +58,7 @@ class XGBMultiplierPlugin(ModelPlugin):
         """Check if estimator is XGBoost."""
         # Check class name (works even if xgboost is not imported)
         class_name = estimator_class.__name__
-        if class_name in ("XGBClassifier", "XGBRegressor", "XGBRanker"):
+        if class_name in XGBOOST_CLASS_NAMES:
             return True
 
         # Check for get_booster method (XGBoost specific)
@@ -146,7 +147,6 @@ class XGBMultiplierPlugin(ModelPlugin):
     ) -> float:
         """Evaluate parameters using CV."""
         try:
-            import xgboost as xgb
             from sklearn.model_selection import cross_val_score
 
             # Create model

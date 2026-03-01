@@ -14,6 +14,9 @@ class ArtifactStore(ABC):
     Abstract interface for storing models, parameters, and CV ensembles.
 
     Subclasses implement a concrete backend (filesystem, cloud, database, etc.).
+
+    Note: This is an extension point. No built-in implementation is provided
+    yet; users must subclass this to integrate with their own storage backend.
     """
 
     @abstractmethod

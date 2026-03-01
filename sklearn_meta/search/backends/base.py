@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sklearn_meta.search.space import SearchSpace
+
+
+class TrialState(str, Enum):
+    COMPLETE = "COMPLETE"
+    PRUNED = "PRUNED"
+    FAIL = "FAIL"
 
 
 @dataclass
@@ -29,12 +36,12 @@ class TrialResult:
     trial_id: int = 0
     duration: float = 0.0
     user_attrs: Dict[str, Any] = field(default_factory=dict)
-    state: str = "COMPLETE"
+    state: TrialState = TrialState.COMPLETE
 
     @property
     def is_complete(self) -> bool:
         """Whether the trial completed successfully."""
-        return self.state == "COMPLETE"
+        return self.state == TrialState.COMPLETE
 
 
 @dataclass

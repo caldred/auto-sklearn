@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 import logging
 
 import numpy as np
+from sklearn.base import BaseEstimator
 
 from sklearn_meta.core.data.context import DataContext
 from sklearn_meta.core.data.cv import CVConfig, CVFold, CVResult, FoldResult
@@ -19,6 +20,7 @@ from sklearn_meta.core.tuning.strategy import OptimizationStrategy
 from sklearn_meta.search.backends.base import OptimizationResult, SearchBackend
 from sklearn_meta.meta.reparameterization import Reparameterization, ReparameterizedSpace
 from sklearn_meta.meta.prebaked import get_prebaked_reparameterization
+from sklearn_meta.core.tuning._metrics import log_feature_selection
 from sklearn_meta.selection.selector import FeatureSelector, FeatureSelectionResult
 from sklearn_meta.persistence.cache import FitCache
 
@@ -219,6 +221,30 @@ class FittedGraph:
         )
 
 
+class _PredictionWrapper(BaseEstimator):
+    """Wrapper that returns pre-computed predictions."""
+
+    def __init__(self, predictions):
+        self._predictions = predictions
+
+    def predict(self, X):
+        # For classification with probability outputs, convert to class labels
+        preds = self._predictions
+        if preds.ndim > 1:
+            return np.argmax(preds, axis=1)
+        return preds
+
+    def predict_proba(self, X):
+        return self._predictions
+
+    def decision_function(self, X):
+        # For binary classification probas, return positive class probability
+        preds = self._predictions
+        if preds.ndim > 1 and preds.shape[1] == 2:
+            return preds[:, 1]
+        return preds
+
+
 class TuningOrchestrator:
     """
     Main coordinator for tuning and training model graphs.
@@ -262,9 +288,18 @@ class TuningOrchestrator:
         self.plugin_registry = plugin_registry
         self.audit_logger = audit_logger
         self.fit_cache = fit_cache
+        self._folds_cache: Dict[int, List] = {}
+        self._scorer = None
 
         # Validate graph
         self.graph.validate()
+
+    def _get_scorer(self):
+        """Lazily build and cache the sklearn scorer."""
+        if self._scorer is None:
+            from sklearn.metrics import get_scorer
+            self._scorer = get_scorer(self.tuning_config.metric)
+        return self._scorer
 
     def fit(self, ctx: DataContext) -> FittedGraph:
         """
@@ -299,18 +334,26 @@ class TuningOrchestrator:
             total_time=total_time,
         )
 
-    def _fit_layer_by_layer(self, ctx: DataContext) -> Dict[str, FittedNode]:
-        """Fit models layer by layer."""
+    def _fit_nodes(
+        self,
+        ctx: DataContext,
+        ordered_layers: List[List[str]],
+        tune: bool = True,
+    ) -> Dict[str, FittedNode]:
+        """Fit nodes in the given layer order.
+
+        Args:
+            ctx: Data context.
+            ordered_layers: List of layers, each a list of node names.
+            tune: If True, use _fit_node (with optimization); if False, use fixed params.
+        """
         fitted_nodes: Dict[str, FittedNode] = {}
         oof_cache: Dict[str, np.ndarray] = {}
 
-        layers = self.graph.get_layers()
+        for layer_idx, layer in enumerate(ordered_layers):
+            if self.tuning_config.verbose >= 1 and len(ordered_layers) > 1:
+                logger.info(f"Fitting layer {layer_idx + 1}/{len(ordered_layers)}: {layer}")
 
-        for layer_idx, layer in enumerate(layers):
-            if self.tuning_config.verbose >= 1:
-                logger.info(f"Fitting layer {layer_idx + 1}/{len(layers)}: {layer}")
-
-            # Prepare context with upstream OOF predictions
             layer_ctx = self._prepare_context_with_oof(ctx, layer, oof_cache)
 
             # Filter nodes that should run
@@ -322,7 +365,8 @@ class TuningOrchestrator:
                 nodes_to_fit.append((node_name, node))
 
             # Parallel node fitting within layer if executor available
-            if (self.executor is not None and
+            if (tune and
+                self.executor is not None and
                 self.executor.n_workers > 1 and
                 len(nodes_to_fit) > 1):
 
@@ -335,73 +379,49 @@ class TuningOrchestrator:
 
                 results = self.executor.map(fit_node_task, nodes_to_fit)
                 for name, fitted in results:
+                    if self.audit_logger:
+                        self.audit_logger.log_node_start(name)
                     fitted_nodes[name] = fitted
                     oof_cache[name] = fitted.oof_predictions
+                    if self.audit_logger:
+                        self.audit_logger.log_node_complete(name, fitted.mean_score, fitted.best_params, 0.0)
             else:
                 # Sequential fallback
                 for node_name, node in nodes_to_fit:
+                    if self.audit_logger:
+                        self.audit_logger.log_node_start(node_name)
+
                     node_ctx = layer_ctx
                     if node.is_distilled:
                         node_ctx = self._inject_soft_targets(node_ctx, node, oof_cache)
-                    fitted = self._fit_node(node, node_ctx)
+
+                    if tune:
+                        fitted = self._fit_node(node, node_ctx)
+                    else:
+                        cv_result = self._cross_validate(node, node_ctx, node.fixed_params)
+                        fitted = FittedNode(node=node, cv_result=cv_result, best_params=node.fixed_params)
+
                     fitted_nodes[node_name] = fitted
                     oof_cache[node_name] = fitted.oof_predictions
 
+                    if self.audit_logger:
+                        self.audit_logger.log_node_complete(node_name, fitted.mean_score, fitted.best_params, 0.0)
+
         return fitted_nodes
+
+    def _fit_layer_by_layer(self, ctx: DataContext) -> Dict[str, FittedNode]:
+        """Fit nodes layer by layer."""
+        return self._fit_nodes(ctx, self.graph.get_layers(), tune=True)
 
     def _fit_greedy(self, ctx: DataContext) -> Dict[str, FittedNode]:
-        """Fit models one at a time in topological order."""
-        fitted_nodes: Dict[str, FittedNode] = {}
-        oof_cache: Dict[str, np.ndarray] = {}
-
-        for node_name in self.graph.topological_order():
-            node = self.graph.get_node(node_name)
-
-            # Prepare context with upstream OOF predictions
-            node_ctx = self._prepare_context_with_oof(ctx, [node_name], oof_cache)
-
-            if node.is_conditional and not node.should_run(node_ctx):
-                continue
-
-            if self.tuning_config.verbose >= 1:
-                logger.info(f"Fitting node: {node_name}")
-
-            if node.is_distilled:
-                node_ctx = self._inject_soft_targets(node_ctx, node, oof_cache)
-
-            fitted = self._fit_node(node, node_ctx)
-            fitted_nodes[node_name] = fitted
-            oof_cache[node_name] = fitted.oof_predictions
-
-        return fitted_nodes
+        """Fit nodes in topological order."""
+        ordered = [[name] for name in self.graph.topological_order()]
+        return self._fit_nodes(ctx, ordered, tune=True)
 
     def _fit_no_tuning(self, ctx: DataContext) -> Dict[str, FittedNode]:
-        """Fit models without hyperparameter tuning."""
-        fitted_nodes: Dict[str, FittedNode] = {}
-        oof_cache: Dict[str, np.ndarray] = {}
-
-        for node_name in self.graph.topological_order():
-            node = self.graph.get_node(node_name)
-            node_ctx = self._prepare_context_with_oof(ctx, [node_name], oof_cache)
-
-            if node.is_conditional and not node.should_run(node_ctx):
-                continue
-
-            if node.is_distilled:
-                node_ctx = self._inject_soft_targets(node_ctx, node, oof_cache)
-
-            # Use fixed params only
-            cv_result = self._cross_validate(node, node_ctx, node.fixed_params)
-            fitted = FittedNode(
-                node=node,
-                cv_result=cv_result,
-                best_params=node.fixed_params,
-            )
-
-            fitted_nodes[node_name] = fitted
-            oof_cache[node_name] = fitted.oof_predictions
-
-        return fitted_nodes
+        """Fit nodes without tuning using fixed params."""
+        ordered = [[name] for name in self.graph.topological_order()]
+        return self._fit_nodes(ctx, ordered, tune=False)
 
     def _fit_node(self, node: ModelNode, ctx: DataContext) -> FittedNode:
         """Fit a single node with hyperparameter optimization."""
@@ -451,12 +471,9 @@ class TuningOrchestrator:
             selected_features = selection_result.selected_features
 
             # Log feature selection results
-            n_original = len(ctx.feature_cols)
-            n_selected = len(selected_features) if selected_features else n_original
-            dropped = set(ctx.feature_cols) - set(selected_features) if selected_features else set()
-            logger.info(f"Feature selection for '{node.name}': {n_selected}/{n_original} features kept")
-            if dropped:
-                logger.info(f"  Dropped: {sorted(dropped)}")
+            log_feature_selection(
+                logger, node.name, ctx.feature_cols, selected_features
+            )
 
             # Filter context to selected features
             if selected_features:
@@ -673,9 +690,10 @@ class TuningOrchestrator:
         self, node: ModelNode, ctx: DataContext, params: Dict[str, Any]
     ) -> CVResult:
         """Run cross-validation for a node with given parameters."""
-        cv_config = self.tuning_config.cv_config or CVConfig()
-        dm = DataManager(cv_config)
-        folds = dm.create_folds(ctx)
+        cache_key = id(ctx)
+        if cache_key not in self._folds_cache:
+            self._folds_cache[cache_key] = self.data_manager.create_folds(ctx)
+        folds = self._folds_cache[cache_key]
 
         # Parallel fold fitting if executor available with multiple workers
         if self.executor is not None and self.executor.n_workers > 1:
@@ -702,7 +720,7 @@ class TuningOrchestrator:
                     params=params,
                 )
 
-        return dm.aggregate_cv_result(node.name, fold_results, ctx)
+        return self.data_manager.aggregate_cv_result(node.name, fold_results, ctx)
 
     def _fit_fold(
         self,
@@ -712,9 +730,7 @@ class TuningOrchestrator:
         params: Dict[str, Any],
     ) -> FoldResult:
         """Fit a model on a single CV fold."""
-        cv_config = self.tuning_config.cv_config or CVConfig()
-        dm = DataManager(cv_config)
-        train_ctx, val_ctx = dm.align_to_fold(ctx, fold)
+        train_ctx, val_ctx = self.data_manager.align_to_fold(ctx, fold)
 
         # Call plugin on_fold_start hooks
         if self.plugin_registry:
@@ -762,8 +778,9 @@ class TuningOrchestrator:
         # Apply plugin fit param modifications
         fit_params = dict(node.fit_params)
         if self.plugin_registry:
-            for plugin in self.plugin_registry.get_plugins_for(node.estimator_class):
-                fit_params = plugin.modify_fit_params(fit_params, train_ctx)
+            fit_params = self.plugin_registry.apply_modify_fit_params(
+                node.estimator_class, fit_params, train_ctx
+            )
 
         start_time = time.time()
         model.fit(train_ctx.X, train_ctx.y, **fit_params)
@@ -771,8 +788,9 @@ class TuningOrchestrator:
 
         # Apply plugin post-fit modifications
         if self.plugin_registry:
-            for plugin in self.plugin_registry.get_plugins_for(node.estimator_class):
-                model = plugin.post_fit(model, node, train_ctx)
+            model = self.plugin_registry.apply_post_fit(
+                node.estimator_class, model, node, train_ctx
+            )
 
         # Store in cache after fitting
         if self.fit_cache and cache_key:
@@ -803,36 +821,7 @@ class TuningOrchestrator:
 
     def _calculate_score(self, y_true, y_pred, node=None) -> float:
         """Calculate the evaluation score."""
-        from sklearn.base import BaseEstimator
-        from sklearn.metrics import get_scorer
-
-        metric = self.tuning_config.metric
-        scorer = get_scorer(metric)
-
-        # Create a dummy estimator wrapper for the scorer
-        # The scorer expects (estimator, X, y) but we already have predictions
-        class _PredictionWrapper(BaseEstimator):
-            """Wrapper that returns pre-computed predictions."""
-
-            def __init__(self, predictions):
-                self._predictions = predictions
-
-            def predict(self, X):
-                # For classification with probability outputs, convert to class labels
-                preds = self._predictions
-                if preds.ndim > 1:
-                    return np.argmax(preds, axis=1)
-                return preds
-
-            def predict_proba(self, X):
-                return self._predictions
-
-            def decision_function(self, X):
-                # For binary classification probas, return positive class probability
-                preds = self._predictions
-                if preds.ndim > 1 and preds.shape[1] == 2:
-                    return preds[:, 1]
-                return preds
+        scorer = self._get_scorer()
 
         wrapper = _PredictionWrapper(y_pred)
 

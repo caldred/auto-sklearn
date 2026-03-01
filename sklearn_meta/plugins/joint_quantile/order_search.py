@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from sklearn_meta.core.tuning._metrics import pinball_loss
 from sklearn_meta.plugins.base import ModelPlugin
 
 if TYPE_CHECKING:
@@ -314,13 +315,7 @@ class OrderSearchPlugin(ModelPlugin):
         tau: float,
     ) -> float:
         """Calculate pinball loss for quantile regression."""
-        residual = y_true - y_pred
-        loss = np.where(
-            residual >= 0,
-            tau * residual,
-            (tau - 1) * residual,
-        )
-        return np.mean(loss)
+        return pinball_loss(y_true, y_pred, tau)
 
     def _generate_random_order(self, graph: JointQuantileGraph) -> List[str]:
         """
@@ -363,38 +358,9 @@ class OrderSearchPlugin(ModelPlugin):
 
         # Try to satisfy must_precede constraints
         if constraints.must_precede:
-            result = self._fix_precedence_order(result, constraints.must_precede)
+            result = constraints.fix_precedence_order(result)
 
         return result
-
-    def _fix_precedence_order(
-        self,
-        order: List[str],
-        must_precede: List[Tuple[str, str]],
-    ) -> List[str]:
-        """Fix ordering to satisfy precedence constraints."""
-        order = list(order)
-
-        for _ in range(len(order) ** 2):
-            changed = False
-            for first, second in must_precede:
-                if first not in order or second not in order:
-                    continue
-
-                idx_first = order.index(first)
-                idx_second = order.index(second)
-
-                if idx_first > idx_second:
-                    # Move first before second
-                    order.remove(first)
-                    new_idx = order.index(second)
-                    order.insert(new_idx, first)
-                    changed = True
-
-            if not changed:
-                break
-
-        return order
 
     def __repr__(self) -> str:
         return (

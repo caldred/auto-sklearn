@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 import numpy as np
@@ -16,12 +17,18 @@ if TYPE_CHECKING:
     from sklearn_meta.core.model.node import ModelNode
 
 
+class FeatureSelectionMethod(str, Enum):
+    SHADOW = "shadow"
+    PERMUTATION = "permutation"
+    THRESHOLD = "threshold"
+
+
 @dataclass
 class FeatureSelectionConfig:
     """Configuration for feature selection."""
 
     enabled: bool = True
-    method: str = "shadow"  # "shadow", "permutation", "threshold"
+    method: FeatureSelectionMethod = FeatureSelectionMethod.SHADOW
     n_shadows: int = 5  # Number of shadow rounds (per-round fraction is 1 / n_shadows)
     threshold_mult: float = 1.414
     threshold_percentile: float = 10.0  # For threshold method

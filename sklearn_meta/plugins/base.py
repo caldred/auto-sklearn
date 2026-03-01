@@ -80,6 +80,10 @@ class ModelPlugin(ABC):
         This hook is called after sampling from the search space,
         before creating the estimator instance.
 
+        Note: This is an extension point. The default orchestrator does not
+        call this method; it is available for custom orchestrators or
+        external tooling.
+
         Args:
             params: The sampled/fixed parameters.
             node: The model node.
@@ -119,6 +123,10 @@ class ModelPlugin(ABC):
         Pre-process model before fitting.
 
         This hook is called after model creation but before fit().
+
+        Note: This is an extension point. The default orchestrator does not
+        call this method; it is available for custom orchestrators or
+        external tooling.
 
         Args:
             model: The model instance.

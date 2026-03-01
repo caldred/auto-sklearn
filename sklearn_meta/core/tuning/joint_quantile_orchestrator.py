@@ -18,6 +18,7 @@ from sklearn_meta.core.data.manager import DataManager
 from sklearn_meta.core.model.dependency import DependencyType
 from sklearn_meta.core.model.joint_quantile_graph import JointQuantileGraph
 from sklearn_meta.core.model.quantile_node import QuantileModelNode
+from sklearn_meta.core.tuning._metrics import log_feature_selection, pinball_loss
 from sklearn_meta.core.tuning.orchestrator import TuningConfig
 from sklearn_meta.selection.selector import FeatureSelector
 
@@ -367,21 +368,9 @@ class JointQuantileOrchestrator:
                 selection_result = selector.select_for_node(node, ctx, best_params)
                 selected_features = selection_result.selected_features
 
-                n_original = len(ctx.feature_cols)
-                n_selected = len(selected_features) if selected_features else n_original
-                dropped = (
-                    set(ctx.feature_cols) - set(selected_features)
-                    if selected_features
-                    else set()
+                log_feature_selection(
+                    logger, node.name, ctx.feature_cols, selected_features
                 )
-                logger.info(
-                    "  Feature selection for '%s': %d/%d features kept",
-                    node.name,
-                    n_selected,
-                    n_original,
-                )
-                if dropped:
-                    logger.info("    Dropped: %s", sorted(dropped))
 
                 if selected_features:
                     ctx = ctx.with_feature_cols(selected_features)
@@ -502,9 +491,7 @@ class JointQuantileOrchestrator:
         Returns:
             Tuple of (list of fold models, OOF predictions).
         """
-        cv_config = self.tuning_config.cv_config or CVConfig()
-        dm = DataManager(cv_config)
-        folds = dm.create_folds(ctx)
+        folds = self.data_manager.create_folds(ctx)
 
         # Parallel fold fitting if executor available with multiple workers
         if self.executor is not None and self.executor.n_workers > 1:
@@ -554,7 +541,7 @@ class JointQuantileOrchestrator:
                 )
 
         # Combine OOF predictions
-        oof_predictions = dm.route_oof_predictions(ctx, fold_results)
+        oof_predictions = self.data_manager.route_oof_predictions(ctx, fold_results)
 
         return fold_models, oof_predictions
 
@@ -577,9 +564,7 @@ class JointQuantileOrchestrator:
         Returns:
             Tuple of (fitted model, validation predictions).
         """
-        cv_config = self.tuning_config.cv_config or CVConfig()
-        dm = DataManager(cv_config)
-        train_ctx, val_ctx = dm.align_to_fold(ctx, fold)
+        train_ctx, val_ctx = self.data_manager.align_to_fold(ctx, fold)
 
         # Create and fit model
         model = node.estimator_class(**params)
@@ -587,15 +572,17 @@ class JointQuantileOrchestrator:
         # Apply plugin fit param modifications
         fit_params = dict(node.fit_params)
         if self.plugin_registry:
-            for plugin in self.plugin_registry.get_plugins_for(node.estimator_class):
-                fit_params = plugin.modify_fit_params(fit_params, train_ctx)
+            fit_params = self.plugin_registry.apply_modify_fit_params(
+                node.estimator_class, fit_params, train_ctx
+            )
 
         model.fit(train_ctx.X, train_ctx.y, **fit_params)
 
         # Apply plugin post-fit modifications
         if self.plugin_registry:
-            for plugin in self.plugin_registry.get_plugins_for(node.estimator_class):
-                model = plugin.post_fit(model, node, train_ctx)
+            model = self.plugin_registry.apply_post_fit(
+                node.estimator_class, model, node, train_ctx
+            )
 
         # Get validation predictions
         val_predictions = model.predict(val_ctx.X)
@@ -622,13 +609,7 @@ class JointQuantileOrchestrator:
         Returns:
             Mean pinball loss.
         """
-        residual = y_true - y_pred
-        loss = np.where(
-            residual >= 0,
-            tau * residual,
-            (tau - 1) * residual,
-        )
-        return np.mean(loss)
+        return pinball_loss(y_true, y_pred, tau)
 
     def __repr__(self) -> str:
         return (

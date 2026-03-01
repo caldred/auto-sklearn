@@ -376,7 +376,3 @@ class ImportanceRegistry:
             )
 
         return extractor.extract(model, feature_names, **kwargs)
-
-
-# Global registry instance
-importance_registry = ImportanceRegistry()

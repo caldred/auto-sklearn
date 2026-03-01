@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -121,7 +121,12 @@ class DataContext:
     @property
     def X(self) -> pd.DataFrame:
         """Feature DataFrame."""
-        return self.df[list(self.feature_cols)]
+        try:
+            return self.__dict__["_X_cache"]
+        except KeyError:
+            val = self.df[list(self.feature_cols)]
+            object.__setattr__(self, "_X_cache", val)
+            return val
 
     @property
     def y(self) -> Optional[pd.Series]:
@@ -154,29 +159,11 @@ class DataContext:
 
     def with_feature_cols(self, feature_cols: list[str]) -> DataContext:
         """Create a new context with updated feature columns."""
-        return DataContext(
-            df=self.df,
-            feature_cols=tuple(feature_cols),
-            target_col=self.target_col,
-            group_col=self.group_col,
-            base_margin=self.base_margin,
-            soft_targets=self.soft_targets,
-            indices=self.indices,
-            metadata=self.metadata,
-        )
+        return replace(self, feature_cols=tuple(feature_cols))
 
     def with_target_col(self, col_name: str) -> DataContext:
         """Create a new context pointing to a different target column."""
-        return DataContext(
-            df=self.df,
-            feature_cols=self.feature_cols,
-            target_col=col_name,
-            group_col=self.group_col,
-            base_margin=self.base_margin,
-            soft_targets=self.soft_targets,
-            indices=self.indices,
-            metadata=self.metadata,
-        )
+        return replace(self, target_col=col_name)
 
     def with_columns(self, as_features: bool = False, **cols: Any) -> DataContext:
         """
@@ -189,78 +176,39 @@ class DataContext:
         Returns:
             New DataContext with the columns added.
         """
-        new_df = self.df.copy()
+        new_df = self.df.assign(**cols)
         new_feature_cols = list(self.feature_cols)
 
-        for col_name, values in cols.items():
-            new_df[col_name] = values
-            if as_features and col_name not in new_feature_cols:
-                new_feature_cols.append(col_name)
+        if as_features:
+            for col_name in cols:
+                if col_name not in new_feature_cols:
+                    new_feature_cols.append(col_name)
 
-        return DataContext(
-            df=new_df,
-            feature_cols=tuple(new_feature_cols),
-            target_col=self.target_col,
-            group_col=self.group_col,
-            base_margin=self.base_margin,
-            soft_targets=self.soft_targets,
-            indices=self.indices,
-            metadata=self.metadata,
-        )
+        return replace(self, df=new_df, feature_cols=tuple(new_feature_cols))
 
     def with_indices(self, indices: np.ndarray) -> DataContext:
         """Create a new context with subset indices."""
-        return DataContext(
+        return replace(
+            self,
             df=self.df.iloc[indices].reset_index(drop=True),
-            feature_cols=self.feature_cols,
-            target_col=self.target_col,
-            group_col=self.group_col,
             base_margin=self.base_margin[indices] if self.base_margin is not None else None,
             soft_targets=self.soft_targets[indices] if self.soft_targets is not None else None,
             indices=indices,
-            metadata=self.metadata,
         )
 
     def with_base_margin(self, base_margin: np.ndarray) -> DataContext:
         """Create a new context with base margin for stacking."""
-        return DataContext(
-            df=self.df,
-            feature_cols=self.feature_cols,
-            target_col=self.target_col,
-            group_col=self.group_col,
-            base_margin=base_margin,
-            soft_targets=self.soft_targets,
-            indices=self.indices,
-            metadata=self.metadata,
-        )
+        return replace(self, base_margin=base_margin)
 
     def with_soft_targets(self, soft_targets: np.ndarray) -> DataContext:
         """Create a new context with soft targets for distillation."""
-        return DataContext(
-            df=self.df,
-            feature_cols=self.feature_cols,
-            target_col=self.target_col,
-            group_col=self.group_col,
-            base_margin=self.base_margin,
-            soft_targets=soft_targets,
-            indices=self.indices,
-            metadata=self.metadata,
-        )
+        return replace(self, soft_targets=soft_targets)
 
     def with_metadata(self, key: str, value: Any) -> DataContext:
         """Create a new context with additional metadata."""
         new_metadata = dict(self.metadata)
         new_metadata[key] = value
-        return DataContext(
-            df=self.df,
-            feature_cols=self.feature_cols,
-            target_col=self.target_col,
-            group_col=self.group_col,
-            base_margin=self.base_margin,
-            soft_targets=self.soft_targets,
-            indices=self.indices,
-            metadata=new_metadata,
-        )
+        return replace(self, metadata=new_metadata)
 
     def with_y(self, y: pd.Series) -> DataContext:
         """Create a new context with updated target."""
@@ -275,16 +223,7 @@ class DataContext:
             new_df = new_df.drop(columns=[self.target_col])
         new_df[target_col] = y.values
 
-        return DataContext(
-            df=new_df,
-            feature_cols=self.feature_cols,
-            target_col=target_col,
-            group_col=self.group_col,
-            base_margin=self.base_margin,
-            soft_targets=self.soft_targets,
-            indices=self.indices,
-            metadata=self.metadata,
-        )
+        return replace(self, df=new_df, target_col=target_col)
 
     def augment_with_predictions(
         self, predictions: Dict[str, np.ndarray], prefix: str = "pred_"
@@ -295,7 +234,7 @@ class DataContext:
         This is used for stacking, where base model predictions become
         features for the meta-learner.
         """
-        new_df = self.df.copy()
+        new_cols = {}
         new_feature_cols = list(self.feature_cols)
 
         for node_name, preds in predictions.items():
@@ -306,39 +245,22 @@ class DataContext:
                 )
             col_name = f"{prefix}{node_name}"
             if preds.ndim == 1:
-                new_df[col_name] = preds
+                new_cols[col_name] = preds
                 if col_name not in new_feature_cols:
                     new_feature_cols.append(col_name)
             else:
                 for i in range(preds.shape[1]):
                     sub_col = f"{col_name}_{i}"
-                    new_df[sub_col] = preds[:, i]
+                    new_cols[sub_col] = preds[:, i]
                     if sub_col not in new_feature_cols:
                         new_feature_cols.append(sub_col)
 
-        return DataContext(
-            df=new_df,
-            feature_cols=tuple(new_feature_cols),
-            target_col=self.target_col,
-            group_col=self.group_col,
-            base_margin=self.base_margin,
-            soft_targets=self.soft_targets,
-            indices=self.indices,
-            metadata=self.metadata,
-        )
+        new_df = self.df.assign(**new_cols)
+        return replace(self, df=new_df, feature_cols=tuple(new_feature_cols))
 
     def copy(self) -> DataContext:
         """Create a shallow copy of the context."""
-        return DataContext(
-            df=self.df.copy(deep=False),
-            feature_cols=self.feature_cols,
-            target_col=self.target_col,
-            group_col=self.group_col,
-            base_margin=self.base_margin,
-            soft_targets=self.soft_targets,
-            indices=self.indices,
-            metadata=dict(self.metadata),
-        )
+        return replace(self, df=self.df.copy(deep=False), metadata=dict(self.metadata))
 
     def __repr__(self) -> str:
         return (

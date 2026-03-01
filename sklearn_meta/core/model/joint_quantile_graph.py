@@ -141,11 +141,11 @@ class OrderConstraint:
         # Validate must_precede constraints
         if not self.validate_order(result):
             # Try to fix by reordering remaining properties
-            result = self._fix_precedence_order(result)
+            result = self.fix_precedence_order(result)
 
         return result
 
-    def _fix_precedence_order(self, order: List[str]) -> List[str]:
+    def fix_precedence_order(self, order: List[str]) -> List[str]:
         """Attempt to fix ordering to satisfy must_precede constraints."""
         order = list(order)
 

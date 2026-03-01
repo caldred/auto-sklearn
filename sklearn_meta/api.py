@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
 from sklearn_meta.core.data.context import DataContext
@@ -80,7 +81,7 @@ class NodeBuilder:
             self._search_space.add_from_shorthand(**kwargs)
         return self
 
-    def with_output_type(self, output_type: str) -> NodeBuilder:
+    def with_output_type(self, output_type: Union[str, OutputType]) -> NodeBuilder:
         """
         Set the output type.
 
@@ -90,6 +91,8 @@ class NodeBuilder:
         Returns:
             Self for chaining.
         """
+        if isinstance(output_type, str):
+            output_type = OutputType(output_type)
         self._output_type = output_type
         return self
 
@@ -430,6 +433,8 @@ class GraphBuilder:
 
     def with_tuning(
         self,
+        config: Optional[TuningConfig] = None,
+        *,
         n_trials: int = 100,
         timeout: Optional[float] = None,
         strategy: Union[str, OptimizationStrategy] = OptimizationStrategy.LAYER_BY_LAYER,
@@ -447,6 +452,7 @@ class GraphBuilder:
         Configure hyperparameter tuning.
 
         Args:
+            config: Pre-built TuningConfig. If provided, all other kwargs are ignored.
             n_trials: Number of optimization trials.
             timeout: Optional timeout in seconds.
             strategy: Optimization strategy.
@@ -471,6 +477,10 @@ class GraphBuilder:
         Returns:
             Self for chaining.
         """
+        if config is not None:
+            self._tuning_config = config
+            return self
+
         if isinstance(strategy, str):
             strategy = OptimizationStrategy(strategy)
 
@@ -602,16 +612,17 @@ class GraphBuilder:
         cv_config = self._cv_config or CVConfig()
         tuning_config = self._tuning_config or TuningConfig()
 
+        # Build a new config with all overrides applied at once
+        overrides = {}
         if self._cv_config:
-            tuning_config.cv_config = cv_config
-
+            overrides["cv_config"] = cv_config
         if self._feature_selection_config:
-            tuning_config.feature_selection = self._feature_selection_config
-
-        # Wire reparameterization configuration
+            overrides["feature_selection"] = self._feature_selection_config
         if self._custom_reparameterizations or self._use_prebaked_reparameterizations:
-            tuning_config.use_reparameterization = True
-            tuning_config.custom_reparameterizations = self._custom_reparameterizations
+            overrides["use_reparameterization"] = True
+            overrides["custom_reparameterizations"] = self._custom_reparameterizations
+        if overrides:
+            tuning_config = replace(tuning_config, **overrides)
 
         data_manager = DataManager(cv_config)
         backend = search_backend or OptunaBackend(
