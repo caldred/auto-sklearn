@@ -109,6 +109,49 @@ class DependencyEdge:
         prefix = prefix_map.get(self.dep_type, "out")
         return f"{prefix}_{self.source}"
 
+    def to_dict(self) -> dict:
+        """
+        Serialize this DependencyEdge to a JSON-safe dictionary.
+
+        Returns:
+            Dictionary representation of this edge.
+        """
+        result = {
+            "source": self.source,
+            "target": self.target,
+            "dep_type": self.dep_type.value,
+            "column_name": self.column_name,
+        }
+        if self.conditional_config is not None:
+            result["conditional_config"] = {
+                "property_name": self.conditional_config.property_name,
+                "use_actual_during_training": self.conditional_config.use_actual_during_training,
+            }
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DependencyEdge":
+        """
+        Reconstruct a DependencyEdge from a dictionary produced by to_dict().
+
+        Args:
+            data: Dictionary with serialized edge data.
+
+        Returns:
+            Reconstructed DependencyEdge.
+        """
+        conditional_config = None
+        if "conditional_config" in data and data["conditional_config"] is not None:
+            conditional_config = ConditionalSampleConfig(**data["conditional_config"])
+
+        return cls(
+            source=data["source"],
+            target=data["target"],
+            dep_type=DependencyType(data["dep_type"]),
+            column_name=data.get("column_name"),
+            conditional_config=conditional_config,
+        )
+
     def __repr__(self) -> str:
         return f"Edge({self.source} -> {self.target}, type={self.dep_type.value})"
 

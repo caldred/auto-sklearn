@@ -9,11 +9,17 @@ from sklearn_meta.api import GraphBuilder
 from sklearn_meta.core.data.context import DataContext
 from sklearn_meta.core.data.cv import CVConfig, CVFold, NestedCVFold
 from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.node import ModelNode
+from sklearn_meta.core.model.node import ModelNode, OutputType
 from sklearn_meta.core.model.graph import ModelGraph
 from sklearn_meta.core.model.dependency import DependencyType, DependencyEdge
 from sklearn_meta.core.model.distillation import DistillationConfig
-from sklearn_meta.core.tuning.orchestrator import TuningOrchestrator, TuningConfig
+from sklearn_meta.core.tuning.orchestrator import (
+    FittedGraph,
+    FittedNode,
+    RunMetadata,
+    TuningOrchestrator,
+    TuningConfig,
+)
 from sklearn_meta.core.tuning.strategy import OptimizationStrategy
 from sklearn_meta.search.space import SearchSpace
 from sklearn_meta.search.backends.optuna import OptunaBackend
@@ -46,10 +52,14 @@ __all__ = [
     # Model
     "ModelNode",
     "ModelGraph",
+    "OutputType",
     "DependencyType",
     "DependencyEdge",
     "DistillationConfig",
     # Tuning
+    "FittedGraph",
+    "FittedNode",
+    "RunMetadata",
     "TuningOrchestrator",
     "TuningConfig",
     "OptimizationStrategy",

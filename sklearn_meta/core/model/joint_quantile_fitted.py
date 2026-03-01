@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
@@ -12,6 +11,7 @@ import pandas as pd
 
 from sklearn_meta.core.model.joint_quantile_graph import JointQuantileConfig, JointQuantileGraph
 from sklearn_meta.core.model.quantile_sampler import QuantileSampler, SamplingStrategy
+from sklearn_meta.persistence.manifest import read_manifest, write_manifest
 
 if TYPE_CHECKING:
     from sklearn_meta.core.tuning.joint_quantile_orchestrator import (
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
         JointQuantileFitResult,
     )
 
-MANIFEST_FILENAME = "manifest.json"
 MANIFEST_VERSION = 1
 
 
@@ -105,8 +104,7 @@ class JointQuantileFittedGraph:
             "node_files": node_files,
         }
 
-        with open(directory / MANIFEST_FILENAME, "w") as f:
-            json.dump(manifest, f, indent=2)
+        write_manifest(directory, manifest)
 
     @classmethod
     def load(cls, directory: Union[str, Path]) -> "JointQuantileFittedGraph":
@@ -127,9 +125,7 @@ class JointQuantileFittedGraph:
         )
 
         directory = Path(directory)
-
-        with open(directory / MANIFEST_FILENAME) as f:
-            manifest = json.load(f)
+        manifest = read_manifest(directory)
 
         # Load fitted nodes
         fitted_nodes: Dict[str, FittedQuantileNode] = {}

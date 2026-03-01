@@ -7,10 +7,10 @@ import pandas as pd
 import pytest
 
 from sklearn_meta.core.model.joint_quantile_fitted import (
-    MANIFEST_FILENAME,
     MANIFEST_VERSION,
     JointQuantileFittedGraph,
 )
+from sklearn_meta.persistence.manifest import MANIFEST_FILENAME
 from sklearn_meta.core.model.joint_quantile_graph import JointQuantileConfig, JointQuantileGraph
 from sklearn_meta.core.model.quantile_sampler import QuantileSampler, SamplingStrategy
 from sklearn_meta.core.tuning.joint_quantile_orchestrator import FittedQuantileNode

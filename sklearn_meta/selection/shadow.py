@@ -45,17 +45,112 @@ class ShadowFeatureSelector:
         self,
         importance_extractor: Optional[ImportanceExtractor] = None,
         n_shadows: int = 5,
+        n_clusters: Optional[int] = None,
         threshold_mult: float = 1.414,  # sqrt(2)
         random_state: int = 42,
         covariance_sample_size: int = 50000,
     ) -> None:
         self.importance_extractor = importance_extractor
         self.n_shadows = max(1, int(n_shadows))
+        # Compatibility attribute retained for callers/tests from the previous
+        # entropy-clustering implementation.
+        self.n_clusters = max(
+            1, int(n_clusters if n_clusters is not None else self.n_shadows)
+        )
         self.threshold_mult = threshold_mult
         self.random_state = random_state
         self.covariance_sample_size = covariance_sample_size
 
         self._importance_registry = ImportanceRegistry()
+
+    def _compute_entropy(self, values: pd.Series) -> float:
+        """Estimate Shannon entropy in bits for a feature column.
+
+        Uses exact counts for low-cardinality columns and histogram binning for
+        higher-cardinality numeric data. This preserves the older helper API
+        used by tests and ad hoc inspection code.
+        """
+        series = pd.Series(values).dropna()
+        if series.empty:
+            return 0.0
+
+        n_unique = int(series.nunique(dropna=True))
+        if n_unique <= 64:
+            probs = (
+                series.value_counts(normalize=True, dropna=True)
+                .to_numpy(dtype=float)
+            )
+        else:
+            numeric = pd.to_numeric(series, errors="coerce").dropna()
+            if numeric.empty:
+                probs = (
+                    series.astype(str)
+                    .value_counts(normalize=True, dropna=True)
+                    .to_numpy(dtype=float)
+                )
+            else:
+                counts, _ = np.histogram(numeric.to_numpy(dtype=float), bins=64)
+                probs = counts[counts > 0].astype(float)
+                probs /= probs.sum()
+
+        if len(probs) == 0:
+            return 0.0
+        return float(-np.sum(probs * np.log2(probs)))
+
+    def _cluster_features_by_entropy(
+        self,
+        X: pd.DataFrame,
+        feature_cols: List[str],
+    ) -> Dict[int, List[str]]:
+        """Group features into entropy bands.
+
+        This is a compatibility helper for the previous API. The current
+        pruning algorithm does not depend on these clusters.
+        """
+        if not feature_cols:
+            return {}
+
+        n_clusters = min(self.n_clusters, len(feature_cols))
+        ranked = sorted(
+            feature_cols,
+            key=lambda col: (self._compute_entropy(X[col]), col),
+        )
+
+        clusters: Dict[int, List[str]] = {idx: [] for idx in range(n_clusters)}
+        for idx, feature in enumerate(ranked):
+            clusters[idx % n_clusters].append(feature)
+        return clusters
+
+    def _create_shadow_features(
+        self,
+        X: pd.DataFrame,
+        feature_cols: List[str],
+    ) -> tuple[pd.DataFrame, Dict[str, str]]:
+        """Build an augmented DataFrame with one compatibility shadow per feature."""
+        if not feature_cols:
+            return X.copy(), {}
+
+        X_base = X[feature_cols].copy()
+        rng = np.random.default_rng(self.random_state)
+        z_shadow = self._sample_shadow_latents(X_base, feature_cols, rng)
+
+        shadow_cols: Dict[str, np.ndarray] = {}
+        feature_to_shadow: Dict[str, str] = {}
+        for idx, feat in enumerate(feature_cols):
+            shadow_name = f"__shadow_{idx}_{feat}"
+            ref = (
+                pd.to_numeric(X_base[feat], errors="coerce")
+                .fillna(0.0)
+                .to_numpy(dtype=float)
+            )
+            shadow_cols[shadow_name] = self._map_to_empirical_distribution(
+                z_shadow[:, idx],
+                ref,
+            )
+            feature_to_shadow[feat] = shadow_name
+
+        shadow_df = pd.DataFrame(shadow_cols, index=X_base.index)
+        return pd.concat([X_base, shadow_df], axis=1), feature_to_shadow
 
     @staticmethod
     def _standardize(values: np.ndarray) -> np.ndarray:

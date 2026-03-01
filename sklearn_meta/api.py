@@ -296,30 +296,24 @@ class NodeBuilder:
         """Build and return the ModelGraph."""
         return self._graph_builder.build()
 
-    # Forward graph-level methods to GraphBuilder for fluent API
-    def with_cv(self, *args, **kwargs) -> GraphBuilder:
-        """Configure cross-validation (forwards to GraphBuilder)."""
-        return self._graph_builder.with_cv(*args, **kwargs)
+    _MISSING = object()
 
-    def with_tuning(self, *args, **kwargs) -> GraphBuilder:
-        """Configure hyperparameter tuning (forwards to GraphBuilder)."""
-        return self._graph_builder.with_tuning(*args, **kwargs)
+    def __getattr__(self, name: str):
+        """Delegate graph-level methods (with_cv, with_tuning, fit, etc.) to GraphBuilder.
 
-    def with_feature_selection(self, *args, **kwargs) -> GraphBuilder:
-        """Configure feature selection (forwards to GraphBuilder)."""
-        return self._graph_builder.with_feature_selection(*args, **kwargs)
-
-    def with_reparameterization(self, *args, **kwargs) -> GraphBuilder:
-        """Configure reparameterization (forwards to GraphBuilder)."""
-        return self._graph_builder.with_reparameterization(*args, **kwargs)
-
-    def create_orchestrator(self, *args, **kwargs) -> TuningOrchestrator:
-        """Create TuningOrchestrator (forwards to GraphBuilder)."""
-        return self._graph_builder.create_orchestrator(*args, **kwargs)
-
-    def fit(self, *args, **kwargs) -> FittedGraph:
-        """Fit the graph (forwards to GraphBuilder)."""
-        return self._graph_builder.fit(*args, **kwargs)
+        This allows fluent transitions from node-level configuration to
+        graph-level configuration without maintaining explicit forwarding
+        methods for every graph-level concern.
+        """
+        # Only delegate public methods to avoid masking internal errors
+        if not name.startswith("_"):
+            graph_builder = object.__getattribute__(self, "_graph_builder")
+            attr = getattr(graph_builder, name, NodeBuilder._MISSING)
+            if attr is not NodeBuilder._MISSING:
+                return attr
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'"
+        )
 
 
 class GraphBuilder:

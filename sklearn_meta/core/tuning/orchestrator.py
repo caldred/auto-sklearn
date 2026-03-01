@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import datetime
+import hashlib
+import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 import logging
 
 import inspect
@@ -13,11 +18,16 @@ import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 
 from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVFold, CVResult, FoldResult
+from sklearn_meta.core.data.cv import CVConfig, CVFold, CVResult, CVStrategy, FoldResult
 from sklearn_meta.core.data.manager import DataManager
 from sklearn_meta.core.model.dependency import DependencyType
 from sklearn_meta.core.model.graph import ModelGraph
 from sklearn_meta.core.model.node import ModelNode, OutputType
+from sklearn_meta.core.tuning.estimator_scaling import (
+    EstimatorScaler,
+    EstimatorScalingConfig,
+    supports_param,
+)
 from sklearn_meta.core.tuning.strategy import OptimizationStrategy
 from sklearn_meta.search.backends.base import OptimizationResult, SearchBackend
 from sklearn_meta.meta.reparameterization import Reparameterization, ReparameterizedSpace
@@ -25,6 +35,12 @@ from sklearn_meta.meta.prebaked import get_prebaked_reparameterization
 from sklearn_meta.core.tuning._metrics import log_feature_selection
 from sklearn_meta.selection.selector import FeatureSelector, FeatureSelectionResult
 from sklearn_meta.persistence.cache import FitCache
+from sklearn_meta.persistence.manifest import (
+    MANIFEST_FILENAME,
+    read_manifest,
+    to_json_safe,
+    write_manifest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +133,223 @@ class FittedNode:
 
 
 @dataclass
+class RunMetadata:
+    """Structured metadata captured during a training run."""
+
+    timestamp: str  # ISO 8601 format
+    sklearn_meta_version: str
+    data_shape: Tuple[int, int]  # (n_samples, n_features)
+    feature_names: List[str]
+    cv_config: Optional[Dict[str, Any]]  # Serialized CVConfig
+    tuning_config_summary: Dict[str, Any]  # Key tuning config fields
+    total_trials: int  # Total optimization trials across all nodes
+    data_hash: Optional[str]  # SHA256 of X for reproducibility
+    random_state: Optional[int]  # CV random state if available
+
+
+MANIFEST_VERSION = 2
+TRAINING_ARTIFACTS_FILENAME = "training_artifacts.joblib"
+
+
+def _serialize_cv_config(cv_config: Optional[CVConfig]) -> Optional[Dict[str, Any]]:
+    """Serialize CVConfig, including nested inner_cv, to JSON-safe data."""
+    if cv_config is None:
+        return None
+    return {
+        "n_splits": cv_config.n_splits,
+        "n_repeats": cv_config.n_repeats,
+        "strategy": cv_config.strategy.value,
+        "shuffle": cv_config.shuffle,
+        "random_state": cv_config.random_state,
+        "inner_cv": _serialize_cv_config(cv_config.inner_cv),
+    }
+
+
+def _deserialize_cv_config(data: Optional[Dict[str, Any]]) -> Optional[CVConfig]:
+    """Reconstruct CVConfig from serialized data."""
+    if data is None:
+        return None
+    return CVConfig(
+        n_splits=data["n_splits"],
+        n_repeats=data.get("n_repeats", 1),
+        strategy=CVStrategy(data.get("strategy", CVStrategy.STRATIFIED.value)),
+        shuffle=data.get("shuffle", True),
+        random_state=data.get("random_state", 42),
+        inner_cv=_deserialize_cv_config(data.get("inner_cv")),
+    )
+
+
+def _serialize_feature_selection_config(config) -> Optional[Dict[str, Any]]:
+    """Serialize FeatureSelectionConfig to JSON-safe data."""
+    if config is None:
+        return None
+    return {
+        "enabled": config.enabled,
+        "method": config.method.value,
+        "n_shadows": config.n_shadows,
+        "threshold_mult": config.threshold_mult,
+        "threshold_percentile": config.threshold_percentile,
+        "retune_after_pruning": config.retune_after_pruning,
+        "min_features": config.min_features,
+        "max_features": config.max_features,
+        "random_state": config.random_state,
+        "feature_groups": config.feature_groups,
+    }
+
+
+def _deserialize_feature_selection_config(data):
+    """Reconstruct FeatureSelectionConfig from serialized data."""
+    if data is None:
+        return None
+    from sklearn_meta.selection.selector import (
+        FeatureSelectionConfig,
+        FeatureSelectionMethod,
+    )
+
+    return FeatureSelectionConfig(
+        enabled=data.get("enabled", True),
+        method=FeatureSelectionMethod(data.get("method", "shadow")),
+        n_shadows=data.get("n_shadows", 5),
+        threshold_mult=data.get("threshold_mult", 1.414),
+        threshold_percentile=data.get("threshold_percentile", 10.0),
+        retune_after_pruning=data.get("retune_after_pruning", True),
+        min_features=data.get("min_features", 1),
+        max_features=data.get("max_features"),
+        random_state=data.get("random_state", 42),
+        feature_groups=data.get("feature_groups"),
+    )
+
+
+def _serialize_tuning_config(config: TuningConfig) -> Dict[str, Any]:
+    """Serialize TuningConfig for persistence.
+
+    custom_reparameterizations are intentionally not persisted because they are
+    training-time objects and may contain arbitrary Python behavior.
+    """
+    return {
+        "strategy": config.strategy.value,
+        "n_trials": config.n_trials,
+        "timeout": config.timeout,
+        "early_stopping_rounds": config.early_stopping_rounds,
+        "cv_config": _serialize_cv_config(config.cv_config),
+        "metric": config.metric,
+        "greater_is_better": config.greater_is_better,
+        "feature_selection": _serialize_feature_selection_config(
+            config.feature_selection
+        ),
+        "use_reparameterization": config.use_reparameterization,
+        "verbose": config.verbose,
+        "tuning_n_estimators": config.tuning_n_estimators,
+        "final_n_estimators": config.final_n_estimators,
+        "estimator_scaling_search": config.estimator_scaling_search,
+        "estimator_scaling_factors": config.estimator_scaling_factors,
+        "show_progress": config.show_progress,
+    }
+
+
+def _deserialize_tuning_config(data: Dict[str, Any]) -> TuningConfig:
+    """Reconstruct TuningConfig from serialized data.
+
+    custom_reparameterizations are always restored as None.
+    """
+    defaults = TuningConfig()
+    return TuningConfig(
+        strategy=OptimizationStrategy(
+            data.get("strategy", defaults.strategy.value)
+        ),
+        n_trials=data.get("n_trials", defaults.n_trials),
+        timeout=data.get("timeout", defaults.timeout),
+        early_stopping_rounds=data.get(
+            "early_stopping_rounds", defaults.early_stopping_rounds
+        ),
+        cv_config=_deserialize_cv_config(data.get("cv_config")),
+        metric=data.get("metric", defaults.metric),
+        greater_is_better=data.get(
+            "greater_is_better", defaults.greater_is_better
+        ),
+        feature_selection=_deserialize_feature_selection_config(
+            data.get("feature_selection")
+        ),
+        use_reparameterization=data.get(
+            "use_reparameterization", defaults.use_reparameterization
+        ),
+        custom_reparameterizations=None,
+        verbose=data.get("verbose", defaults.verbose),
+        tuning_n_estimators=data.get(
+            "tuning_n_estimators", defaults.tuning_n_estimators
+        ),
+        final_n_estimators=data.get(
+            "final_n_estimators", defaults.final_n_estimators
+        ),
+        estimator_scaling_search=data.get(
+            "estimator_scaling_search", defaults.estimator_scaling_search
+        ),
+        estimator_scaling_factors=data.get(
+            "estimator_scaling_factors", defaults.estimator_scaling_factors
+        ),
+        show_progress=data.get("show_progress", defaults.show_progress),
+    )
+
+
+def _serialize_run_metadata(metadata: RunMetadata) -> Dict[str, Any]:
+    """Serialize RunMetadata to JSON-safe data."""
+    return {
+        "timestamp": metadata.timestamp,
+        "sklearn_meta_version": metadata.sklearn_meta_version,
+        "data_shape": metadata.data_shape,
+        "feature_names": metadata.feature_names,
+        "cv_config": metadata.cv_config,
+        "tuning_config_summary": metadata.tuning_config_summary,
+        "total_trials": metadata.total_trials,
+        "data_hash": metadata.data_hash,
+        "random_state": metadata.random_state,
+    }
+
+
+def _deserialize_run_metadata(data: Dict[str, Any]) -> RunMetadata:
+    """Reconstruct RunMetadata from serialized data."""
+    return RunMetadata(
+        timestamp=data["timestamp"],
+        sklearn_meta_version=data["sklearn_meta_version"],
+        data_shape=tuple(data["data_shape"]),
+        feature_names=data["feature_names"],
+        cv_config=data["cv_config"],
+        tuning_config_summary=data["tuning_config_summary"],
+        total_trials=data["total_trials"],
+        data_hash=data["data_hash"],
+        random_state=data["random_state"],
+    )
+
+
+def _build_inference_only_cv_result(
+    node_name: str,
+    models: List[Any],
+    mean_score: float,
+) -> CVResult:
+    """Build a minimal CVResult for inference-only artifacts."""
+    fold_results = []
+    for index, model in enumerate(models):
+        fold = CVFold(
+            fold_idx=index,
+            train_indices=np.array([], dtype=int),
+            val_indices=np.array([], dtype=int),
+        )
+        fold_results.append(
+            FoldResult(
+                fold=fold,
+                model=model,
+                val_predictions=np.array([]),
+                val_score=mean_score,
+            )
+        )
+    return CVResult(
+        fold_results=fold_results,
+        oof_predictions=np.array([]),
+        node_name=node_name,
+    )
+
+
+@dataclass
 class FittedGraph:
     """
     Result of fitting the entire model graph.
@@ -126,37 +359,113 @@ class FittedGraph:
         fitted_nodes: Dictionary mapping node names to fitted results.
         tuning_config: Configuration used for tuning.
         total_time: Total time taken in seconds.
+        metadata: Structured metadata captured during the training run.
     """
 
     graph: ModelGraph
     fitted_nodes: Dict[str, FittedNode]
     tuning_config: TuningConfig
     total_time: float = 0.0
+    metadata: Optional[RunMetadata] = None
+    _training_artifacts_available: bool = field(default=True, repr=False)
 
     def get_node(self, name: str) -> FittedNode:
         """Get a fitted node by name."""
         return self.fitted_nodes[name]
 
+    @property
+    def training_artifacts_available(self) -> bool:
+        """Whether training-only artifacts are available on this fitted graph."""
+        return self._training_artifacts_available
+
     def get_oof_predictions(self, name: str) -> np.ndarray:
         """Get OOF predictions for a node."""
+        if not self.training_artifacts_available:
+            raise RuntimeError(
+                "This artifact was loaded without training artifacts. "
+                "OOF predictions are unavailable. Save with "
+                "include_training_artifacts=True to preserve them."
+            )
         return self.fitted_nodes[name].oof_predictions
 
     def predict(self, X, node_name: Optional[str] = None) -> np.ndarray:
         """
         Make predictions using the fitted graph.
 
+        Recursively resolves upstream dependencies to produce predictions for the
+        requested node. If no node_name is specified, the first leaf node (a node
+        with no downstream dependents) is used.
+
+        **Output types:**
+        - PREDICTION: Each fold model calls ``predict(X)``; results are averaged.
+        - PROBA: Each fold model calls ``predict_proba(X)``; probability arrays
+          are averaged across folds.
+        - TRANSFORM: Not typically used as a final output, but the transformed
+          features are passed downstream when used as an intermediate node.
+
+        **Stacking at inference time:**
+        For stacking graphs, upstream node predictions are computed first
+        (recursively) and injected as additional columns into the feature
+        matrix before predicting the current node. A prediction cache ensures
+        each upstream node is computed at most once per ``predict()`` call.
+
+        **Feature selection:**
+        If feature selection was applied during fitting, the same selected
+        features are used at inference time. The augmented feature matrix
+        (original features + upstream predictions) is filtered to only the
+        columns in ``fitted_node.selected_features``.
+
+        **Fold ensembling:**
+        Predictions from all CV fold models are averaged (``np.mean``) to
+        produce the final output. This applies to both ``predict`` and
+        ``predict_proba`` outputs.
+
+        **Conditional nodes:**
+        Nodes with a ``condition`` that evaluated to False during fitting are
+        not present in ``fitted_nodes``. Attempting to predict from such a
+        node, or from a node that depends on a skipped conditional node,
+        raises a ``KeyError``.
+
         Args:
-            X: Input features.
-            node_name: Specific node to predict from (default: first leaf node).
+            X: Input features as a pandas DataFrame. Must contain the same
+                columns used during fitting (plus any upstream prediction
+                columns will be added automatically).
+            node_name: Name of the node to predict from. If None, defaults
+                to the first leaf node in the graph.
 
         Returns:
-            Predictions array.
+            Predictions as a numpy array. Shape is ``(n_samples,)`` for
+            PREDICTION output type, or ``(n_samples, n_classes)`` for PROBA.
+
+        Raises:
+            KeyError: If ``node_name`` does not exist in ``fitted_nodes``, or
+                if a required upstream node was skipped during fitting (e.g.,
+                a conditional node whose condition was False).
+            ValueError: If the graph has no leaf nodes.
         """
         if node_name is None:
             leaves = self.graph.get_leaf_nodes()
             if not leaves:
                 raise ValueError("Graph has no leaf nodes")
             node_name = leaves[0]
+
+        if node_name not in self.fitted_nodes:
+            if node_name in self.graph.nodes:
+                node = self.graph.get_node(node_name)
+                if node.is_conditional:
+                    raise KeyError(
+                        f"Node '{node_name}' was not fitted because its condition "
+                        f"evaluated to False during training. Cannot predict from "
+                        f"a skipped conditional node."
+                    )
+                raise KeyError(
+                    f"Node '{node_name}' exists in the graph but was not fitted. "
+                    f"Fitted nodes: {list(self.fitted_nodes.keys())}"
+                )
+            raise KeyError(
+                f"Node '{node_name}' not found in fitted graph. "
+                f"Available nodes: {list(self.fitted_nodes.keys())}"
+            )
 
         return self._predict_node(X, node_name)
 
@@ -169,6 +478,13 @@ class FittedGraph:
 
         if node_name in cache:
             return cache[node_name]
+
+        if node_name not in self.fitted_nodes:
+            raise KeyError(
+                f"Upstream node '{node_name}' was not fitted (it may be a "
+                f"conditional node whose condition was False during training). "
+                f"Available nodes: {list(self.fitted_nodes.keys())}"
+            )
 
         fitted = self.fitted_nodes[node_name]
 
@@ -206,15 +522,286 @@ class FittedGraph:
         # Ensemble predictions from all fold models
         predictions = []
         for model in fitted.models:
-            if fitted.node.output_type == OutputType.PROBA:
-                predictions.append(model.predict_proba(X_augmented))
-            else:
-                predictions.append(model.predict(X_augmented))
+            predictions.append(fitted.node.get_output(model, X_augmented))
 
         # Average predictions
         result = np.mean(predictions, axis=0)
         cache[node_name] = result
         return result
+
+    def save(
+        self,
+        path: Union[str, Path],
+        include_training_artifacts: bool = False,
+    ) -> None:
+        """
+        Save the fitted graph to a directory.
+
+        Creates a directory structure with a manifest.json describing the
+        graph structure and tuning config, and joblib files for each fold
+        model of each fitted node.
+
+        Directory format::
+
+            {path}/
+                manifest.json
+                nodes/
+                    {node_name}/
+                        fold_0.joblib
+                        fold_1.joblib
+                        ...
+
+        Args:
+            path: Directory path to save to (will be created).
+            include_training_artifacts: If True, also persist OOF predictions,
+                fold metadata, and optimization results needed for training-time
+                inspection after load().
+
+        Raises:
+            OSError: If the directory cannot be created.
+        """
+        import joblib
+
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+        if include_training_artifacts and not self.training_artifacts_available:
+            raise RuntimeError(
+                "This artifact does not have in-memory training artifacts. "
+                "It cannot be re-saved with include_training_artifacts=True."
+            )
+
+        fitted_node_names = set(self.fitted_nodes)
+
+        # Save fold models for each fitted node
+        fitted_nodes_meta: Dict[str, Any] = {}
+        for node_name, fitted_node in self.fitted_nodes.items():
+            node_dir = path / "nodes" / node_name
+            node_dir.mkdir(parents=True, exist_ok=True)
+
+            models = fitted_node.models
+            for i, model in enumerate(models):
+                joblib.dump(model, node_dir / f"fold_{i}.joblib")
+
+            if include_training_artifacts:
+                joblib.dump(
+                    {
+                        "oof_predictions": fitted_node.oof_predictions,
+                        "fold_results": [
+                            {
+                                "fold_idx": fold_result.fold.fold_idx,
+                                "repeat_idx": fold_result.fold.repeat_idx,
+                                "train_indices": fold_result.fold.train_indices,
+                                "val_indices": fold_result.fold.val_indices,
+                                "val_predictions": fold_result.val_predictions,
+                                "val_score": fold_result.val_score,
+                                "train_score": fold_result.train_score,
+                                "fit_time": fold_result.fit_time,
+                                "predict_time": fold_result.predict_time,
+                                "params": fold_result.params,
+                            }
+                            for fold_result in fitted_node.cv_result.fold_results
+                        ],
+                        "optimization_result": fitted_node.optimization_result,
+                    },
+                    node_dir / TRAINING_ARTIFACTS_FILENAME,
+                )
+
+            fitted_nodes_meta[node_name] = to_json_safe({
+                "best_params": fitted_node.best_params,
+                "selected_features": fitted_node.selected_features,
+                "mean_score": fitted_node.mean_score,
+                "n_folds": len(models),
+                "training_artifacts_included": include_training_artifacts,
+            }, path=f"fitted_nodes.{node_name}")
+
+        graph_nodes = [
+            to_json_safe(node.to_dict(), path=f"graph.nodes.{node.name}")
+            for node in self.graph.nodes.values()
+            if node.name in fitted_node_names
+        ]
+        graph_edges = [
+            to_json_safe(
+                edge.to_dict(),
+                path=f"graph.edges.{edge.source}->{edge.target}",
+            )
+            for edge in self.graph.edges
+            if edge.source in fitted_node_names and edge.target in fitted_node_names
+        ]
+
+        # Build manifest
+        manifest = {
+            "version": MANIFEST_VERSION,
+            "training_artifacts_included": include_training_artifacts,
+            "graph": {
+                "nodes": graph_nodes,
+                "edges": graph_edges,
+            },
+            "fitted_nodes": fitted_nodes_meta,
+            "tuning_config": to_json_safe(
+                _serialize_tuning_config(self.tuning_config),
+                path="tuning_config",
+            ),
+            "total_time": self.total_time,
+        }
+
+        if self.metadata is not None:
+            manifest["metadata"] = to_json_safe(
+                _serialize_run_metadata(self.metadata),
+                path="metadata",
+            )
+
+        write_manifest(path, manifest)
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> "FittedGraph":
+        """
+        Load a FittedGraph from a directory created by save().
+
+        Reads the manifest.json, reconstructs the ModelGraph, loads all
+        fold models from joblib files, and rebuilds FittedNode objects.
+        By default, loaded artifacts are inference-oriented. Training-only
+        artifacts such as OOF predictions are available only if the graph was
+        saved with include_training_artifacts=True.
+
+        Args:
+            path: Directory path containing saved artifacts.
+
+        Returns:
+            FittedGraph ready for inference.
+
+        Raises:
+            FileNotFoundError: If manifest.json or any expected fold file is missing.
+            ValueError: If manifest version is unsupported or JSON is corrupt.
+        """
+        import joblib
+        from sklearn_meta.core.model.dependency import DependencyEdge
+
+        path = Path(path)
+        manifest = read_manifest(path)
+
+        # Validate version
+        version = manifest.get("version")
+        if version not in (1, MANIFEST_VERSION):
+            raise ValueError(
+                f"Unsupported manifest version: {version}. "
+                f"Only versions 1 and {MANIFEST_VERSION} are supported."
+            )
+        is_legacy_manifest = version == 1
+
+        # Reconstruct ModelGraph
+        graph = ModelGraph()
+        for node_data in manifest["graph"]["nodes"]:
+            graph.add_node(ModelNode.from_dict(node_data))
+        for edge_data in manifest["graph"]["edges"]:
+            graph.add_edge(DependencyEdge.from_dict(edge_data))
+
+        # Load fitted nodes
+        fitted_nodes: Dict[str, FittedNode] = {}
+        training_artifacts_available = (
+            False if is_legacy_manifest
+            else bool(manifest.get("training_artifacts_included", False))
+        )
+        for node_name, node_meta in manifest["fitted_nodes"].items():
+            n_folds = node_meta["n_folds"]
+            node_dir = path / "nodes" / node_name
+
+            # Load fold models
+            models = []
+            for i in range(n_folds):
+                fold_path = node_dir / f"fold_{i}.joblib"
+                try:
+                    models.append(joblib.load(fold_path))
+                except FileNotFoundError:
+                    raise FileNotFoundError(
+                        f"Missing fold model file: {fold_path}. "
+                        f"Expected {n_folds} fold files for node '{node_name}'."
+                    ) from None
+
+            node_has_training_artifacts = (
+                False if is_legacy_manifest
+                else bool(node_meta.get("training_artifacts_included", False))
+            )
+            training_artifacts_available = (
+                training_artifacts_available and node_has_training_artifacts
+            )
+
+            optimization_result = None
+            if node_has_training_artifacts:
+                training_artifacts_path = node_dir / TRAINING_ARTIFACTS_FILENAME
+                try:
+                    training_data = joblib.load(training_artifacts_path)
+                except FileNotFoundError:
+                    raise FileNotFoundError(
+                        f"Missing training artifacts file: {training_artifacts_path}. "
+                        f"Expected training artifacts for node '{node_name}'."
+                    ) from None
+                fold_meta = training_data["fold_results"]
+                if len(fold_meta) != len(models):
+                    raise ValueError(
+                        f"Training artifacts for node '{node_name}' are inconsistent. "
+                        f"Expected {len(models)} fold records, got {len(fold_meta)}."
+                    )
+
+                fold_results = []
+                for model, fold_data in zip(models, fold_meta):
+                    fold = CVFold(
+                        fold_idx=fold_data["fold_idx"],
+                        train_indices=np.asarray(fold_data["train_indices"]),
+                        val_indices=np.asarray(fold_data["val_indices"]),
+                        repeat_idx=fold_data.get("repeat_idx", 0),
+                    )
+                    fold_results.append(
+                        FoldResult(
+                            fold=fold,
+                            model=model,
+                            val_predictions=np.asarray(
+                                fold_data["val_predictions"]
+                            ),
+                            val_score=fold_data["val_score"],
+                            train_score=fold_data.get("train_score"),
+                            fit_time=fold_data.get("fit_time", 0.0),
+                            predict_time=fold_data.get("predict_time", 0.0),
+                            params=fold_data.get("params", {}),
+                        )
+                    )
+                cv_result = CVResult(
+                    fold_results=fold_results,
+                    oof_predictions=np.asarray(training_data["oof_predictions"]),
+                    node_name=node_name,
+                )
+                optimization_result = training_data.get("optimization_result")
+            else:
+                cv_result = _build_inference_only_cv_result(
+                    node_name=node_name,
+                    models=models,
+                    mean_score=node_meta["mean_score"],
+                )
+
+            fitted_nodes[node_name] = FittedNode(
+                node=graph.get_node(node_name),
+                cv_result=cv_result,
+                best_params=node_meta["best_params"],
+                optimization_result=optimization_result,
+                selected_features=node_meta["selected_features"],
+            )
+
+        # Reconstruct TuningConfig
+        tuning_config = _deserialize_tuning_config(manifest["tuning_config"])
+
+        # Reconstruct RunMetadata if present
+        metadata = None
+        if "metadata" in manifest:
+            metadata = _deserialize_run_metadata(manifest["metadata"])
+
+        return cls(
+            graph=graph,
+            fitted_nodes=fitted_nodes,
+            tuning_config=tuning_config,
+            total_time=manifest.get("total_time", 0.0),
+            metadata=metadata,
+            _training_artifacts_available=training_artifacts_available,
+        )
 
     def __repr__(self) -> str:
         return (
@@ -259,13 +846,8 @@ class _ClassifierPredictionWrapper(ClassifierMixin, _PredictionWrapper):
         return preds
 
 
-def _supports_param(estimator_class, param_name: str) -> bool:
-    """Check if an estimator class accepts a given parameter in __init__."""
-    sig = inspect.signature(estimator_class.__init__)
-    params = sig.parameters
-    return param_name in params or any(
-        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-    )
+# Backward-compatible alias for supports_param (moved to estimator_scaling module)
+_supports_param = supports_param
 
 
 class TuningOrchestrator:
@@ -350,11 +932,47 @@ class TuningOrchestrator:
 
         total_time = time.time() - start_time
 
+        # Build RunMetadata
+        import pandas as pd
+        import sklearn_meta
+
+        cv_cfg = self.tuning_config.cv_config
+        cv_config_dict = _serialize_cv_config(cv_cfg)
+        cv_random_state = cv_cfg.random_state if cv_cfg is not None else None
+
+        total_trials = sum(
+            fn.optimization_result.n_trials
+            for fn in fitted_nodes.values()
+            if fn.optimization_result is not None
+        )
+
+        data_hash = hashlib.sha256(
+            pd.util.hash_pandas_object(ctx.X).values.tobytes()
+        ).hexdigest()
+
+        metadata = RunMetadata(
+            timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            sklearn_meta_version=sklearn_meta.__version__,
+            data_shape=(len(ctx.X), len(ctx.feature_cols)),
+            feature_names=list(ctx.feature_cols),
+            cv_config=cv_config_dict,
+            tuning_config_summary={
+                "strategy": self.tuning_config.strategy.value,
+                "n_trials": self.tuning_config.n_trials,
+                "metric": self.tuning_config.metric,
+                "greater_is_better": self.tuning_config.greater_is_better,
+            },
+            total_trials=total_trials,
+            data_hash=data_hash,
+            random_state=cv_random_state,
+        )
+
         return FittedGraph(
             graph=self.graph,
             fitted_nodes=fitted_nodes,
             tuning_config=self.tuning_config,
             total_time=total_time,
+            metadata=metadata,
         )
 
     def _fit_nodes(
@@ -486,6 +1104,59 @@ class TuningOrchestrator:
                 best_params = plugin.post_tune(best_params, node, ctx)
 
         # Apply feature selection if configured
+        ctx, best_params, selected_features, fs_opt_result = (
+            self._apply_feature_selection(
+                node, ctx, best_params, search_space, reparam_space
+            )
+        )
+        if fs_opt_result is not None:
+            opt_result = fs_opt_result
+
+        # Apply estimator scaling if configured
+        scaling_config = EstimatorScalingConfig(
+            tuning_n_estimators=self.tuning_config.tuning_n_estimators,
+            final_n_estimators=self.tuning_config.final_n_estimators,
+            scaling_search=self.tuning_config.estimator_scaling_search,
+            scaling_factors=self.tuning_config.estimator_scaling_factors,
+        )
+        scaler = EstimatorScaler(scaling_config, self.tuning_config.greater_is_better)
+
+        cv_result = None
+        if scaling_config.scaling_search:
+            best_params, cv_result = scaler.search_scaling(
+                node, ctx, best_params,
+                lambda params: self._cross_validate(node, ctx, params),
+            )
+        elif (scaling_config.tuning_n_estimators is not None
+                and scaling_config.final_n_estimators is not None):
+            best_params = scaler.apply_fixed_scaling(node, best_params)
+
+        # Final CV with best params (skip if already done in scaling search)
+        if cv_result is None:
+            cv_result = self._cross_validate(node, ctx, best_params)
+
+        return FittedNode(
+            node=node,
+            cv_result=cv_result,
+            best_params=best_params,
+            optimization_result=opt_result,
+            selected_features=selected_features,
+        )
+
+    def _apply_feature_selection(
+        self,
+        node: ModelNode,
+        ctx: DataContext,
+        best_params: Dict[str, Any],
+        search_space,
+        reparam_space,
+    ) -> Tuple[DataContext, Dict[str, Any], Optional[List[str]], Optional[OptimizationResult]]:
+        """Apply feature selection and optional re-tuning.
+
+        Returns:
+            Tuple of (updated context, updated best_params,
+            selected_features, updated opt_result or None).
+        """
         selected_features = None
         if (self.tuning_config.feature_selection and
                 self.tuning_config.feature_selection.enabled):
@@ -524,135 +1195,9 @@ class TuningOrchestrator:
                     best_params, opt_result = self._optimize_node(
                         node, ctx, narrowed_space, None  # Don't use reparam on narrowed space
                     )
+                    return ctx, best_params, selected_features, opt_result
 
-        # Search for optimal n_estimators scaling if configured
-        cv_result = None
-        if self.tuning_config.estimator_scaling_search:
-            best_params, cv_result = self._search_estimator_scaling(node, ctx, best_params)
-        # Or use fixed scaling if configured
-        elif (self.tuning_config.tuning_n_estimators is not None and
-                self.tuning_config.final_n_estimators is not None):
-            if not _supports_param(node.estimator_class, "n_estimators"):
-                logger.warning(
-                    f"Skipping n_estimators scaling for '{node.name}': "
-                    f"{node.estimator_class.__name__} does not support n_estimators"
-                )
-            else:
-                tuning_n = self.tuning_config.tuning_n_estimators
-                final_n = self.tuning_config.final_n_estimators
-                scale_factor = tuning_n / final_n
-
-                best_params = dict(best_params)  # Copy to avoid mutation
-                best_params["n_estimators"] = final_n
-
-                # Scale learning_rate proportionally
-                if "learning_rate" in best_params:
-                    old_lr = best_params["learning_rate"]
-                    best_params["learning_rate"] = old_lr * scale_factor
-                    logger.info(
-                        f"Scaled for final model: n_estimators {tuning_n} -> {final_n}, "
-                        f"learning_rate {old_lr:.6f} -> {best_params['learning_rate']:.6f}"
-                    )
-
-        # Final CV with best params (skip if already done in scaling search)
-        if cv_result is None:
-            cv_result = self._cross_validate(node, ctx, best_params)
-
-        return FittedNode(
-            node=node,
-            cv_result=cv_result,
-            best_params=best_params,
-            optimization_result=opt_result,
-            selected_features=selected_features,
-        )
-
-    def _search_estimator_scaling(
-        self,
-        node: ModelNode,
-        ctx: DataContext,
-        best_params: Dict[str, Any],
-    ) -> Tuple[Dict[str, Any], CVResult]:
-        """Search for optimal n_estimators/learning_rate scaling.
-
-        Tests scaling factors [1, 2, 5, 10, 20] (or custom with 1 prepended),
-        scaling n_estimators up and learning_rate down proportionally.
-        Stops early if performance degrades.
-
-        Args:
-            node: The model node.
-            ctx: Data context.
-            best_params: Best parameters from tuning.
-
-        Returns:
-            Tuple of (parameters with optimal scaling, CV result for best scaling).
-        """
-        scaling_factors = [1] + (self.tuning_config.estimator_scaling_factors or [2, 5, 10, 20])
-
-        if ("n_estimators" not in best_params
-                and not _supports_param(node.estimator_class, "n_estimators")):
-            logger.warning(
-                f"Skipping estimator scaling search for '{node.name}': "
-                f"{node.estimator_class.__name__} does not support n_estimators"
-            )
-            cv_result = self._cross_validate(node, ctx, best_params)
-            return best_params, cv_result
-
-        base_n_estimators = best_params.get("n_estimators", 100)
-        base_lr = best_params.get("learning_rate")
-
-        if base_lr is None:
-            logger.warning("No learning_rate in params, skipping estimator scaling search")
-            cv_result = self._cross_validate(node, ctx, best_params)
-            return best_params, cv_result
-
-        logger.info(
-            f"Estimator scaling search: base n_estimators={base_n_estimators}, "
-            f"lr={base_lr:.6f}"
-        )
-
-        best_scale = 1
-        best_score = None
-        best_scaled_params = dict(best_params)
-        best_cv_result = None
-
-        for scale in scaling_factors:
-            scaled_params = dict(best_params)
-            scaled_params["n_estimators"] = base_n_estimators * scale
-            scaled_params["learning_rate"] = base_lr / scale
-
-            cv_result = self._cross_validate(node, ctx, scaled_params)
-            score = cv_result.mean_score
-
-            # Check if better (accounting for metric direction)
-            if best_score is None:
-                is_better = True  # First run (1x baseline)
-            elif self.tuning_config.greater_is_better:
-                is_better = score > best_score
-            else:
-                is_better = score < best_score
-
-            status = "(baseline)" if scale == 1 else ("(better)" if is_better else "(worse)")
-            logger.info(
-                f"  {scale}x: n_estimators={scaled_params['n_estimators']}, "
-                f"lr={scaled_params['learning_rate']:.6f}, score={score:.5f} {status}"
-            )
-
-            if is_better:
-                best_scale = scale
-                best_score = score
-                best_scaled_params = scaled_params
-                best_cv_result = cv_result
-            elif scale > 1:
-                # Early stopping: performance degraded (only after baseline)
-                logger.info(f"  Stopping search (performance degraded at {scale}x)")
-                break
-
-        logger.info(
-            f"Best scaling: {best_scale}x (n_estimators={best_scaled_params['n_estimators']}, "
-            f"lr={best_scaled_params['learning_rate']:.6f}, score={best_score:.5f})"
-        )
-
-        return best_scaled_params, best_cv_result
+        return ctx, best_params, selected_features, None
 
     def _optimize_node(
         self,
@@ -682,7 +1227,7 @@ class TuningOrchestrator:
 
         _use_tuning_n_estimators = (
             self.tuning_config.tuning_n_estimators is not None
-            and _supports_param(node.estimator_class, "n_estimators")
+            and supports_param(node.estimator_class, "n_estimators")
         )
 
         def objective(params: Dict[str, Any]) -> float:
@@ -930,13 +1475,18 @@ class TuningOrchestrator:
         oof_cache: Dict[str, np.ndarray],
     ) -> DataContext:
         """Prepare context by adding OOF predictions from upstream nodes."""
-        # Collect all upstream nodes for the target nodes
-        all_upstream = set()
+        # Collect all upstream edges for the target nodes, preserving insertion
+        # order so that feature columns match the order used at predict time
+        # (which iterates graph.get_upstream in list order).
+        seen = set()
+        all_upstream = []
         for node_name in node_names:
             for edge in self.graph.get_upstream(node_name):
                 if edge.dep_type == DependencyType.DISTILL:
                     continue  # handled per-node, not as features
-                all_upstream.add(edge)
+                if edge not in seen:
+                    seen.add(edge)
+                    all_upstream.append(edge)
 
         if not all_upstream:
             return ctx
