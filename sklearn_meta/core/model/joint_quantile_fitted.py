@@ -28,10 +28,13 @@ class JointQuantileFittedGraph:
     """
     Inference interface for fitted joint quantile models.
 
+    Inference interface for fitted joint quantile models.
+
     Provides methods for:
     - Joint sampling from the multivariate distribution
     - Point predictions (median, specific quantiles)
     - Quantile predictions for each property
+    - Saving/loading model artifacts to/from disk
 
     The joint sampling uses the chain rule decomposition:
     P(Y₁, Y₂, ..., Yₙ | X) = P(Y₁|X) × P(Y₂|X,Y₁) × P(Y₃|X,Y₁,Y₂) × ...
@@ -52,13 +55,11 @@ class JointQuantileFittedGraph:
         samples = fitted.sample_joint(X_test, n_samples=1000)
         # Returns: (n_test, 1000, n_properties)
 
-        # Get median predictions
-        medians = fitted.predict_median(X_test)
-        # Returns: (n_test, n_properties)
+        # Save to disk
+        fitted.save("./models/joint_quantile/")
 
-        # Get specific quantile
-        q90 = fitted.predict_quantile(X_test, q=0.9)
-        # Returns: (n_test, n_properties)
+        # Load from disk
+        loaded = JointQuantileFittedGraph.load("./models/joint_quantile/")
     """
 
     graph: JointQuantileGraph

@@ -642,6 +642,18 @@ fitted = joblib.load("my_pipeline.joblib")
 predictions = fitted.predict(X_test)
 ```
 
+For joint quantile models, each property's model is saved as an independent artifact with a JSON manifest capturing the graph structure. See [Joint Quantile Regression — Saving and Loading Models](docs/joint-quantile-regression.md#saving-and-loading-models):
+
+```python
+from sklearn_meta.core.model.joint_quantile_fitted import JointQuantileFittedGraph
+
+# Save — creates one .joblib per property + manifest.json
+fitted.save("./models/joint_quantile/")
+
+# Load — ready for inference
+loaded = JointQuantileFittedGraph.load("./models/joint_quantile/")
+```
+
 ## Advanced Usage
 
 ### Low-Level API

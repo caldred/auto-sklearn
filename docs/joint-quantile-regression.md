@@ -112,6 +112,11 @@ graph TB
         QS[QuantileSampler]
     end
 
+    subgraph "Persistence"
+        MF[manifest.json]
+        JL[.joblib files]
+    end
+
     JQC --> JQG
     OC --> JQC
     QSC --> JQC
@@ -121,6 +126,10 @@ graph TB
     JQO --> FQN
     FQN --> JQFG
     JQFG --> QS
+    JQFG --> |"save()"| MF
+    JQFG --> |"save()"| JL
+    MF --> |"load()"| JQFG
+    JL --> |"load()"| JQFG
 ```
 
 ---
@@ -182,6 +191,12 @@ samples = fitted.sample_joint(X_test, n_samples=1000)
 # 7. Point predictions
 medians = fitted.predict_median(X_test)  # Shape: (n_test, 3)
 q90 = fitted.predict_quantile(X_test, q=0.9)  # 90th percentile
+
+# 8. Save for later use
+fitted.save("./models/joint_quantile/")
+
+# 9. Load from disk (no training code needed)
+loaded = JointQuantileFittedGraph.load("./models/joint_quantile/")
 ```
 
 ---
@@ -556,6 +571,14 @@ for i, prop in enumerate(["price", "volume", "volatility"]):
     coverage = np.mean((y_true >= q10[:, i]) & (y_true <= q90[:, i]))
     print(f"{prop}: 80% interval coverage = {coverage:.1%}")
 
+# === Save and Reload ===
+fitted.save("./models/joint_quantile/")
+loaded = JointQuantileFittedGraph.load("./models/joint_quantile/")
+
+# Verify loaded model produces same predictions
+loaded_medians = loaded.predict_median(X_test)
+assert np.allclose(medians, loaded_medians)
+
 # === Analyze Correlations ===
 print("\n=== Sample Correlations (should match data) ===")
 # True correlations
@@ -570,6 +593,78 @@ sample_corr = np.mean(sample_corrs, axis=0)
 
 print(f"True price-volume correlation:   {true_corr[0, 1]:.3f}")
 print(f"Sample price-volume correlation: {sample_corr[0, 1]:.3f}")
+```
+
+---
+
+## Saving and Loading Models
+
+Each property's fitted model is saved as an independent `.joblib` file, with a JSON manifest capturing the graph structure. This enables retraining individual properties without touching others, swapping nodes for experimentation, and cleaner deployment artifacts.
+
+### Save and Load
+
+```python
+# Save fitted graph to a directory
+fitted.save("./models/joint_quantile/")
+# Creates:
+#   models/joint_quantile/manifest.json
+#   models/joint_quantile/price.joblib
+#   models/joint_quantile/volume.joblib
+#   models/joint_quantile/volatility.joblib
+
+# Load from directory
+loaded = JointQuantileFittedGraph.load("./models/joint_quantile/")
+medians = loaded.predict_median(X_test)
+```
+
+### Training Artifacts
+
+By default, `save()` strips training-only data (OOF predictions, optimization results) for smaller files. Pass `include_training_artifacts=True` to keep them:
+
+```python
+# Production deployment (smaller files)
+fitted.save("./models/prod/")
+
+# Development (keep OOF predictions for diagnostics)
+fitted.save("./models/dev/", include_training_artifacts=True)
+```
+
+### Swapping Individual Nodes
+
+Since each property's model is independent, you can retrain one and swap it in:
+
+```python
+from sklearn_meta.core.tuning.joint_quantile_orchestrator import FittedQuantileNode
+
+# Load existing graph
+fitted = JointQuantileFittedGraph.load("./models/v1/")
+
+# Load a retrained node
+new_volume = FittedQuantileNode.load("./retrained_volume.joblib")
+fitted.fitted_nodes["volume"] = new_volume
+
+# Save updated version
+fitted.save("./models/v2/")
+```
+
+### Manifest Schema
+
+The `manifest.json` records graph structure and sampling configuration:
+
+```json
+{
+  "version": 1,
+  "property_order": ["price", "volume", "volatility"],
+  "quantile_levels": [0.1, 0.25, 0.5, 0.75, 0.9],
+  "sampling_strategy": "linear_interpolation",
+  "n_inference_samples": 1000,
+  "random_state": 42,
+  "node_files": {
+    "price": "price.joblib",
+    "volume": "volume.joblib",
+    "volatility": "volatility.joblib"
+  }
+}
 ```
 
 ---
@@ -670,9 +765,32 @@ class JointQuantileFittedGraph:
     def predict_median(self, X: pd.DataFrame) -> np.ndarray
     def predict_quantile(self, X: pd.DataFrame, q: float) -> np.ndarray
     def predict_quantiles_all(self, X: pd.DataFrame, quantiles: List[float] = None) -> np.ndarray
+    def save(self, directory: str | Path, include_training_artifacts: bool = False)
+    def get_property_quantiles(self, X: pd.DataFrame, property_name: str) -> np.ndarray
 
     @classmethod
     def from_fit_result(cls, fit_result: JointQuantileFitResult) -> JointQuantileFittedGraph
+    @classmethod
+    def load(cls, directory: str | Path) -> JointQuantileFittedGraph
+```
+
+### FittedQuantileNode
+
+```python
+class FittedQuantileNode:
+    def predict_quantiles(self, X: pd.DataFrame) -> np.ndarray
+    def predict_median(self, X: pd.DataFrame) -> np.ndarray
+    def save(self, path: str | Path, include_training_artifacts: bool = False)
+
+    @classmethod
+    def load(cls, path: str | Path) -> FittedQuantileNode
+
+    @property
+    def quantile_levels(self) -> List[float]
+    @property
+    def n_quantiles(self) -> int
+    @property
+    def n_folds(self) -> int
 ```
 
 ### QuantileSampler
