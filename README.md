@@ -59,7 +59,7 @@ fitted = (
 predictions = fitted.predict(X_test)
 ```
 
-This tunes a random forest over 50 Optuna trials using 5-fold stratified CV, then refits on the full training set with the best hyperparameters.
+This tunes a random forest over 50 Optuna trials using 5-fold stratified CV. At inference time, predictions from all fold models are averaged to produce the final output.
 
 ## Data Management
 

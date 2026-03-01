@@ -131,8 +131,8 @@ stacks_proba(*sources: str) -> NodeBuilder     # Shortcut for probability depend
 distills(teacher: str, temperature: float = 3.0, alpha: float = 0.5) -> NodeBuilder
 ```
 
-NodeBuilder also forwards the following methods back to GraphBuilder, allowing continued chaining:
-- `add_model()`, `build()`, `with_cv()`, `with_tuning()`, `with_feature_selection()`, `with_reparameterization()`, `create_orchestrator()`, `fit()`
+NodeBuilder forwards all public GraphBuilder methods back to the builder, allowing continued chaining. The most common forwarded methods include:
+- `add_model()`, `build()`, `with_cv()`, `with_tuning()`, `with_feature_selection()`, `with_reparameterization()`, `create_orchestrator()`, `fit()`, `fit_context()`
 
 **Example:**
 ```python
@@ -209,7 +209,7 @@ DataContext(
 ```python
 DataContext.from_Xy(
     X: pd.DataFrame,
-    y: pd.Series,
+    y: pd.Series | None = None,
     groups: pd.Series | None = None,
     base_margin: np.ndarray | None = None,
     indices: np.ndarray | None = None,
@@ -256,7 +256,7 @@ ctx.with_y(y) -> DataContext
 # Augment context with upstream model predictions as new feature columns
 ctx.augment_with_predictions(predictions: dict, prefix: str = "pred_") -> DataContext
 
-# Deep copy
+# Shallow copy (underlying DataFrame data is shared)
 ctx.copy() -> DataContext
 ```
 

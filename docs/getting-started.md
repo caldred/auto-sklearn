@@ -93,7 +93,7 @@ builder = (
 ```python
 from sklearn.metrics import accuracy_score
 
-# Fit the pipeline (builds graph, runs tuning, trains final model)
+# Fit the pipeline (builds graph, runs tuning, trains fold models)
 fitted = builder.fit(X_train, y_train)
 
 # Predict on test data
