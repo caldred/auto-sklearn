@@ -132,10 +132,11 @@ Extracts feature importance from XGBoost models:
 ```python
 from sklearn_meta.plugins.xgboost.importance import XGBImportancePlugin
 
-plugin = XGBImportancePlugin(importance_type="gain")
+plugin = XGBImportancePlugin(importance_type="total_gain")
 ```
 
 **Importance types:**
+- `"total_gain"`: Total gain from splits using feature **(default)**
 - `"gain"`: Average gain from splits using feature
 - `"weight"`: Number of times feature is used
 - `"cover"`: Average coverage of splits using feature
@@ -208,6 +209,8 @@ from sklearn_meta.plugins.registry import get_default_registry
 registry = get_default_registry()
 registry.register(MyPlugin())
 ```
+
+Note: When `xgboost` is installed, `XGBMultiplierPlugin` and `XGBImportancePlugin` are automatically registered in the global registry. Calling `register()` with the same plugin name again will raise a `ValueError`. Use `registry.unregister("xgb_multiplier")` first if you need to replace the default instance.
 
 ---
 
@@ -379,8 +382,9 @@ from sklearn_meta.search.backends.optuna import OptunaBackend
 from sklearn_meta.plugins.xgboost.multiplier import XGBMultiplierPlugin
 from sklearn_meta.plugins.registry import get_default_registry
 
-# Register plugin globally
+# Replace the auto-registered default with a custom configuration
 registry = get_default_registry()
+registry.unregister("xgb_multiplier")
 registry.register(XGBMultiplierPlugin(
     multipliers=[0.5, 1.0, 2.0],
     enable_post_tune=True,

@@ -329,6 +329,12 @@ config = JointQuantileConfig(
     sampling_strategy=SamplingStrategy.SKEW_NORMAL,
 )
 
+# Johnson SU distribution (handles heavy tails and skewness)
+config = JointQuantileConfig(
+    ...,
+    sampling_strategy=SamplingStrategy.JOHNSON_SU,
+)
+
 # Auto-select best fitting distribution
 config = JointQuantileConfig(
     ...,

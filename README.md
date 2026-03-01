@@ -144,9 +144,8 @@ ctx7 = ctx.with_soft_targets(teacher_probabilities)
 # Store arbitrary metadata
 ctx8 = ctx.with_metadata("source", "experiment_3")
 
-# Replace features or target (backward-compatible)
-ctx9 = ctx.with_X(new_feature_df)
-ctx10 = ctx.with_y(new_target_series)
+# Replace the target series
+ctx9 = ctx.with_y(new_target_series)
 ```
 
 ### Augmenting with Predictions (Stacking)

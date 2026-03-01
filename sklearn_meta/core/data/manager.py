@@ -73,7 +73,7 @@ class DataManager:
         if effective_strategy == CVStrategy.GROUP and ctx.groups is None:
             logger.warning(
                 "CVConfig strategy is GROUP but no groups provided. "
-                "Falling back to KFOLD. Provide groups for group-based CV."
+                "Falling back to RANDOM. Provide groups for group-based CV."
             )
             effective_strategy = CVStrategy.RANDOM
 

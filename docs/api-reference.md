@@ -964,13 +964,13 @@ from sklearn_meta.plugins.xgboost.importance import XGBImportancePlugin
 
 ```python
 XGBMultiplierPlugin(
-    multipliers: list[float] = [0.5, 1.0, 2.0],
+    multipliers: list[float] = [0.5, 0.75, 1.0, 1.5, 2.0],
     cv_folds: int = 3,
     enable_post_tune: bool = True,
 )
 
 XGBImportancePlugin(
-    importance_type: str = "gain",  # "gain", "weight", "cover"
+    importance_type: str = "total_gain",  # "total_gain", "gain", "weight", "cover"
 )
 ```
 
