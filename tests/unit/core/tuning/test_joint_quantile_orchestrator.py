@@ -712,3 +712,79 @@ class TestJointQuantileFitResultMethods:
         fitted = result.get_node("y1")
 
         assert fitted.node.property_name == "y1"
+
+
+# =============================================================================
+# FittedQuantileNode Save/Load Tests
+# =============================================================================
+
+
+class TestFittedQuantileNodeSaveLoad:
+    """Tests for FittedQuantileNode save/load serialization."""
+
+    def _make_fitted_node(self, joint_quantile_graph):
+        """Create a FittedQuantileNode with real mock models for testing."""
+        node = joint_quantile_graph.get_quantile_node("y1")
+
+        models = {}
+        for tau in [0.1, 0.5, 0.9]:
+            m = MockQuantileRegressor(quantile_alpha=tau)
+            m.fit(np.random.randn(10, 3), np.random.randn(10))
+            models[tau] = [m]
+
+        return FittedQuantileNode(
+            node=node,
+            quantile_models=models,
+            oof_quantile_predictions=np.random.randn(10, 3),
+            best_params={"max_depth": 5, "n_estimators": 100},
+            optimization_result={"best_value": 0.42},
+            selected_features=["feature_0", "feature_1"],
+        )
+
+    def test_fitted_node_save_load_roundtrip(self, joint_quantile_graph, tmp_path):
+        """Save and load should produce matching predictions."""
+        fitted = self._make_fitted_node(joint_quantile_graph)
+        path = tmp_path / "node.joblib"
+
+        X = pd.DataFrame(
+            np.random.randn(5, 3),
+            columns=["feature_0", "feature_1", "feature_2"],
+        )
+        original_preds = fitted.predict_quantiles(X)
+
+        fitted.save(path, include_training_artifacts=True)
+        loaded = FittedQuantileNode.load(path)
+
+        loaded_preds = loaded.predict_quantiles(X)
+        np.testing.assert_array_equal(original_preds, loaded_preds)
+        assert loaded.best_params == fitted.best_params
+        assert loaded.selected_features == fitted.selected_features
+        assert loaded.node.property_name == fitted.node.property_name
+
+    def test_fitted_node_save_strips_training_artifacts(
+        self, joint_quantile_graph, tmp_path
+    ):
+        """Default save should exclude OOF predictions and optimization_result."""
+        fitted = self._make_fitted_node(joint_quantile_graph)
+        path = tmp_path / "node.joblib"
+
+        fitted.save(path)
+        loaded = FittedQuantileNode.load(path)
+
+        assert loaded.oof_quantile_predictions.shape == (0, 0)
+        assert loaded.optimization_result is None
+
+    def test_fitted_node_save_includes_training_artifacts(
+        self, joint_quantile_graph, tmp_path
+    ):
+        """Opt-in save should include OOF predictions and optimization_result."""
+        fitted = self._make_fitted_node(joint_quantile_graph)
+        path = tmp_path / "node.joblib"
+
+        fitted.save(path, include_training_artifacts=True)
+        loaded = FittedQuantileNode.load(path)
+
+        np.testing.assert_array_equal(
+            loaded.oof_quantile_predictions, fitted.oof_quantile_predictions
+        )
+        assert loaded.optimization_result == fitted.optimization_result

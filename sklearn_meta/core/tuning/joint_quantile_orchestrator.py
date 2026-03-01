@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 
+import joblib
 import numpy as np
 import pandas as pd
 
@@ -128,6 +130,59 @@ class FittedQuantileNode:
             )
 
         return X[selected_features]
+
+    def save(
+        self,
+        path: Union[str, Path],
+        include_training_artifacts: bool = False,
+    ) -> None:
+        """
+        Save the fitted node to a joblib file.
+
+        By default strips oof_quantile_predictions and optimization_result
+        (training-only data) for smaller files.
+
+        Args:
+            path: File path to save to.
+            include_training_artifacts: If True, include OOF predictions
+                and optimization_result in the saved file.
+        """
+        data = {
+            "node": self.node,
+            "quantile_models": self.quantile_models,
+            "best_params": self.best_params,
+            "selected_features": self.selected_features,
+        }
+
+        if include_training_artifacts:
+            data["oof_quantile_predictions"] = self.oof_quantile_predictions
+            data["optimization_result"] = self.optimization_result
+
+        joblib.dump(data, path)
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> "FittedQuantileNode":
+        """
+        Load a fitted node from a joblib file.
+
+        Args:
+            path: File path to load from.
+
+        Returns:
+            FittedQuantileNode instance.
+        """
+        data = joblib.load(path)
+
+        return cls(
+            node=data["node"],
+            quantile_models=data["quantile_models"],
+            oof_quantile_predictions=data.get(
+                "oof_quantile_predictions", np.empty((0, 0))
+            ),
+            best_params=data["best_params"],
+            optimization_result=data.get("optimization_result"),
+            selected_features=data.get("selected_features"),
+        )
 
 
 @dataclass

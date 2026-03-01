@@ -2,20 +2,25 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
-from sklearn_meta.core.model.joint_quantile_graph import JointQuantileGraph
-from sklearn_meta.core.model.quantile_sampler import QuantileSampler
+from sklearn_meta.core.model.joint_quantile_graph import JointQuantileConfig, JointQuantileGraph
+from sklearn_meta.core.model.quantile_sampler import QuantileSampler, SamplingStrategy
 
 if TYPE_CHECKING:
     from sklearn_meta.core.tuning.joint_quantile_orchestrator import (
         FittedQuantileNode,
         JointQuantileFitResult,
     )
+
+MANIFEST_FILENAME = "manifest.json"
+MANIFEST_VERSION = 1
 
 
 @dataclass
@@ -59,6 +64,94 @@ class JointQuantileFittedGraph:
     graph: JointQuantileGraph
     fitted_nodes: Dict[str, "FittedQuantileNode"]
     quantile_sampler: QuantileSampler = field(default_factory=QuantileSampler)
+
+    def save(
+        self,
+        directory: Union[str, Path],
+        include_training_artifacts: bool = False,
+    ) -> None:
+        """
+        Save the fitted graph to a directory.
+
+        Creates the directory and writes:
+        - One .joblib file per property (via FittedQuantileNode.save)
+        - A manifest.json capturing graph structure and sampling config
+
+        Args:
+            directory: Directory path to save to (will be created).
+            include_training_artifacts: If True, include OOF predictions
+                and optimization_result in saved node files.
+        """
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+
+        node_files: Dict[str, str] = {}
+        for prop_name in self.graph.property_order:
+            filename = f"{prop_name}.joblib"
+            self.fitted_nodes[prop_name].save(
+                directory / filename,
+                include_training_artifacts=include_training_artifacts,
+            )
+            node_files[prop_name] = filename
+
+        manifest = {
+            "version": MANIFEST_VERSION,
+            "property_order": self.graph.property_order,
+            "quantile_levels": self.graph.quantile_levels,
+            "sampling_strategy": self.quantile_sampler.strategy.value,
+            "n_inference_samples": self.quantile_sampler.n_samples,
+            "random_state": self.quantile_sampler.random_state,
+            "node_files": node_files,
+        }
+
+        with open(directory / MANIFEST_FILENAME, "w") as f:
+            json.dump(manifest, f, indent=2)
+
+    @classmethod
+    def load(cls, directory: Union[str, Path]) -> "JointQuantileFittedGraph":
+        """
+        Load a fitted graph from a directory.
+
+        Reads manifest.json and loads each FittedQuantileNode from its
+        .joblib file, then reconstructs the graph and sampler.
+
+        Args:
+            directory: Directory path containing saved artifacts.
+
+        Returns:
+            JointQuantileFittedGraph ready for inference.
+        """
+        from sklearn_meta.core.tuning.joint_quantile_orchestrator import (
+            FittedQuantileNode,
+        )
+
+        directory = Path(directory)
+
+        with open(directory / MANIFEST_FILENAME) as f:
+            manifest = json.load(f)
+
+        # Load fitted nodes
+        fitted_nodes: Dict[str, FittedQuantileNode] = {}
+        for prop_name in manifest["property_order"]:
+            filename = manifest["node_files"][prop_name]
+            fitted_nodes[prop_name] = FittedQuantileNode.load(directory / filename)
+
+        # Reconstruct graph from config
+        config = JointQuantileConfig(
+            property_names=manifest["property_order"],
+            quantile_levels=manifest["quantile_levels"],
+            estimator_class=None,
+            sampling_strategy=SamplingStrategy(manifest["sampling_strategy"]),
+            n_inference_samples=manifest["n_inference_samples"],
+            random_state=manifest.get("random_state"),
+        )
+        graph = JointQuantileGraph(config)
+
+        return cls(
+            graph=graph,
+            fitted_nodes=fitted_nodes,
+            quantile_sampler=graph.create_quantile_sampler(),
+        )
 
     @classmethod
     def from_fit_result(cls, fit_result: "JointQuantileFitResult") -> "JointQuantileFittedGraph":
