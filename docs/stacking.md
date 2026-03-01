@@ -418,6 +418,20 @@ rf_fitted = fitted_graph.get_node("rf")
 rf_oof = fitted_graph.get_oof_predictions("rf")
 ```
 
+### Getting Probability Predictions
+
+`FittedGraph.predict()` returns class labels. To get probabilities, average `predict_proba` across the fold models:
+
+```python
+import numpy as np
+
+node = fitted_graph.get_node("rf")
+probas = np.mean(
+    [model.predict_proba(X_test) for model in node.models],
+    axis=0,
+)
+```
+
 ### FittedNode
 
 ```python

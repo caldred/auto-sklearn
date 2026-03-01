@@ -140,6 +140,35 @@ plugin = XGBImportancePlugin(importance_type="gain")
 - `"weight"`: Number of times feature is used
 - `"cover"`: Average coverage of splits using feature
 
+### OrderSearchPlugin (Joint Quantile)
+
+Searches for the optimal property ordering in joint quantile regression via local swap search with random restarts:
+
+```python
+from sklearn_meta.plugins.joint_quantile.order_search import (
+    OrderSearchPlugin, OrderSearchConfig
+)
+
+search_config = OrderSearchConfig(
+    max_iterations=20,      # Max iterations per local search
+    n_random_restarts=3,    # Random restarts to escape local optima
+    verbose=1,
+)
+
+plugin = OrderSearchPlugin(config=search_config)
+result = plugin.search_order(
+    graph=joint_quantile_graph,
+    ctx=ctx,
+    targets=targets,
+    orchestrator=orchestrator,
+)
+
+print(f"Best order: {result.best_order}")
+print(f"Best score: {result.best_score}")
+```
+
+The plugin evaluates all valid adjacent swaps at each iteration, accepts the best improvement, and repeats until no swap improves the score. Random restarts help avoid local optima. See [Joint Quantile Regression](joint-quantile-regression.md) for full details.
+
 ---
 
 ## Plugin Registry

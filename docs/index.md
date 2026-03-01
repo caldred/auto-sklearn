@@ -67,6 +67,7 @@ graph TB
 
 ### Specialized Topics
 - [Joint Quantile Regression](joint-quantile-regression.md) -- Multivariate target modeling with uncertainty
+- [Correlation Analysis](api-reference.md#correlationanalyzer) -- Discover hyperparameter correlations post-optimization
 
 ### Reference
 - [API Reference](api-reference.md) -- Complete API documentation

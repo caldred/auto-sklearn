@@ -28,11 +28,12 @@ pip install lightgbm        # LightGBM support
 8. [Feature Selection](#feature-selection)
 9. [Reparameterization](#reparameterization)
 10. [Knowledge Distillation](#knowledge-distillation)
-11. [Estimator Scaling](#estimator-scaling)
-12. [Working with Results](#working-with-results)
-13. [Advanced Usage](#advanced-usage)
-14. [Project Structure](#project-structure)
-15. [Running Tests](#running-tests)
+11. [Joint Quantile Regression](#joint-quantile-regression)
+12. [Estimator Scaling](#estimator-scaling)
+13. [Working with Results](#working-with-results)
+14. [Advanced Usage](#advanced-usage)
+15. [Project Structure](#project-structure)
+16. [Running Tests](#running-tests)
 
 ## Quick Start
 
@@ -207,7 +208,7 @@ builder = (
     .with_search_space(learning_rate=(0.01, 0.3, "log"), max_depth=(3, 10))
     .with_fixed_params(random_state=42, use_label_encoder=False)
     .with_fit_params(verbose=False)
-    .with_output_type("proba")           # "prediction", "proba", or "transform"
+    .with_output_type("proba")           # "prediction", "proba", "transform", or "quantiles"
     .with_description("Base XGBoost model")
     .with_plugins("xgboost")             # Model-specific plugin hooks
 )
@@ -545,6 +546,52 @@ Parameters:
 
 The teacher must be fitted before the student in the graph's topological order. Only one teacher per student is supported.
 
+## Joint Quantile Regression
+
+Model multiple correlated targets with uncertainty quantification using sequential quantile regression via chain rule decomposition. Each conditional distribution is modeled with quantile regression (e.g., 10-20 quantile levels) using XGBoost:
+
+```
+P(Y₁, Y₂, ..., Yₙ | X) = P(Y₁|X) × P(Y₂|X,Y₁) × P(Y₃|X,Y₁,Y₂) × ...
+```
+
+```python
+from sklearn_meta.core.model.joint_quantile_graph import (
+    JointQuantileGraph, JointQuantileConfig,
+)
+from sklearn_meta.core.model.joint_quantile_fitted import JointQuantileFittedGraph
+from sklearn_meta.core.tuning.joint_quantile_orchestrator import JointQuantileOrchestrator
+from xgboost import XGBRegressor
+
+config = JointQuantileConfig(
+    property_names=["price", "volume", "volatility"],
+    quantile_levels=[0.1, 0.25, 0.5, 0.75, 0.9],
+    estimator_class=XGBRegressor,
+    n_inference_samples=1000,
+)
+
+graph = JointQuantileGraph(config)
+orchestrator = JointQuantileOrchestrator(
+    graph=graph, data_manager=data_manager,
+    search_backend=optuna_backend, tuning_config=tuning_config,
+)
+
+fit_result = orchestrator.fit(ctx, targets={
+    "price": y_price, "volume": y_volume, "volatility": y_volatility,
+})
+
+fitted = JointQuantileFittedGraph.from_fit_result(fit_result)
+
+# Sample from the joint distribution
+samples = fitted.sample_joint(X_test, n_samples=1000)  # (n_test, 1000, 3)
+
+# Point predictions and prediction intervals
+medians = fitted.predict_median(X_test)
+q10 = fitted.predict_quantile(X_test, q=0.1)
+q90 = fitted.predict_quantile(X_test, q=0.9)
+```
+
+For full details including order search, quantile scaling, sampling strategies, and save/load, see [Joint Quantile Regression](docs/joint-quantile-regression.md).
+
 ## Estimator Scaling
 
 For boosting models, you can tune with a small number of estimators for speed, then scale up for the final model:
@@ -596,6 +643,28 @@ rf_predictions = fitted.predict(X_test, node_name="rf")
 ```
 
 For stacking graphs, `.predict()` automatically chains predictions through the graph: base model predictions are computed first and fed as features to downstream models.
+
+### Probability Predictions
+
+`FittedGraph.predict()` returns class labels for classifiers. To get probability outputs, access the individual fold models directly:
+
+```python
+import numpy as np
+
+node = fitted.get_node("rf")
+# Average predict_proba across fold models
+probas = np.mean(
+    [model.predict_proba(X_test) for model in node.models],
+    axis=0,
+)
+```
+
+For stacking graphs where a base model's output type is set to `"proba"`, the probabilities are automatically passed as features to downstream meta-learners during training and inference. Set this on the base model:
+
+```python
+.add_model("rf", RandomForestClassifier)
+.with_output_type("proba")
+```
 
 ### Inspecting Results
 
@@ -758,13 +827,22 @@ sklearn_meta/
 ├── core/
 │   ├── data/              # DataContext, CVConfig, DataManager
 │   ├── model/             # ModelNode, ModelGraph, Dependencies, Distillation
+│   │   ├── joint_quantile_graph.py    # Joint quantile graph structure
+│   │   ├── joint_quantile_fitted.py   # Inference & save/load for joint quantile
+│   │   ├── quantile_node.py           # Quantile model nodes & scaling
+│   │   └── quantile_sampler.py        # Sampling strategies (linear, parametric, auto)
 │   └── tuning/            # TuningOrchestrator, Strategies
+│       ├── joint_quantile_orchestrator.py  # Orchestrator for joint quantile training
+│       └── metrics.py                      # Metric resolution
 ├── search/                # SearchSpace, SearchParameter, Backends
-├── meta/                  # Reparameterization transforms
+├── meta/                  # Reparameterization transforms, CorrelationAnalyzer
 ├── selection/             # Feature selection (shadow, permutation, threshold)
-├── plugins/               # Model-specific plugins (XGBoost, etc.)
+│   └── importance.py      # Feature importance extraction registry
+├── plugins/               # Model-specific plugins
+│   ├── xgboost/           # XGBoost multiplier & importance plugins
+│   └── joint_quantile/    # OrderSearchPlugin for property ordering
 ├── execution/             # Parallel execution backends
-├── persistence/           # Fit caching
+├── persistence/           # Fit caching, ArtifactStore
 └── audit/                 # Logging
 ```
 

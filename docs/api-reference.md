@@ -95,7 +95,7 @@ with_search_space(
 ) -> NodeBuilder
 
 # Set output type
-with_output_type(output_type: str) -> NodeBuilder  # "prediction", "proba", "transform"
+with_output_type(output_type: str) -> NodeBuilder  # "prediction", "proba", "transform", "quantiles"
 
 # Set execution condition
 with_condition(condition: Callable[[DataContext], bool]) -> NodeBuilder
@@ -350,7 +350,7 @@ class ModelNode:
     name: str
     estimator_class: type
     search_space: SearchSpace | None = None
-    output_type: str = "prediction"          # "prediction", "proba", "transform"
+    output_type: str = "prediction"          # "prediction", "proba", "transform", "quantiles"
     condition: Callable | None = None
     plugins: list[str] = field(default_factory=list)  # Plugin names, not instances
     fixed_params: dict = field(default_factory=dict)
@@ -612,6 +612,10 @@ add_conditional(
 
 # Shorthand notation
 add_from_shorthand(**kwargs) -> SearchSpace
+
+# Create from dictionary (shorthand or explicit format)
+@classmethod
+from_dict(config: dict) -> SearchSpace
 
 # Narrow search space around a center point
 narrow_around(
@@ -989,7 +993,7 @@ FitCache(
 from sklearn_meta.persistence.store import ArtifactStore
 ```
 
-Abstract interface for storing models, parameters, and CV ensembles. Subclasses implement a concrete backend.
+Abstract interface for storing models, parameters, and CV ensembles. No built-in concrete implementation is provided -- subclass `ArtifactStore` to implement your own storage backend (e.g., local filesystem, S3, MLflow). For simple save/load of fitted graphs, use `joblib.dump()`/`joblib.load()` directly, or `JointQuantileFittedGraph.save()`/`.load()` for joint quantile models.
 
 **Abstract Methods:**
 ```python

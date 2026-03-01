@@ -41,7 +41,7 @@ result = (
 )
 
 # Access selected features from FittedNode
-fitted_node = result.fitted_nodes["rf"]
+fitted_node = result.get_node("rf")
 print(f"Selected features: {fitted_node.selected_features}")
 ```
 
@@ -173,12 +173,17 @@ Candidates that fail this paired baseline are dropped.
 
 ### Grouped Cutover Behavior
 
-When explicit `feature_groups` are provided:
+When explicit `feature_groups` are provided, the shadow selection switches to **grouped cutover mode**, which differs from per-feature shadow selection in important ways:
 
-- A group gets one shadow representative (not one per member feature).
-- Group real importance is computed as the mean of member importances.
-- Group thresholds use that group's single paired shadow importance.
-- The whole group is kept or dropped atomically.
+1. **One shadow per group, not per member.** Each feature group gets a single shadow representative column. This shadow is generated to match the group's aggregate statistical profile rather than any individual member's distribution.
+
+2. **Group importance = mean of member importances.** After fitting the model with shadows, the real importance of a group is computed by averaging the importances of all member features in that group (e.g., if `gender_ohe` has members `gender_f` and `gender_m`, the group importance is `mean(imp_gender_f, imp_gender_m)`).
+
+3. **Threshold comparison uses the group's paired shadow.** The group's averaged real importance is compared against `threshold_mult * shadow_importance` where `shadow_importance` is from the single paired shadow for that group.
+
+4. **Atomic keep/drop.** If the group passes its threshold, all member features are kept. If it fails, all are dropped. Groups are never partially selected.
+
+This approach is more efficient and statistically appropriate for one-hot encoded categoricals, target-encoded variants, and other feature bundles where individual member importances are not meaningful in isolation.
 
 ---
 
@@ -274,7 +279,7 @@ result = (
 )
 
 # Access selected features
-fitted_node = result.fitted_nodes["xgb"]
+fitted_node = result.get_node("xgb")
 selected = fitted_node.selected_features  # List[str] or None
 print(f"Selected {len(selected)} features: {selected}")
 ```
@@ -378,7 +383,7 @@ result = (
 )
 
 # Inspect results
-fitted = result.fitted_nodes["rf"]
+fitted = result.get_node("rf")
 selected = fitted.selected_features
 
 print(f"Selected {len(selected)} of {len(feature_names)} features:")

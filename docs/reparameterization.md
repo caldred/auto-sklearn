@@ -82,7 +82,7 @@ result = (
     .fit(ctx)
 )
 
-print(f"Best params: {result.fitted_nodes['xgb'].best_params}")
+print(f"Best params: {result.get_node('xgb').best_params}")
 ```
 
 With `use_prebaked=True`, sklearn-meta automatically applies known reparameterizations for the model type (e.g., `learning_rate x n_estimators` for XGBoost).
@@ -412,7 +412,7 @@ result = (
     .fit(ctx)
 )
 
-fitted = result.fitted_nodes["xgb"]
+fitted = result.get_node("xgb")
 print(f"Best params: {fitted.best_params}")
 ```
 

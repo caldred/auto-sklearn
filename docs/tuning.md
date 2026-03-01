@@ -636,6 +636,61 @@ predictions = fitted.predict(X_test)
 
 ---
 
+## Parallel Execution
+
+By default, nodes within the same graph layer are tuned sequentially. You can parallelize layer-level node tuning by passing an `Executor`:
+
+```python
+from sklearn_meta.execution.local import LocalExecutor
+
+# Using GraphBuilder
+fitted = (
+    GraphBuilder("parallel_pipeline")
+    .add_model("rf", RandomForestClassifier)
+    .with_search_space(n_estimators=(50, 200))
+    .add_model("xgb", XGBClassifier)
+    .with_search_space(n_estimators=(50, 200))
+    .add_model("meta", LogisticRegression)
+    .stacks("rf", "xgb")
+    .with_cv(n_splits=5, strategy="stratified")
+    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .fit(X_train, y_train, executor=LocalExecutor(n_jobs=4))
+)
+```
+
+Or with the low-level API:
+
+```python
+from sklearn_meta.execution.local import LocalExecutor, SequentialExecutor
+
+# Parallel: tune independent nodes concurrently
+orchestrator = TuningOrchestrator(
+    graph=graph,
+    data_manager=data_manager,
+    search_backend=backend,
+    tuning_config=tuning_config,
+    executor=LocalExecutor(n_jobs=4),
+)
+
+# Sequential (default): one node at a time
+orchestrator = TuningOrchestrator(
+    ...,
+    executor=SequentialExecutor(),
+)
+```
+
+**When to use parallel execution:**
+- Multiple independent base models in the same layer
+- Sufficient CPU cores and memory for concurrent model training
+- Models that don't already use internal parallelism (e.g., `n_jobs=-1`)
+
+**When to avoid it:**
+- Models already using `n_jobs=-1` internally (CPU contention)
+- Memory-constrained environments (each parallel node loads data independently)
+- Single-model graphs (no parallelism opportunity)
+
+---
+
 ## Best Practices
 
 ### 1. Start with Few Trials

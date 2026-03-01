@@ -215,7 +215,7 @@ pipeline = (
     GraphBuilder("nested_cv_pipeline")
     .add_model("rf", RandomForestClassifier)
     .with_search_space(n_estimators=(50, 200))
-    .with_cv(n_splits=5, strategy="stratified")
+    .with_cv(n_splits=5, strategy="stratified", nested=True, inner_splits=3)
     .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
     .fit(X_train, y_train)
 )
