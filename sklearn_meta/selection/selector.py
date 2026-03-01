@@ -111,7 +111,7 @@ class FeatureSelector:
         grouping = self._resolve_feature_groups(feature_cols)
 
         if self.config.method == "shadow":
-            return self._select_shadow(model, X, y, feature_cols, grouping)
+            return self._select_shadow(model, X, y, feature_cols, grouping, X_val, y_val)
         elif self.config.method == "permutation":
             return self._select_permutation(
                 model, X, y, feature_cols, grouping, X_val, y_val
@@ -128,6 +128,8 @@ class FeatureSelector:
         y: pd.Series,
         feature_cols: List[str],
         grouping: _FeatureGrouping,
+        X_val: Optional[pd.DataFrame] = None,
+        y_val: Optional[pd.Series] = None,
     ) -> FeatureSelectionResult:
         """Select features using shadow feature method."""
         selector = ShadowFeatureSelector(
@@ -143,9 +145,11 @@ class FeatureSelector:
                 y=y,
                 group_to_features=grouping.group_to_features,
                 feature_cols=feature_cols,
+                X_val=X_val,
+                y_val=y_val,
             )
         else:
-            result = selector.fit_select(model, X, y, feature_cols)
+            result = selector.fit_select(model, X, y, feature_cols, X_val=X_val, y_val=y_val)
 
         # Apply min/max constraints
         selected = self._apply_constraints(

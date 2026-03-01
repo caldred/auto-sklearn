@@ -7,8 +7,10 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 import logging
 
+import inspect
+
 import numpy as np
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, ClassifierMixin
 
 from sklearn_meta.core.data.context import DataContext
 from sklearn_meta.core.data.cv import CVConfig, CVFold, CVResult, FoldResult
@@ -222,13 +224,12 @@ class FittedGraph:
 
 
 class _PredictionWrapper(BaseEstimator):
-    """Wrapper that returns pre-computed predictions."""
+    """Wrapper that returns pre-computed predictions for regressors."""
 
     def __init__(self, predictions):
         self._predictions = predictions
 
     def predict(self, X):
-        # For classification with probability outputs, convert to class labels
         preds = self._predictions
         if preds.ndim > 1:
             return np.argmax(preds, axis=1)
@@ -238,11 +239,33 @@ class _PredictionWrapper(BaseEstimator):
         return self._predictions
 
     def decision_function(self, X):
-        # For binary classification probas, return positive class probability
         preds = self._predictions
         if preds.ndim > 1 and preds.shape[1] == 2:
             return preds[:, 1]
         return preds
+
+
+class _ClassifierPredictionWrapper(ClassifierMixin, _PredictionWrapper):
+    """Wrapper for classifier predictions that sklearn scorers recognize."""
+
+    def __init__(self, predictions, classes):
+        super().__init__(predictions)
+        self.classes_ = classes
+
+    def predict(self, X):
+        preds = self._predictions
+        if preds.ndim > 1:
+            return self.classes_[np.argmax(preds, axis=1)]
+        return preds
+
+
+def _supports_param(estimator_class, param_name: str) -> bool:
+    """Check if an estimator class accepts a given parameter in __init__."""
+    sig = inspect.signature(estimator_class.__init__)
+    params = sig.parameters
+    return param_name in params or any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
 
 
 class TuningOrchestrator:
@@ -509,21 +532,27 @@ class TuningOrchestrator:
         # Or use fixed scaling if configured
         elif (self.tuning_config.tuning_n_estimators is not None and
                 self.tuning_config.final_n_estimators is not None):
-            tuning_n = self.tuning_config.tuning_n_estimators
-            final_n = self.tuning_config.final_n_estimators
-            scale_factor = tuning_n / final_n
-
-            best_params = dict(best_params)  # Copy to avoid mutation
-            best_params["n_estimators"] = final_n
-
-            # Scale learning_rate proportionally
-            if "learning_rate" in best_params:
-                old_lr = best_params["learning_rate"]
-                best_params["learning_rate"] = old_lr * scale_factor
-                logger.info(
-                    f"Scaled for final model: n_estimators {tuning_n} -> {final_n}, "
-                    f"learning_rate {old_lr:.6f} -> {best_params['learning_rate']:.6f}"
+            if not _supports_param(node.estimator_class, "n_estimators"):
+                logger.warning(
+                    f"Skipping n_estimators scaling for '{node.name}': "
+                    f"{node.estimator_class.__name__} does not support n_estimators"
                 )
+            else:
+                tuning_n = self.tuning_config.tuning_n_estimators
+                final_n = self.tuning_config.final_n_estimators
+                scale_factor = tuning_n / final_n
+
+                best_params = dict(best_params)  # Copy to avoid mutation
+                best_params["n_estimators"] = final_n
+
+                # Scale learning_rate proportionally
+                if "learning_rate" in best_params:
+                    old_lr = best_params["learning_rate"]
+                    best_params["learning_rate"] = old_lr * scale_factor
+                    logger.info(
+                        f"Scaled for final model: n_estimators {tuning_n} -> {final_n}, "
+                        f"learning_rate {old_lr:.6f} -> {best_params['learning_rate']:.6f}"
+                    )
 
         # Final CV with best params (skip if already done in scaling search)
         if cv_result is None:
@@ -558,6 +587,15 @@ class TuningOrchestrator:
             Tuple of (parameters with optimal scaling, CV result for best scaling).
         """
         scaling_factors = [1] + (self.tuning_config.estimator_scaling_factors or [2, 5, 10, 20])
+
+        if ("n_estimators" not in best_params
+                and not _supports_param(node.estimator_class, "n_estimators")):
+            logger.warning(
+                f"Skipping estimator scaling search for '{node.name}': "
+                f"{node.estimator_class.__name__} does not support n_estimators"
+            )
+            cv_result = self._cross_validate(node, ctx, best_params)
+            return best_params, cv_result
 
         base_n_estimators = best_params.get("n_estimators", 100)
         base_lr = best_params.get("learning_rate")
@@ -642,6 +680,11 @@ class TuningOrchestrator:
                     converted[name] = value
             return converted
 
+        _use_tuning_n_estimators = (
+            self.tuning_config.tuning_n_estimators is not None
+            and _supports_param(node.estimator_class, "n_estimators")
+        )
+
         def objective(params: Dict[str, Any]) -> float:
             # Inverse transform if reparameterized
             if reparam_space:
@@ -653,7 +696,7 @@ class TuningOrchestrator:
             all_params.update(params)
 
             # Override n_estimators for faster tuning if configured
-            if self.tuning_config.tuning_n_estimators is not None:
+            if _use_tuning_n_estimators:
                 all_params["n_estimators"] = self.tuning_config.tuning_n_estimators
 
             # Cross-validate
@@ -823,17 +866,17 @@ class TuningOrchestrator:
         """Calculate the evaluation score."""
         scorer = self._get_scorer()
 
-        wrapper = _PredictionWrapper(y_pred)
-
-        # Set _estimator_type and classes_ so sklearn's scorer recognizes the
-        # wrapper as a classifier (needed for metrics like neg_log_loss that
-        # use predict_proba)
+        is_clf = False
         if node is not None:
-            estimator_type = getattr(node.estimator_class, "_estimator_type", None)
-            if estimator_type:
-                wrapper._estimator_type = estimator_type
-            if estimator_type == "classifier":
-                wrapper.classes_ = np.unique(y_true)
+            try:
+                is_clf = issubclass(node.estimator_class, ClassifierMixin)
+            except TypeError:
+                is_clf = False
+
+        if is_clf:
+            wrapper = _ClassifierPredictionWrapper(y_pred, np.unique(y_true))
+        else:
+            wrapper = _PredictionWrapper(y_pred)
 
         # Use scorer properly - this respects _sign, _kwargs, and response_method
         # We pass y_true as X since the wrapper ignores it

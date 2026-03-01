@@ -313,11 +313,11 @@ class NodeBuilder:
         """Configure reparameterization (forwards to GraphBuilder)."""
         return self._graph_builder.with_reparameterization(*args, **kwargs)
 
-    def create_orchestrator(self, *args, **kwargs):
+    def create_orchestrator(self, *args, **kwargs) -> TuningOrchestrator:
         """Create TuningOrchestrator (forwards to GraphBuilder)."""
         return self._graph_builder.create_orchestrator(*args, **kwargs)
 
-    def fit(self, *args, **kwargs):
+    def fit(self, *args, **kwargs) -> FittedGraph:
         """Fit the graph (forwards to GraphBuilder)."""
         return self._graph_builder.fit(*args, **kwargs)
 
@@ -568,6 +568,24 @@ class GraphBuilder:
         self._use_prebaked_reparameterizations = use_prebaked
         return self
 
+    def _resolve_tuning_config(self, cv_config: CVConfig) -> TuningConfig:
+        """Return the effective tuning config with builder overrides applied."""
+        tuning_config = self._tuning_config or TuningConfig()
+        overrides: Dict[str, Any] = {}
+
+        if self._cv_config is not None:
+            overrides["cv_config"] = cv_config
+        if self._feature_selection_config is not None:
+            overrides["feature_selection"] = self._feature_selection_config
+        if self._custom_reparameterizations or self._use_prebaked_reparameterizations:
+            overrides["use_reparameterization"] = True
+            overrides["custom_reparameterizations"] = self._custom_reparameterizations
+
+        if not overrides:
+            return tuning_config
+
+        return replace(tuning_config, **overrides)
+
     def build(self) -> ModelGraph:
         """
         Build and return the ModelGraph.
@@ -610,19 +628,7 @@ class GraphBuilder:
 
         # Use defaults if not configured
         cv_config = self._cv_config or CVConfig()
-        tuning_config = self._tuning_config or TuningConfig()
-
-        # Build a new config with all overrides applied at once
-        overrides = {}
-        if self._cv_config:
-            overrides["cv_config"] = cv_config
-        if self._feature_selection_config:
-            overrides["feature_selection"] = self._feature_selection_config
-        if self._custom_reparameterizations or self._use_prebaked_reparameterizations:
-            overrides["use_reparameterization"] = True
-            overrides["custom_reparameterizations"] = self._custom_reparameterizations
-        if overrides:
-            tuning_config = replace(tuning_config, **overrides)
+        tuning_config = self._resolve_tuning_config(cv_config)
 
         data_manager = DataManager(cv_config)
         backend = search_backend or OptunaBackend(

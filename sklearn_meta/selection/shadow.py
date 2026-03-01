@@ -10,7 +10,11 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from sklearn_meta.selection.importance import ImportanceExtractor, ImportanceRegistry
+from sklearn_meta.selection.importance import (
+    ImportanceExtractor,
+    ImportanceRegistry,
+    PermutationImportanceExtractor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +173,8 @@ class ShadowFeatureSelector:
         y: pd.Series,
         feature_cols: Optional[List[str]] = None,
         importance_type: str = "gain",
+        X_val: Optional[pd.DataFrame] = None,
+        y_val: Optional[pd.Series] = None,
     ) -> ShadowResult:
         """Fit model with shadow rounds and select important features."""
         if feature_cols is None:
@@ -199,6 +205,9 @@ class ShadowFeatureSelector:
         counts: Dict[str, int] = {f: 0 for f in feature_cols}
         feature_to_shadow = {f: f"__shadow_avg__{f}" for f in feature_cols}
 
+        needs_val = isinstance(extractor, PermutationImportanceExtractor) and X_val is not None and y_val is not None
+        X_val_base = X_val[feature_cols] if needs_val else None
+
         for round_idx, selected in enumerate(round_plan):
             z_shadow = self._sample_shadow_latents(
                 X=X_base,
@@ -219,10 +228,33 @@ class ShadowFeatureSelector:
             X_augmented = pd.concat([X_base, shadow_df], axis=1)
 
             model.fit(X_augmented, y)
+
+            # Build extract kwargs; for PermutationImportanceExtractor pass
+            # validation data with matching shadow columns.
+            extract_kwargs: Dict[str, Any] = {"importance_type": importance_type}
+            if needs_val:
+                z_shadow_val = self._sample_shadow_latents(
+                    X=X_val_base,
+                    feature_cols=feature_cols,
+                    rng=np.random.default_rng(self.random_state + round_idx + 1),
+                )
+                val_shadow_cols: Dict[str, np.ndarray] = {}
+                for feat in selected:
+                    idx = feature_idx[feat]
+                    shadow_name = f"__shadow_r{round_idx}_{idx}__"
+                    ref = pd.to_numeric(X_base[feat], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+                    val_shadow_cols[shadow_name] = self._map_to_empirical_distribution(
+                        z_shadow_val[:, idx], ref
+                    )
+                val_shadow_df = pd.DataFrame(val_shadow_cols, index=X_val_base.index)
+                X_val_augmented = pd.concat([X_val_base, val_shadow_df], axis=1)
+                extract_kwargs["X_val"] = X_val_augmented
+                extract_kwargs["y_val"] = y_val
+
             all_importance = extractor.extract(
                 model,
                 list(X_augmented.columns),
-                importance_type=importance_type,
+                **extract_kwargs,
             )
 
             for feat in selected:
@@ -342,6 +374,29 @@ class ShadowFeatureSelector:
             threshold_used=threshold_used,
         )
 
+    def _build_group_representatives(
+        self,
+        X: pd.DataFrame,
+        group_to_features: Dict[str, List[str]],
+    ) -> Dict[str, np.ndarray]:
+        """Build one numeric representative array per group via standardize+mean."""
+        group_reps: Dict[str, np.ndarray] = {}
+        for group_name, members in group_to_features.items():
+            group_matrix = np.column_stack([
+                pd.to_numeric(X[feat], errors="coerce")
+                .fillna(0.0).to_numpy(dtype=float)
+                for feat in members
+            ])
+            if group_matrix.shape[1] == 1:
+                group_reps[group_name] = group_matrix[:, 0]
+            else:
+                standardized = np.column_stack([
+                    self._standardize(group_matrix[:, idx])
+                    for idx in range(group_matrix.shape[1])
+                ])
+                group_reps[group_name] = standardized.mean(axis=1)
+        return group_reps
+
     def fit_select_grouped(
         self,
         model: Any,
@@ -350,6 +405,8 @@ class ShadowFeatureSelector:
         group_to_features: Dict[str, List[str]],
         feature_cols: Optional[List[str]] = None,
         importance_type: str = "gain",
+        X_val: Optional[pd.DataFrame] = None,
+        y_val: Optional[pd.Series] = None,
     ) -> ShadowResult:
         """Fit model with one shadow representative per group.
 
@@ -383,6 +440,8 @@ class ShadowFeatureSelector:
                 y=y,
                 feature_cols=feature_cols,
                 importance_type=importance_type,
+                X_val=X_val,
+                y_val=y_val,
             )
 
         X_base = X[feature_cols]
@@ -397,24 +456,7 @@ class ShadowFeatureSelector:
             extractor = self._importance_registry.get_extractor(model)
 
         # Build one numeric representative series per group.
-        group_reps: Dict[str, np.ndarray] = {}
-        for group_name, members in active_group_to_features.items():
-            group_matrix = np.column_stack(
-                [
-                    pd.to_numeric(X_base[feat], errors="coerce")
-                    .fillna(0.0)
-                    .to_numpy(dtype=float)
-                    for feat in members
-                ]
-            )
-            if group_matrix.shape[1] == 1:
-                rep = group_matrix[:, 0]
-            else:
-                standardized = np.column_stack(
-                    [self._standardize(group_matrix[:, idx]) for idx in range(group_matrix.shape[1])]
-                )
-                rep = standardized.mean(axis=1)
-            group_reps[group_name] = rep
+        group_reps = self._build_group_representatives(X_base, active_group_to_features)
 
         X_group = pd.DataFrame(group_reps, index=X_base.index)
         group_idx = {group: idx for idx, group in enumerate(group_names)}
@@ -425,6 +467,15 @@ class ShadowFeatureSelector:
         group_to_shadow_name: Dict[str, str] = {
             group: f"__shadow_group_avg__{group}" for group in group_names
         }
+
+        needs_val = isinstance(extractor, PermutationImportanceExtractor) and X_val is not None and y_val is not None
+        if needs_val:
+            X_val_base = X_val[feature_cols]
+            val_group_reps = self._build_group_representatives(X_val_base, active_group_to_features)
+            X_val_group = pd.DataFrame(val_group_reps, index=X_val_base.index)
+        else:
+            X_val_base = None
+            X_val_group = None
 
         for round_idx, selected_groups in enumerate(round_plan):
             z_shadow = self._sample_shadow_latents(
@@ -449,10 +500,31 @@ class ShadowFeatureSelector:
             X_augmented = pd.concat([X_base, shadow_df], axis=1)
 
             model.fit(X_augmented, y)
+
+            extract_kwargs: Dict[str, Any] = {"importance_type": importance_type}
+            if needs_val:
+                z_shadow_val = self._sample_shadow_latents(
+                    X=X_val_group,
+                    feature_cols=group_names,
+                    rng=np.random.default_rng(self.random_state + round_idx + 1),
+                )
+                val_shadow_cols: Dict[str, np.ndarray] = {}
+                for group_name_v in selected_groups:
+                    idx_v = group_idx[group_name_v]
+                    shadow_name_v = f"__shadow_group_r{round_idx}_{idx_v}__"
+                    ref_v = X_group[group_name_v].to_numpy(dtype=float)
+                    val_shadow_cols[shadow_name_v] = self._map_to_empirical_distribution(
+                        z_shadow_val[:, idx_v], ref_v
+                    )
+                val_shadow_df = pd.DataFrame(val_shadow_cols, index=X_val_base.index)
+                X_val_augmented = pd.concat([X_val_base, val_shadow_df], axis=1)
+                extract_kwargs["X_val"] = X_val_augmented
+                extract_kwargs["y_val"] = y_val
+
             all_importance = extractor.extract(
                 model,
                 list(X_augmented.columns),
-                importance_type=importance_type,
+                **extract_kwargs,
             )
 
             for group_name in selected_groups:
@@ -531,9 +603,11 @@ class ShadowFeatureSelector:
         X: pd.DataFrame,
         y: pd.Series,
         feature_cols: Optional[List[str]] = None,
+        X_val: Optional[pd.DataFrame] = None,
+        y_val: Optional[pd.Series] = None,
     ) -> List[str]:
         """Convenience method to get just the features to keep."""
-        result = self.fit_select(model, X, y, feature_cols)
+        result = self.fit_select(model, X, y, feature_cols, X_val=X_val, y_val=y_val)
         return result.features_to_keep
 
     def __repr__(self) -> str:
