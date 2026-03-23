@@ -1,4 +1,4 @@
-"""Shared test fixtures for the auto-sklearn test suite."""
+"""Shared test fixtures for the sklearn-meta test suite."""
 
 from __future__ import annotations
 
@@ -136,44 +136,44 @@ def time_series_data() -> Tuple[pd.DataFrame, pd.Series]:
 
 
 # =============================================================================
-# DataContext Fixtures
+# DataView Fixtures
 # =============================================================================
 
 
 @pytest.fixture
 def data_context(classification_data):
-    """DataContext from classification data."""
-    from sklearn_meta.core.data.context import DataContext
+    """DataView from classification data."""
+    from sklearn_meta.data.view import DataView
 
     X, y = classification_data
-    return DataContext.from_Xy(X, y)
+    return DataView.from_Xy(X, y)
 
 
 @pytest.fixture
 def data_context_with_groups(grouped_data):
-    """DataContext with groups for group CV."""
-    from sklearn_meta.core.data.context import DataContext
+    """DataView with groups for group CV."""
+    from sklearn_meta.data.view import DataView
 
     X, y, groups = grouped_data
-    return DataContext.from_Xy(X, y, groups=groups)
+    return DataView.from_Xy(X, y, groups=groups)
 
 
 @pytest.fixture
 def regression_context(regression_data):
-    """DataContext from regression data."""
-    from sklearn_meta.core.data.context import DataContext
+    """DataView from regression data."""
+    from sklearn_meta.data.view import DataView
 
     X, y = regression_data
-    return DataContext.from_Xy(X, y)
+    return DataView.from_Xy(X, y)
 
 
 @pytest.fixture
 def small_context(small_classification_data):
-    """Small DataContext for quick tests."""
-    from sklearn_meta.core.data.context import DataContext
+    """Small DataView for quick tests."""
+    from sklearn_meta.data.view import DataView
 
     X, y = small_classification_data
-    return DataContext.from_Xy(X, y)
+    return DataView.from_Xy(X, y)
 
 
 # =============================================================================
@@ -184,7 +184,7 @@ def small_context(small_classification_data):
 @pytest.fixture
 def cv_config_stratified():
     """Stratified CV configuration."""
-    from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+    from sklearn_meta.runtime.config import CVConfig, CVStrategy
 
     return CVConfig(
         n_splits=5,
@@ -198,7 +198,7 @@ def cv_config_stratified():
 @pytest.fixture
 def cv_config_group():
     """Group CV configuration."""
-    from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+    from sklearn_meta.runtime.config import CVConfig, CVStrategy
 
     return CVConfig(
         n_splits=5,
@@ -212,7 +212,7 @@ def cv_config_group():
 @pytest.fixture
 def cv_config_repeated():
     """Repeated CV configuration."""
-    from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+    from sklearn_meta.runtime.config import CVConfig, CVStrategy
 
     return CVConfig(
         n_splits=5,
@@ -226,7 +226,7 @@ def cv_config_repeated():
 @pytest.fixture
 def cv_config_nested():
     """Nested CV configuration."""
-    from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+    from sklearn_meta.runtime.config import CVConfig, CVStrategy
 
     return CVConfig(
         n_splits=5,
@@ -238,21 +238,21 @@ def cv_config_nested():
 
 
 # =============================================================================
-# Model Node Fixtures
+# Node Fixtures
 # =============================================================================
 
 
 @pytest.fixture
 def rf_classifier_node():
-    """ModelNode for Random Forest classifier."""
-    from sklearn_meta.core.model.node import ModelNode
+    """NodeSpec for Random Forest classifier."""
+    from sklearn_meta.spec.node import NodeSpec
     from sklearn_meta.search.space import SearchSpace
 
     space = SearchSpace()
     space.add_int("n_estimators", 10, 100)
     space.add_int("max_depth", 3, 10)
 
-    return ModelNode(
+    return NodeSpec(
         name="rf",
         estimator_class=RandomForestClassifier,
         search_space=space,
@@ -262,14 +262,14 @@ def rf_classifier_node():
 
 @pytest.fixture
 def lr_classifier_node():
-    """ModelNode for Logistic Regression classifier."""
-    from sklearn_meta.core.model.node import ModelNode
+    """NodeSpec for Logistic Regression classifier."""
+    from sklearn_meta.spec.node import NodeSpec
     from sklearn_meta.search.space import SearchSpace
 
     space = SearchSpace()
     space.add_float("C", 0.01, 10.0, log=True)
 
-    return ModelNode(
+    return NodeSpec(
         name="lr",
         estimator_class=LogisticRegression,
         search_space=space,
@@ -279,15 +279,15 @@ def lr_classifier_node():
 
 @pytest.fixture
 def rf_regressor_node():
-    """ModelNode for Random Forest regressor."""
-    from sklearn_meta.core.model.node import ModelNode
+    """NodeSpec for Random Forest regressor."""
+    from sklearn_meta.spec.node import NodeSpec
     from sklearn_meta.search.space import SearchSpace
 
     space = SearchSpace()
     space.add_int("n_estimators", 10, 100)
     space.add_int("max_depth", 3, 10)
 
-    return ModelNode(
+    return NodeSpec(
         name="rf_reg",
         estimator_class=RandomForestRegressor,
         search_space=space,
@@ -297,10 +297,10 @@ def rf_regressor_node():
 
 @pytest.fixture
 def scaler_node():
-    """ModelNode for StandardScaler transformer."""
-    from sklearn_meta.core.model.node import ModelNode, OutputType
+    """NodeSpec for StandardScaler transformer."""
+    from sklearn_meta.spec.node import NodeSpec, OutputType
 
-    return ModelNode(
+    return NodeSpec(
         name="scaler",
         estimator_class=StandardScaler,
         output_type=OutputType.TRANSFORM,
@@ -315,9 +315,9 @@ def scaler_node():
 @pytest.fixture
 def simple_graph(rf_classifier_node):
     """Graph with a single node."""
-    from sklearn_meta.core.model.graph import ModelGraph
+    from sklearn_meta.spec.graph import GraphSpec
 
-    graph = ModelGraph()
+    graph = GraphSpec()
     graph.add_node(rf_classifier_node)
     return graph
 
@@ -325,9 +325,9 @@ def simple_graph(rf_classifier_node):
 @pytest.fixture
 def two_model_graph(rf_classifier_node, lr_classifier_node):
     """Graph with two independent nodes."""
-    from sklearn_meta.core.model.graph import ModelGraph
+    from sklearn_meta.spec.graph import GraphSpec
 
-    graph = ModelGraph()
+    graph = GraphSpec()
     graph.add_node(rf_classifier_node)
     graph.add_node(lr_classifier_node)
     return graph
@@ -336,16 +336,16 @@ def two_model_graph(rf_classifier_node, lr_classifier_node):
 @pytest.fixture
 def stacking_graph():
     """Graph with base models stacked into meta-learner."""
-    from sklearn_meta.core.model.graph import ModelGraph
-    from sklearn_meta.core.model.node import ModelNode, OutputType
-    from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+    from sklearn_meta.spec.graph import GraphSpec
+    from sklearn_meta.spec.node import NodeSpec, OutputType
+    from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
     from sklearn_meta.search.space import SearchSpace
 
     # Base models
     rf_space = SearchSpace()
     rf_space.add_int("n_estimators", 10, 50)
 
-    rf_node = ModelNode(
+    rf_node = NodeSpec(
         name="rf_base",
         estimator_class=RandomForestClassifier,
         search_space=rf_space,
@@ -353,7 +353,7 @@ def stacking_graph():
         fixed_params={"random_state": 42},
     )
 
-    lr_node = ModelNode(
+    lr_node = NodeSpec(
         name="lr_base",
         estimator_class=LogisticRegression,
         fixed_params={"random_state": 42, "max_iter": 1000},
@@ -361,13 +361,13 @@ def stacking_graph():
     )
 
     # Meta model
-    meta_node = ModelNode(
+    meta_node = NodeSpec(
         name="meta",
         estimator_class=LogisticRegression,
         fixed_params={"random_state": 42, "max_iter": 1000},
     )
 
-    graph = ModelGraph()
+    graph = GraphSpec()
     graph.add_node(rf_node)
     graph.add_node(lr_node)
     graph.add_node(meta_node)
@@ -390,15 +390,15 @@ def stacking_graph():
 @pytest.fixture
 def linear_graph():
     """Linear graph A -> B -> C."""
-    from sklearn_meta.core.model.graph import ModelGraph
-    from sklearn_meta.core.model.node import ModelNode
-    from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+    from sklearn_meta.spec.graph import GraphSpec
+    from sklearn_meta.spec.node import NodeSpec
+    from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
 
-    node_a = ModelNode(name="A", estimator_class=LogisticRegression)
-    node_b = ModelNode(name="B", estimator_class=LogisticRegression)
-    node_c = ModelNode(name="C", estimator_class=LogisticRegression)
+    node_a = NodeSpec(name="A", estimator_class=LogisticRegression)
+    node_b = NodeSpec(name="B", estimator_class=LogisticRegression)
+    node_c = NodeSpec(name="C", estimator_class=LogisticRegression)
 
-    graph = ModelGraph()
+    graph = GraphSpec()
     graph.add_node(node_a)
     graph.add_node(node_b)
     graph.add_node(node_c)
@@ -412,14 +412,14 @@ def linear_graph():
 @pytest.fixture
 def diamond_graph():
     """Diamond-shaped graph: A -> B, A -> C, B -> D, C -> D."""
-    from sklearn_meta.core.model.graph import ModelGraph
-    from sklearn_meta.core.model.node import ModelNode
-    from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+    from sklearn_meta.spec.graph import GraphSpec
+    from sklearn_meta.spec.node import NodeSpec
+    from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
 
-    nodes = {name: ModelNode(name=name, estimator_class=LogisticRegression)
+    nodes = {name: NodeSpec(name=name, estimator_class=LogisticRegression)
              for name in ["A", "B", "C", "D"]}
 
-    graph = ModelGraph()
+    graph = GraphSpec()
     for node in nodes.values():
         graph.add_node(node)
 
@@ -470,30 +470,28 @@ def xgb_search_space():
 @pytest.fixture
 def tuning_config():
     """Basic tuning configuration."""
-    from sklearn_meta.core.tuning.orchestrator import TuningConfig
-    from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+    from sklearn_meta.runtime.config import TuningConfig
+    from sklearn_meta.engine.strategy import OptimizationStrategy
 
     return TuningConfig(
         strategy=OptimizationStrategy.LAYER_BY_LAYER,
         n_trials=10,
         metric="accuracy",
         greater_is_better=True,
-        verbose=0,
     )
 
 
 @pytest.fixture
 def tuning_config_regression():
     """Tuning configuration for regression."""
-    from sklearn_meta.core.tuning.orchestrator import TuningConfig
-    from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+    from sklearn_meta.runtime.config import TuningConfig
+    from sklearn_meta.engine.strategy import OptimizationStrategy
 
     return TuningConfig(
         strategy=OptimizationStrategy.LAYER_BY_LAYER,
         n_trials=10,
         metric="neg_mean_squared_error",
         greater_is_better=False,
-        verbose=0,
     )
 
 

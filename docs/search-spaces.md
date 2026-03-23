@@ -1,10 +1,44 @@
 # Search Spaces
 
-Search spaces define the hyperparameters that will be optimized during tuning. sklearn-meta provides a flexible, fluent API for defining parameter ranges, types, and constraints.
+Search spaces define the hyperparameters that will be optimized during tuning. sklearn-meta provides two ways to define search spaces: the `SearchSpace` class for standalone/reusable definitions, and the `GraphBuilder` fluent API for inline definitions.
 
 ---
 
-## Basic Usage
+## Defining Search Spaces with GraphBuilder
+
+The recommended way to define search spaces for most use cases is inline on `GraphBuilder` using `.param()`, `.int_param()`, and `.cat_param()`:
+
+```python
+from sklearn_meta.spec.builder import GraphBuilder
+from sklearn.ensemble import RandomForestClassifier
+
+graph = (
+    GraphBuilder()
+    .add_model("rf", RandomForestClassifier)
+        .int_param("n_estimators", 50, 200)
+        .int_param("max_depth", 3, 15)
+        .param("min_samples_split", 0.01, 0.2)
+        .cat_param("max_features", ["sqrt", "log2", None])
+    .compile()
+)
+```
+
+### Builder Methods
+
+| Method | Description | Example |
+|--------|-------------|---------|
+| `.param(name, low, high)` | Float hyperparameter | `.param("lr", 0.01, 0.3)` |
+| `.param(name, low, high, log=True)` | Float with log scale | `.param("lr", 0.01, 0.3, log=True)` |
+| `.int_param(name, low, high)` | Integer hyperparameter | `.int_param("depth", 3, 10)` |
+| `.int_param(name, low, high, step=5)` | Integer with step size | `.int_param("units", 32, 512, step=32)` |
+| `.cat_param(name, choices)` | Categorical hyperparameter | `.cat_param("solver", ["adam", "sgd"])` |
+| `.search_space(space)` | Attach a pre-built SearchSpace | `.search_space(my_space)` |
+
+---
+
+## Defining Search Spaces with SearchSpace
+
+For reusable or programmatically built spaces, use the `SearchSpace` class directly:
 
 ### Creating a Search Space
 
@@ -28,6 +62,21 @@ space = (
 )
 ```
 
+### Attaching to a GraphBuilder Node
+
+Use `.search_space()` to attach a pre-built `SearchSpace` to a node:
+
+```python
+graph = (
+    GraphBuilder()
+    .add_model("rf", RandomForestClassifier)
+        .search_space(rf_space)
+    .add_model("xgb", XGBClassifier)
+        .search_space(xgb_space)
+    .compile()
+)
+```
+
 ---
 
 ## Parameter Types
@@ -43,8 +92,8 @@ space.add_int("min_samples_leaf", low=1, high=100)
 ```
 
 **Options:**
-- `log=True` — Sample on log scale (useful for wide ranges)
-- `step=5` — Only sample multiples of 5
+- `log=True` -- Sample on log scale (useful for wide ranges)
+- `step=5` -- Only sample multiples of 5
 
 ```python
 # Log scale for parameters spanning orders of magnitude
@@ -65,8 +114,8 @@ space.add_float("l2_reg", low=1e-6, high=1e-2, log=True)
 ```
 
 **Options:**
-- `log=True` — Sample on log scale
-- `step=0.01` — Discrete steps
+- `log=True` -- Sample on log scale
+- `step=0.01` -- Discrete steps
 
 ```python
 # Log scale is essential for learning rates
@@ -241,6 +290,15 @@ space.remove_parameter("b")
 assert "b" not in space
 ```
 
+### Narrowing Around a Point
+
+Create a focused search space around known-good parameters (useful for retuning after feature selection):
+
+```python
+best_params = {"learning_rate": 0.05, "max_depth": 7, "reg_lambda": 0.1}
+narrowed = space.narrow_around(best_params, factor=0.5)
+```
+
 ---
 
 ## Inspection
@@ -294,6 +352,22 @@ rf_space = (
 )
 ```
 
+Or with GraphBuilder:
+
+```python
+graph = (
+    GraphBuilder()
+    .add_model("rf", RandomForestClassifier)
+        .int_param("n_estimators", 50, 500)
+        .int_param("max_depth", 3, 20)
+        .int_param("min_samples_split", 2, 20)
+        .int_param("min_samples_leaf", 1, 10)
+        .cat_param("max_features", ["sqrt", "log2", None])
+        .cat_param("bootstrap", [True, False])
+    .compile()
+)
+```
+
 ### XGBoost
 
 ```python
@@ -333,6 +407,65 @@ lr_space = (
     .add_categorical("penalty", ["l1", "l2", "elasticnet"])
     .add_categorical("solver", ["lbfgs", "saga"])
 )
+```
+
+---
+
+## End-to-End Example
+
+Putting it all together with `GraphBuilder`, `RunConfig`, and `GraphRunner`:
+
+```python
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.linear_model import LogisticRegression
+
+from sklearn_meta.spec.builder import GraphBuilder
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.runtime.config import RunConfig, CVConfig, TuningConfig
+from sklearn_meta.runtime.services import RuntimeServices
+from sklearn_meta.data.view import DataView
+
+# Define graph with inline search spaces
+graph = (
+    GraphBuilder()
+    .add_model("rf", RandomForestClassifier)
+        .int_param("n_estimators", 50, 500)
+        .int_param("max_depth", 3, 20)
+        .cat_param("max_features", ["sqrt", "log2"])
+        .fixed_params(random_state=42)
+    .add_model("xgb", XGBClassifier)
+        .int_param("max_depth", 3, 12)
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .param("subsample", 0.5, 1.0)
+        .param("colsample_bytree", 0.5, 1.0)
+        .fixed_params(n_jobs=-1, random_state=42)
+    .add_model("meta", LogisticRegression)
+        .param("C", 1e-4, 1e2, log=True)
+        .stacks_proba("rf", "xgb")
+    .compile()
+)
+
+# Configure the run
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy="stratified"),
+    tuning=TuningConfig(
+        n_trials=50,
+        metric="roc_auc",
+        greater_is_better=True,
+        early_stopping_rounds=15,
+        show_progress=True,
+    ),
+    verbosity=2,
+)
+
+# Train
+data = DataView.from_Xy(X_train, y_train)
+run = GraphRunner(RuntimeServices.default()).fit(graph, data, config)
+
+# Predict
+inference = run.compile_inference()
+predictions = inference.predict(X_test)
 ```
 
 ---
@@ -379,6 +512,6 @@ Use [reparameterization](reparameterization.md) for correlated parameters:
 
 ## Next Steps
 
-- [Tuning](tuning.md) — How search spaces are optimized
-- [Reparameterization](reparameterization.md) — Transform correlated parameters
-- [Model Graphs](model-graphs.md) — Attach spaces to model nodes
+- [Tuning](tuning.md) -- How search spaces are optimized
+- [Reparameterization](reparameterization.md) -- Transform correlated parameters
+- [Model Graphs](model-graphs.md) -- Attach spaces to model nodes

@@ -20,13 +20,14 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.node import ModelNode, OutputType
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.data.view import DataView
+from sklearn_meta.runtime.config import CVConfig, CVStrategy, RunConfig, TuningConfig
+from sklearn_meta.engine.cv import CVEngine
+from sklearn_meta.spec.node import NodeSpec, OutputType
+from sklearn_meta.spec.graph import GraphSpec
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.engine.strategy import OptimizationStrategy
+from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.search.space import SearchSpace
 
 
@@ -64,7 +65,7 @@ class TestRandomForestClassifier:
         space.add_int("n_estimators", 10, 100)
         space.add_int("max_depth", 2, 10)
 
-        node = ModelNode(
+        node = NodeSpec(
             name="rf",
             estimator_class=RandomForestClassifier,
             search_space=space,
@@ -78,7 +79,7 @@ class TestRandomForestClassifier:
         """Verify RF classifier fits and predicts correctly."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="rf",
             estimator_class=RandomForestClassifier,
             fixed_params={"n_estimators": 10, "random_state": 42},
@@ -96,7 +97,7 @@ class TestRandomForestClassifier:
         """Verify RF classifier produces probability output."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="rf",
             estimator_class=RandomForestClassifier,
             output_type=OutputType.PROBA,
@@ -121,7 +122,7 @@ class TestGradientBoostingClassifier:
         space.add_float("learning_rate", 0.01, 0.3)
         space.add_int("n_estimators", 10, 100)
 
-        node = ModelNode(
+        node = NodeSpec(
             name="gbc",
             estimator_class=GradientBoostingClassifier,
             search_space=space,
@@ -134,7 +135,7 @@ class TestGradientBoostingClassifier:
         """Verify GBC fits and predicts correctly."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="gbc",
             estimator_class=GradientBoostingClassifier,
             fixed_params={"n_estimators": 10, "max_depth": 3, "random_state": 42},
@@ -156,7 +157,7 @@ class TestLogisticRegression:
         space = SearchSpace()
         space.add_float("C", 0.01, 10.0, log=True)
 
-        node = ModelNode(
+        node = NodeSpec(
             name="lr",
             estimator_class=LogisticRegression,
             search_space=space,
@@ -169,7 +170,7 @@ class TestLogisticRegression:
         """Verify LR fits and predicts correctly."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="lr",
             estimator_class=LogisticRegression,
             fixed_params={"random_state": 42, "max_iter": 1000},
@@ -186,7 +187,7 @@ class TestLogisticRegression:
         """Verify LR produces probability output."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="lr",
             estimator_class=LogisticRegression,
             output_type=OutputType.PROBA,
@@ -210,7 +211,7 @@ class TestSVMClassifier:
         space.add_float("C", 0.1, 10.0)
         space.add_float("gamma", 0.001, 1.0, log=True)
 
-        node = ModelNode(
+        node = NodeSpec(
             name="svc",
             estimator_class=SVC,
             search_space=space,
@@ -223,7 +224,7 @@ class TestSVMClassifier:
         """Verify SVC fits and predicts correctly."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="svc",
             estimator_class=SVC,
             fixed_params={"random_state": 42},
@@ -240,7 +241,7 @@ class TestSVMClassifier:
         """Verify SVC with probability=True works for proba output."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="svc",
             estimator_class=SVC,
             output_type=OutputType.PROBA,
@@ -264,7 +265,7 @@ class TestMLPClassifier:
         space.add_float("alpha", 0.0001, 0.1, log=True)
         space.add_categorical("activation", ["relu", "tanh"])
 
-        node = ModelNode(
+        node = NodeSpec(
             name="mlp",
             estimator_class=MLPClassifier,
             search_space=space,
@@ -277,7 +278,7 @@ class TestMLPClassifier:
         """Verify MLP fits and predicts correctly."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="mlp",
             estimator_class=MLPClassifier,
             fixed_params={
@@ -304,7 +305,7 @@ class TestDecisionTreeClassifier:
         space.add_int("max_depth", 2, 20)
         space.add_int("min_samples_split", 2, 20)
 
-        node = ModelNode(
+        node = NodeSpec(
             name="dt",
             estimator_class=DecisionTreeClassifier,
             search_space=space,
@@ -317,7 +318,7 @@ class TestDecisionTreeClassifier:
         """Verify DT fits and predicts correctly."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="dt",
             estimator_class=DecisionTreeClassifier,
             fixed_params={"random_state": 42, "max_depth": 5},
@@ -338,7 +339,7 @@ class TestExtraTreesClassifier:
         """Verify ExtraTrees fits and predicts correctly."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="etc",
             estimator_class=ExtraTreesClassifier,
             fixed_params={"n_estimators": 10, "random_state": 42},
@@ -359,7 +360,7 @@ class TestAdaBoostClassifier:
         """Verify AdaBoost fits and predicts correctly."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="adaboost",
             estimator_class=AdaBoostClassifier,
             fixed_params={"n_estimators": 10, "random_state": 42},
@@ -380,7 +381,7 @@ class TestSGDClassifier:
         """Verify SGD fits and predicts correctly."""
         X, y = classification_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="sgd",
             estimator_class=SGDClassifier,
             fixed_params={"random_state": 42, "max_iter": 1000},
@@ -401,7 +402,7 @@ class TestRegressionModels:
         """Verify RF regressor fits and predicts correctly."""
         X, y = regression_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="rf_reg",
             estimator_class=RandomForestRegressor,
             fixed_params={"n_estimators": 10, "random_state": 42},
@@ -419,7 +420,7 @@ class TestRegressionModels:
         """Verify Ridge regressor fits and predicts correctly."""
         X, y = regression_data_small
 
-        node = ModelNode(
+        node = NodeSpec(
             name="ridge",
             estimator_class=Ridge,
             fixed_params={"alpha": 1.0, "random_state": 42},
@@ -440,26 +441,26 @@ class TestModelInPipeline:
     def test_multiple_models_in_pipeline(self, classification_data_small, mock_search_backend):
         """Verify multiple different model types work in pipeline."""
         X, y = classification_data_small
-        ctx = DataContext.from_Xy(X, y)
+        ctx = DataView.from_Xy(X, y)
 
         # Create nodes with different model types
-        rf_node = ModelNode(
+        rf_node = NodeSpec(
             name="rf",
             estimator_class=RandomForestClassifier,
             fixed_params={"n_estimators": 5, "random_state": 42},
         )
-        lr_node = ModelNode(
+        lr_node = NodeSpec(
             name="lr",
             estimator_class=LogisticRegression,
             fixed_params={"random_state": 42, "max_iter": 1000},
         )
-        dt_node = ModelNode(
+        dt_node = NodeSpec(
             name="dt",
             estimator_class=DecisionTreeClassifier,
             fixed_params={"max_depth": 3, "random_state": 42},
         )
 
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(rf_node)
         graph.add_node(lr_node)
         graph.add_node(dt_node)
@@ -467,27 +468,21 @@ class TestModelInPipeline:
         cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
         tuning_config = TuningConfig(
             strategy=OptimizationStrategy.NONE,
-            cv_config=cv_config,
             metric="accuracy",
             greater_is_better=True,
-            verbose=0,
         )
 
-        data_manager = DataManager(cv_config)
-        orchestrator = TuningOrchestrator(
-            graph=graph,
-            data_manager=data_manager,
-            search_backend=mock_search_backend,
-            tuning_config=tuning_config,
-        )
+        config = RunConfig(cv=cv_config, tuning=tuning_config, verbosity=0)
+        services = RuntimeServices(search_backend=mock_search_backend)
+        runner = GraphRunner(services)
 
-        fitted = orchestrator.fit(ctx)
+        fitted = runner.fit(graph, ctx, config)
 
         # All models should be fitted
-        assert "rf" in fitted.fitted_nodes
-        assert "lr" in fitted.fitted_nodes
-        assert "dt" in fitted.fitted_nodes
+        assert "rf" in fitted.node_results
+        assert "lr" in fitted.node_results
+        assert "dt" in fitted.node_results
 
         # All should have reasonable scores
         for name in ["rf", "lr", "dt"]:
-            assert fitted.fitted_nodes[name].mean_score > 0.5
+            assert fitted.node_results[name].mean_score > 0.5

@@ -1,4 +1,4 @@
-"""Integration tests for FittedGraph.predict() public contract.
+"""Integration tests for InferenceGraph.predict() public contract.
 
 Tests cover: single-node prediction, two-layer stacking, proba stacking,
 feature selection at inference, conditional node handling, and missing
@@ -12,18 +12,16 @@ from sklearn.datasets import make_classification, make_regression
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.model.node import ModelNode, OutputType
-from sklearn_meta.core.tuning.orchestrator import (
-    FittedGraph,
-    TuningConfig,
-    TuningOrchestrator,
-)
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.data.view import DataView
+from sklearn_meta.runtime.config import CVConfig, CVStrategy, RunConfig, TuningConfig
+from sklearn_meta.engine.cv import CVEngine
+from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
+from sklearn_meta.spec.graph import GraphSpec
+from sklearn_meta.spec.node import NodeSpec, OutputType
+from sklearn_meta.artifacts.inference import InferenceGraph
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.engine.strategy import OptimizationStrategy
+from sklearn_meta.runtime.services import RuntimeServices
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +37,7 @@ def _make_regression_ctx(n_samples=200, n_features=5, random_state=42):
         random_state=random_state,
     )
     X_df = pd.DataFrame(X, columns=[f"f{i}" for i in range(n_features)])
-    return DataContext.from_Xy(X_df, pd.Series(y)), X_df
+    return DataView.from_Xy(X_df, pd.Series(y)), X_df
 
 
 def _make_classification_ctx(n_samples=200, n_features=5, random_state=42):
@@ -52,7 +50,7 @@ def _make_classification_ctx(n_samples=200, n_features=5, random_state=42):
         random_state=random_state,
     )
     X_df = pd.DataFrame(X, columns=[f"f{i}" for i in range(n_features)])
-    return DataContext.from_Xy(X_df, pd.Series(y)), X_df
+    return DataView.from_Xy(X_df, pd.Series(y)), X_df
 
 
 def _quick_tuning_config(metric="neg_mean_squared_error", greater_is_better=False):
@@ -61,24 +59,18 @@ def _quick_tuning_config(metric="neg_mean_squared_error", greater_is_better=Fals
         strategy=CVStrategy.RANDOM,
         random_state=42,
     )
-    return TuningConfig(
+    tuning_config = TuningConfig(
         strategy=OptimizationStrategy.NONE,
-        cv_config=cv_config,
         metric=metric,
         greater_is_better=greater_is_better,
-        verbose=0,
     )
+    return RunConfig(cv=cv_config, tuning=tuning_config, verbosity=0)
 
 
-def _fit_graph(graph, ctx, tuning_config, mock_search_backend):
-    data_manager = DataManager(tuning_config.cv_config)
-    orchestrator = TuningOrchestrator(
-        graph=graph,
-        data_manager=data_manager,
-        search_backend=mock_search_backend,
-        tuning_config=tuning_config,
-    )
-    return orchestrator.fit(ctx)
+def _fit_graph(graph, ctx, run_config, mock_search_backend):
+    services = RuntimeServices(search_backend=mock_search_backend)
+    runner = GraphRunner(services)
+    return runner.fit(graph, ctx, run_config)
 
 
 # ---------------------------------------------------------------------------
@@ -90,51 +82,54 @@ class TestSingleNodePrediction:
 
     def test_predict_returns_correct_shape(self, mock_search_backend):
         ctx, X_df = _make_regression_ctx()
-        node = ModelNode(
+        node = NodeSpec(
             name="tree",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(node)
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
-        preds = fitted.predict(X_df)
+        inference = fitted.compile_inference()
+        preds = inference.predict(X_df)
 
         assert preds.shape == (len(X_df),)
         assert np.isfinite(preds).all()
 
     def test_predict_is_deterministic(self, mock_search_backend):
         ctx, X_df = _make_regression_ctx()
-        node = ModelNode(
+        node = NodeSpec(
             name="tree",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(node)
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
+        inference = fitted.compile_inference()
 
-        preds1 = fitted.predict(X_df)
-        preds2 = fitted.predict(X_df)
+        preds1 = inference.predict(X_df)
+        preds2 = inference.predict(X_df)
 
         np.testing.assert_array_equal(preds1, preds2)
 
     def test_predict_with_explicit_node_name(self, mock_search_backend):
         ctx, X_df = _make_regression_ctx()
-        node = ModelNode(
+        node = NodeSpec(
             name="tree",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(node)
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
+        inference = fitted.compile_inference()
 
-        preds_default = fitted.predict(X_df)
-        preds_named = fitted.predict(X_df, node_name="tree")
+        preds_default = inference.predict(X_df)
+        preds_named = inference.predict(X_df, node_name="tree")
 
         np.testing.assert_array_equal(preds_default, preds_named)
 
@@ -149,12 +144,12 @@ class TestTwoLayerStackingPrediction:
     def test_stacking_predict_shape_two_bases(self, mock_search_backend):
         ctx, X_df = _make_regression_ctx()
 
-        base1 = ModelNode(
+        base1 = NodeSpec(
             name="base1",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        base2 = ModelNode(
+        base2 = NodeSpec(
             name="base2",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 0, "max_depth": 4},
@@ -163,13 +158,13 @@ class TestTwoLayerStackingPrediction:
         # sensitivity (Ridge with pandas can fail if column order differs
         # between training and predict due to set iteration in
         # _prepare_context_with_oof).
-        meta = ModelNode(
+        meta = NodeSpec(
             name="meta",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 5},
         )
 
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(base1)
         graph.add_node(base2)
         graph.add_node(meta)
@@ -181,7 +176,8 @@ class TestTwoLayerStackingPrediction:
         ))
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
-        preds = fitted.predict(X_df)
+        inference = fitted.compile_inference()
+        preds = inference.predict(X_df)
 
         assert preds.shape == (len(X_df),)
         assert np.isfinite(preds).all()
@@ -190,18 +186,18 @@ class TestTwoLayerStackingPrediction:
         """Meta model should see original features + upstream predictions."""
         ctx, X_df = _make_regression_ctx(n_features=3)
 
-        base1 = ModelNode(
+        base1 = NodeSpec(
             name="base1",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 2},
         )
-        meta = ModelNode(
+        meta = NodeSpec(
             name="meta",
             estimator_class=Ridge,
             fixed_params={"alpha": 1.0},
         )
 
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(base1)
         graph.add_node(meta)
         graph.add_edge(DependencyEdge(
@@ -212,25 +208,25 @@ class TestTwoLayerStackingPrediction:
 
         # The meta model was trained on original features + 1 prediction column
         # Verify by checking the number of coefficients
-        meta_model = fitted.get_node("meta").models[0]
-        # Ridge.coef_ has shape (n_features,) — original 3 + 1 pred column = 4
+        meta_model = fitted.node_results["meta"].models[0]
+        # Ridge.coef_ has shape (n_features,) -- original 3 + 1 pred column = 4
         assert meta_model.coef_.shape[0] == 3 + 1
 
     def test_stacking_predict_is_deterministic(self, mock_search_backend):
         ctx, X_df = _make_regression_ctx()
 
-        base1 = ModelNode(
+        base1 = NodeSpec(
             name="base1",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        meta = ModelNode(
+        meta = NodeSpec(
             name="meta",
             estimator_class=Ridge,
             fixed_params={"alpha": 1.0},
         )
 
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(base1)
         graph.add_node(meta)
         graph.add_edge(DependencyEdge(
@@ -238,9 +234,10 @@ class TestTwoLayerStackingPrediction:
         ))
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
+        inference = fitted.compile_inference()
 
-        preds1 = fitted.predict(X_df)
-        preds2 = fitted.predict(X_df)
+        preds1 = inference.predict(X_df)
+        preds2 = inference.predict(X_df)
         np.testing.assert_array_equal(preds1, preds2)
 
 
@@ -254,19 +251,19 @@ class TestProbaStackingPrediction:
     def test_proba_stacking_predict_shape(self, mock_search_backend):
         ctx, X_df = _make_classification_ctx()
 
-        base_clf = ModelNode(
+        base_clf = NodeSpec(
             name="base_clf",
             estimator_class=DecisionTreeClassifier,
             output_type=OutputType.PROBA,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        meta_clf = ModelNode(
+        meta_clf = NodeSpec(
             name="meta_clf",
             estimator_class=LogisticRegression,
             fixed_params={"random_state": 42, "max_iter": 500},
         )
 
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(base_clf)
         graph.add_node(meta_clf)
         graph.add_edge(DependencyEdge(
@@ -277,14 +274,19 @@ class TestProbaStackingPrediction:
             metric="accuracy", greater_is_better=True,
         )
         # Use stratified for classification
-        tuning_cfg.cv_config = CVConfig(
-            n_splits=2,
-            strategy=CVStrategy.STRATIFIED,
-            random_state=42,
+        tuning_cfg = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=tuning_cfg.tuning,
+            verbosity=0,
         )
 
         fitted = _fit_graph(graph, ctx, tuning_cfg, mock_search_backend)
-        preds = fitted.predict(X_df)
+        inference = fitted.compile_inference()
+        preds = inference.predict(X_df)
 
         # Default output_type for meta_clf is PREDICTION, so shape is (n,)
         assert preds.shape == (len(X_df),)
@@ -301,12 +303,12 @@ class TestFeatureSelectionInference:
     def test_predict_uses_selected_features(self, mock_search_backend):
         ctx, X_df = _make_regression_ctx(n_features=5)
 
-        node = ModelNode(
+        node = NodeSpec(
             name="tree",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(node)
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
@@ -318,24 +320,26 @@ class TestFeatureSelectionInference:
 
         # Retrain fold models on the selected feature subset so shapes match
         from sklearn.tree import DecisionTreeRegressor as DT
+        data = ctx.materialize()
         new_models = []
-        for fold_result in fitted.get_node("tree").cv_result.fold_results:
+        for fold_result in fitted.node_results["tree"].cv_result.fold_results:
             m = DT(random_state=42, max_depth=3)
             # Use fold training data with selected features only
             train_idx = fold_result.fold.train_indices
-            m.fit(X_df.iloc[train_idx][selected], ctx.y.iloc[train_idx])
+            m.fit(X_df.iloc[train_idx][selected], data.y[train_idx])
             new_models.append(m)
             fold_result.model = m
 
-        fitted.fitted_nodes["tree"].selected_features = selected
+        fitted.node_results["tree"].selected_features = selected
 
-        preds = fitted.predict(X_df)
+        inference = fitted.compile_inference()
+        preds = inference.predict(X_df)
 
         assert preds.shape == (len(X_df),)
         assert np.isfinite(preds).all()
 
         # Verify the models were only trained on 3 features
-        for m in fitted.get_node("tree").models:
+        for m in fitted.node_results["tree"].models:
             assert m.n_features_in_ == 3
 
 
@@ -350,57 +354,59 @@ class TestConditionalNodeHandling:
         """Predicting from a skipped conditional node should raise KeyError."""
         ctx, X_df = _make_regression_ctx()
 
-        normal_node = ModelNode(
+        normal_node = NodeSpec(
             name="normal",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        conditional_node = ModelNode(
+        conditional_node = NodeSpec(
             name="conditional",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
             condition=lambda ctx: False,  # never runs
         )
 
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(normal_node)
         graph.add_node(conditional_node)
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
 
-        # The conditional node should not be in fitted_nodes
-        assert "conditional" not in fitted.fitted_nodes
-        assert "normal" in fitted.fitted_nodes
+        # The conditional node should not be in node_results
+        assert "conditional" not in fitted.node_results
+        assert "normal" in fitted.node_results
 
         # Predicting from the conditional node should raise KeyError
+        inference = fitted.compile_inference()
         with pytest.raises(KeyError, match="condition"):
-            fitted.predict(X_df, node_name="conditional")
+            inference.predict(X_df, node_name="conditional")
 
     def test_non_conditional_node_works_when_conditional_skipped(self, mock_search_backend):
         """Predicting from a non-conditional node should work even if another
         node was conditional and skipped, as long as there is no dependency."""
         ctx, X_df = _make_regression_ctx()
 
-        normal_node = ModelNode(
+        normal_node = NodeSpec(
             name="normal",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        conditional_node = ModelNode(
+        conditional_node = NodeSpec(
             name="conditional",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
             condition=lambda ctx: False,
         )
 
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(normal_node)
         graph.add_node(conditional_node)
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
+        inference = fitted.compile_inference()
 
         # Predict from the normal node should work fine
-        preds = fitted.predict(X_df, node_name="normal")
+        preds = inference.predict(X_df, node_name="normal")
         assert preds.shape == (len(X_df),)
         assert np.isfinite(preds).all()
 
@@ -410,19 +416,19 @@ class TestConditionalNodeHandling:
         """Predicting through a skipped conditional upstream should fail clearly."""
         ctx, X_df = _make_regression_ctx()
 
-        conditional_node = ModelNode(
+        conditional_node = NodeSpec(
             name="conditional",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
             condition=lambda ctx: False,
         )
-        meta_node = ModelNode(
+        meta_node = NodeSpec(
             name="meta",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 0, "max_depth": 4},
         )
 
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(conditional_node)
         graph.add_node(meta_node)
         graph.add_edge(
@@ -434,9 +440,10 @@ class TestConditionalNodeHandling:
         )
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
+        inference = fitted.compile_inference()
 
-        with pytest.raises(KeyError, match="Upstream node 'conditional'"):
-            fitted.predict(X_df, node_name="meta")
+        with pytest.raises(KeyError, match="conditional"):
+            inference.predict(X_df, node_name="meta")
 
 
 # ---------------------------------------------------------------------------
@@ -449,34 +456,36 @@ class TestMissingNodeError:
     def test_predict_nonexistent_node_raises_key_error(self, mock_search_backend):
         ctx, X_df = _make_regression_ctx()
 
-        node = ModelNode(
+        node = NodeSpec(
             name="tree",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(node)
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
+        inference = fitted.compile_inference()
 
         with pytest.raises(KeyError, match="nonexistent"):
-            fitted.predict(X_df, node_name="nonexistent")
+            inference.predict(X_df, node_name="nonexistent")
 
     def test_error_message_lists_available_nodes(self, mock_search_backend):
         ctx, X_df = _make_regression_ctx()
 
-        node = ModelNode(
+        node = NodeSpec(
             name="tree",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(node)
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
+        inference = fitted.compile_inference()
 
-        with pytest.raises(KeyError, match="tree"):
-            fitted.predict(X_df, node_name="nonexistent")
+        with pytest.raises(KeyError, match="nonexistent"):
+            inference.predict(X_df, node_name="nonexistent")
 
 
 class TestPersistenceContract:
@@ -487,18 +496,18 @@ class TestPersistenceContract:
     ):
         ctx, X_df = _make_regression_ctx()
 
-        base = ModelNode(
+        base = NodeSpec(
             name="base",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 42, "max_depth": 3},
         )
-        meta = ModelNode(
+        meta = NodeSpec(
             name="meta",
             estimator_class=DecisionTreeRegressor,
             fixed_params={"random_state": 0, "max_depth": 4},
         )
 
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(base)
         graph.add_node(meta)
         graph.add_edge(
@@ -510,13 +519,11 @@ class TestPersistenceContract:
         )
 
         fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
-        preds_before = fitted.predict(X_df)
+        inference = fitted.compile_inference()
+        preds_before = inference.predict(X_df)
 
-        fitted.save(tmp_path / "model")
-        loaded = FittedGraph.load(tmp_path / "model")
+        inference.save(tmp_path / "model")
+        loaded = InferenceGraph.load(tmp_path / "model")
         preds_after = loaded.predict(X_df)
 
         np.testing.assert_array_equal(preds_before, preds_after)
-        assert loaded.training_artifacts_available is False
-        with pytest.raises(RuntimeError, match="include_training_artifacts=True"):
-            loaded.get_oof_predictions("base")

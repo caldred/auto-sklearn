@@ -157,8 +157,9 @@ class TestXGBMultiplierPluginModifyFitParams:
         """Verify verbose=False is added by default."""
         plugin = XGBMultiplierPlugin()
         params = {}
+        batch = data_context.materialize()
 
-        result = plugin.modify_fit_params(params, data_context)
+        result = plugin.modify_fit_params(params, batch)
 
         assert result["verbose"] is False
 
@@ -166,8 +167,9 @@ class TestXGBMultiplierPluginModifyFitParams:
         """Verify existing early_stopping_rounds is preserved."""
         plugin = XGBMultiplierPlugin()
         params = {"early_stopping_rounds": 50}
+        batch = data_context.materialize()
 
-        result = plugin.modify_fit_params(params, data_context)
+        result = plugin.modify_fit_params(params, batch)
 
         # Should not modify if early_stopping_rounds already set
         assert result == params
@@ -176,8 +178,9 @@ class TestXGBMultiplierPluginModifyFitParams:
         """Verify original params are not mutated."""
         plugin = XGBMultiplierPlugin()
         original = {"a": 1}
+        batch = data_context.materialize()
 
-        result = plugin.modify_fit_params(original, data_context)
+        result = plugin.modify_fit_params(original, batch)
 
         assert "verbose" not in original
         assert "verbose" in result
@@ -299,9 +302,11 @@ class TestXGBMultiplierPluginEvaluateParams:
         """Verify returns inf on evaluation failure."""
         plugin = XGBMultiplierPlugin()
         node = MagicMock()
-        node.create_estimator = MagicMock(side_effect=Exception("Test error"))
+        node.estimator_class = MagicMock(side_effect=Exception("Test error"))
+        node.fixed_params = {}
 
-        result = plugin._evaluate_params(node, data_context, {})
+        batch = data_context.materialize()
+        result = plugin._evaluate_params(node, batch, {})
 
         assert result == float("inf")
 
@@ -312,27 +317,25 @@ class TestXGBMultiplierPluginEvaluateParams:
     def test_returns_score_on_success(self, classification_data):
         """Verify returns actual score on success."""
         import pandas as pd
-        from sklearn_meta.core.data.context import DataContext
+        from sklearn_meta.data.view import DataView
 
         X, y = classification_data
-        ctx = DataContext.from_Xy(X, y)
+        batch = DataView.from_Xy(X, y).materialize()
 
         plugin = XGBMultiplierPlugin(cv_folds=2)
 
-        node = MagicMock()
-
-        # This test requires actual xgboost
         import xgboost as xgb
-        node.create_estimator = MagicMock(
-            return_value=xgb.XGBClassifier(
-                n_estimators=10,
-                max_depth=3,
-                random_state=42,
-                eval_metric="logloss",
-            )
-        )
 
-        result = plugin._evaluate_params(node, ctx, {})
+        node = MagicMock()
+        node.estimator_class = xgb.XGBClassifier
+        node.fixed_params = {
+            "n_estimators": 10,
+            "max_depth": 3,
+            "random_state": 42,
+            "eval_metric": "logloss",
+        }
+
+        result = plugin._evaluate_params(node, batch, {})
 
         assert result != float("inf")
         assert result > 0

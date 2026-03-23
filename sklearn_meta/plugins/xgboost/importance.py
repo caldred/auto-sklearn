@@ -10,8 +10,8 @@ from sklearn_meta.plugins.xgboost import XGBOOST_CLASS_NAMES
 from sklearn_meta.selection.importance import ImportanceExtractor
 
 if TYPE_CHECKING:
-    from sklearn_meta.core.data.context import DataContext
-    from sklearn_meta.core.model.node import ModelNode
+    from sklearn_meta.data.batch import MaterializedBatch
+    from sklearn_meta.spec.node import NodeSpec
 
 logger = logging.getLogger(__name__)
 
@@ -121,22 +121,22 @@ class XGBImportancePlugin(ModelPlugin):
     def post_fit(
         self,
         model: Any,
-        node: ModelNode,
-        ctx: DataContext,
+        node: NodeSpec,
+        batch: MaterializedBatch,
     ) -> Any:
         """
         Extract and cache feature importance after fitting.
 
         Args:
             model: Fitted XGBoost model.
-            node: The model node.
-            ctx: Data context.
+            node: The node spec.
+            batch: Materialized batch.
 
         Returns:
             The model (unmodified).
         """
         # Extract importance
-        feature_names = list(ctx.X.columns)
+        feature_names = list(batch.X.columns)
         importance = self._extractor.extract(
             model, feature_names, self.importance_type
         )

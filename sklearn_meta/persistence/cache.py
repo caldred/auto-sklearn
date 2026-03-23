@@ -16,8 +16,8 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from sklearn_meta.core.data.context import DataContext
-    from sklearn_meta.core.model.node import ModelNode
+    from sklearn_meta.data.view import DataView
+    from sklearn_meta.spec.node import NodeSpec
 
 logger = logging.getLogger(__name__)
 
@@ -76,17 +76,17 @@ class FitCache:
 
     def cache_key(
         self,
-        node: ModelNode,
+        node: NodeSpec,
         params: Dict[str, Any],
-        ctx: DataContext,
+        data: DataView,
     ) -> str:
         """
         Compute a cache key for a model fit.
 
         Args:
-            node: The model node.
+            node: The node spec.
             params: Hyperparameters.
-            ctx: Data context.
+            data: Data view.
 
         Returns:
             Cache key string.
@@ -96,41 +96,43 @@ class FitCache:
             "node_name": node.name,
             "estimator_class": node.estimator_class.__name__,
             "params": json.dumps(params, sort_keys=True, default=str),
-            "data_hash": self._data_hash(ctx),
+            "data_hash": self._data_hash(data),
         }
 
         key_str = json.dumps(components, sort_keys=True)
         return hashlib.sha256(key_str.encode()).hexdigest()
 
-    def _data_hash(self, ctx: DataContext) -> str:
+    def _data_hash(self, data: DataView) -> str:
         """
-        Compute a hash of the data context.
+        Compute a hash of the data view.
 
         Uses shape and a sample of values for efficiency.
+        Materializes the DataView to access concrete arrays.
         """
+        batch = data.materialize()
         hasher = hashlib.sha256()
 
         # Hash shape
-        hasher.update(str(ctx.X.shape).encode())
-        if ctx.y is not None:
-            hasher.update(str(len(ctx.y)).encode())
+        hasher.update(str(batch.X.shape).encode())
+        if batch.y is not None:
+            hasher.update(str(len(batch.y)).encode())
 
         # Hash sample of X values (first and last 100 rows)
-        if len(ctx.X) > 0:
-            n_sample = min(100, len(ctx.X))
+        if len(batch.X) > 0:
+            n_sample = min(100, len(batch.X))
             sample_idx = list(range(n_sample)) + list(range(-n_sample, 0))
-            sample_idx = [i for i in sample_idx if i < len(ctx.X)]
+            sample_idx = [i for i in sample_idx if i < len(batch.X)]
 
-            X_sample = ctx.X.iloc[sample_idx].values
+            X_sample = batch.X.iloc[sample_idx].values
             hasher.update(X_sample.tobytes())
 
         # Hash sample of y values
-        if ctx.y is not None and len(ctx.y) > 0:
-            y_sample = ctx.y.iloc[:100].values
-            hasher.update(y_sample.tobytes())
+        if batch.y is not None and len(batch.y) > 0:
+            y_sample = batch.y[:100]
+            hasher.update(np.asarray(y_sample).tobytes())
 
         # Hash column names
-        hasher.update(",".join(ctx.X.columns).encode())
+        hasher.update(",".join(batch.X.columns).encode())
 
         return hasher.hexdigest()[:16]
 

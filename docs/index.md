@@ -11,19 +11,20 @@ sklearn-meta provides a powerful framework for building automated machine learni
 ```mermaid
 graph TB
     subgraph "sklearn-meta Pipeline"
-        A[Raw Data] --> B[DataContext]
+        A[Raw Data] --> B[DataView]
         B --> C[Feature Selection]
-        C --> D[Model Graph]
+        C --> D[GraphSpec]
         D --> E[Hyperparameter Tuning]
         E --> F[Cross-Validation]
-        F --> G[Fitted Models]
-        G --> H[Predictions]
+        F --> G[TrainingRun]
+        G --> H[InferenceGraph]
+        H --> I[Predictions]
     end
 
     subgraph "Key Components"
-        I[SearchSpace] -.-> E
-        J[Reparameterization] -.-> E
-        K[Plugins] -.-> D
+        J[SearchSpace] -.-> E
+        K[Reparameterization] -.-> E
+        L[Plugins] -.-> D
     end
 ```
 
@@ -33,7 +34,7 @@ graph TB
 
 | Feature | Description |
 |---------|-------------|
-| **Model Graphs** | Define complex pipelines as directed acyclic graphs (DAGs) |
+| **Graph Specs** | Define complex pipelines as directed acyclic graphs (DAGs) |
 | **GraphBuilder Fluent API** | Build pipelines with a chainable, readable API |
 | **Hyperparameter Optimization** | Backend-agnostic search with Optuna integration |
 | **Reparameterization** | Orthogonal parameter transformations for faster convergence |
@@ -78,34 +79,46 @@ graph TB
 
 ```mermaid
 graph LR
-    subgraph "Core Layer"
-        DC[DataContext]
-        DM[DataManager]
-        MG[ModelGraph]
-        TO[TuningOrchestrator]
+    subgraph "Spec Layer"
+        GS[GraphSpec]
+        NS[NodeSpec]
+        GB[GraphBuilder]
     end
 
-    subgraph "Search Layer"
-        SS[SearchSpace]
-        OB[OptunaBackend]
-        RP[Reparameterization]
+    subgraph "Data Layer"
+        DV[DataView]
+        DR[DatasetRecord]
+        MB[MaterializedBatch]
     end
 
-    subgraph "Execution Layer"
-        EX[Executor]
-        CA[Cache]
-        AU[AuditLogger]
+    subgraph "Runtime Layer"
+        RC[RunConfig]
+        RS[RuntimeServices]
     end
 
-    DC --> DM
-    DM --> TO
-    MG --> TO
-    SS --> OB
-    RP --> SS
-    OB --> TO
-    TO --> EX
-    EX --> CA
-    TO --> AU
+    subgraph "Engine Layer"
+        GR[GraphRunner]
+        CV[CVEngine]
+        SS[SearchService]
+    end
+
+    subgraph "Artifacts Layer"
+        TR[TrainingRun]
+        IG[InferenceGraph]
+    end
+
+    GB --> GS
+    NS --> GS
+    DR --> DV
+    DV --> MB
+    GS --> GR
+    DV --> GR
+    RC --> GR
+    RS --> GR
+    GR --> CV
+    GR --> SS
+    GR --> TR
+    TR --> IG
 ```
 
 ---
@@ -114,53 +127,111 @@ graph LR
 
 ### Using the GraphBuilder Fluent API (Recommended)
 
-The `GraphBuilder` is the recommended way to build and run pipelines:
+The `GraphBuilder` produces a pure `GraphSpec`. Runtime concerns (CV, tuning, fitting) are configured separately via `RunConfig` and executed by `GraphRunner`.
 
 ```python
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn_meta.api import GraphBuilder
+from sklearn_meta import GraphBuilder, RunConfig, CVConfig, TuningConfig, DataView, GraphRunner, RuntimeServices
 
-# Build a stacking pipeline and fit in one step
-fitted = (
+# 1. Build a graph spec
+graph = (
     GraphBuilder("my_pipeline")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(
-        n_estimators=(50, 500),
-        max_depth=(3, 20),
-    )
-    .with_fixed_params(random_state=42, n_jobs=-1)
+        .param("n_estimators", 50, 500)
+        .param("max_depth", 3, 20)
+        .fixed_params(random_state=42, n_jobs=-1)
     .add_model("gbm", GradientBoostingClassifier)
-    .with_search_space(
-        learning_rate=(0.01, 0.3, "log"),
-        max_depth=(3, 10),
-        n_estimators=(50, 300),
-    )
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .param("max_depth", 3, 10)
+        .int_param("n_estimators", 50, 300)
     .add_model("meta", LogisticRegression)
-    .stacks("rf", "gbm")
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+        .stacks("rf", "gbm")
+    .compile()
 )
 
-predictions = fitted.predict(X_test)
+# 2. Configure the run
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy="stratified"),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+)
+
+# 3. Wrap data in a DataView
+data = DataView.from_Xy(X_train, y_train)
+
+# 4. Fit with GraphRunner
+runner = GraphRunner(RuntimeServices.default())
+training_run = runner.fit(graph, data, config)
+
+# 5. Compile to an inference graph and predict
+inference = training_run.compile_inference()
+predictions = inference.predict(X_test)
+```
+
+### Using the Convenience Function
+
+For quick experiments, `sklearn_meta.fit()` wraps the runner in a single call:
+
+```python
+import sklearn_meta
+from sklearn_meta import GraphBuilder, RunConfig, CVConfig, TuningConfig, DataView
+
+graph = (
+    GraphBuilder()
+    .add_model("rf", RandomForestClassifier)
+        .param("n_estimators", 50, 500)
+        .param("max_depth", 3, 20)
+        .fixed_params(random_state=42, n_jobs=-1)
+    .compile()
+)
+
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy="stratified"),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+)
+
+data = DataView.from_Xy(X_train, y_train)
+
+training_run = sklearn_meta.fit(graph, data, config)
+predictions = training_run.compile_inference().predict(X_test)
+```
+
+### Using RunConfigBuilder
+
+For more readable configuration, use the fluent `RunConfigBuilder`:
+
+```python
+from sklearn_meta import RunConfigBuilder
+
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .feature_selection(method="shadow", n_shadows=5)
+    .reparameterization(enabled=True, use_prebaked=True)
+    .verbosity(2)
+    .build()
+)
 ```
 
 ### Using the Low-Level API
 
-For more control, you can use the core classes directly:
+For full control, construct `NodeSpec` and `GraphSpec` objects directly:
 
 ```python
 from sklearn.ensemble import RandomForestClassifier
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.node import ModelNode
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
-from sklearn_meta.search.backends.optuna import OptunaBackend
-from sklearn_meta.search.space import SearchSpace
+from sklearn_meta import (
+    DataView,
+    NodeSpec,
+    GraphSpec,
+    RunConfig,
+    CVConfig,
+    CVStrategy,
+    TuningConfig,
+    RuntimeServices,
+    GraphRunner,
+    SearchSpace,
+)
 
 # Define search space
 space = SearchSpace()
@@ -168,8 +239,8 @@ space.add_int("n_estimators", 50, 200)
 space.add_int("max_depth", 3, 15)
 space.add_float("min_samples_split", 0.01, 0.3)
 
-# Create model node (keyword-only arguments)
-node = ModelNode(
+# Create node spec (keyword-only arguments)
+node = NodeSpec(
     name="random_forest",
     estimator_class=RandomForestClassifier,
     search_space=space,
@@ -177,31 +248,31 @@ node = ModelNode(
 )
 
 # Build graph
-graph = ModelGraph()
+graph = GraphSpec()
 graph.add_node(node)
+graph.validate()
 
-# Configure and run tuning
-ctx = DataContext.from_Xy(X=X_train, y=y_train)
-cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED)
-tuning_config = TuningConfig(
-    strategy=OptimizationStrategy.LAYER_BY_LAYER,
-    n_trials=50,
-    metric="roc_auc",
-    greater_is_better=True,
-    cv_config=cv_config,
-)
-data_manager = DataManager(cv_config)
-backend = OptunaBackend()
-
-orchestrator = TuningOrchestrator(
-    graph=graph,
-    data_manager=data_manager,
-    search_backend=backend,
-    tuning_config=tuning_config,
+# Configure the run
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
+    tuning=TuningConfig(
+        n_trials=50,
+        metric="roc_auc",
+        greater_is_better=True,
+    ),
 )
 
-fitted = orchestrator.fit(ctx)
-predictions = fitted.predict(X_test)
+# Wrap data
+data = DataView.from_Xy(X=X_train, y=y_train)
+
+# Fit
+services = RuntimeServices.default()
+runner = GraphRunner(services)
+training_run = runner.fit(graph, data, config)
+
+# Predict
+inference = training_run.compile_inference()
+predictions = inference.predict(X_test)
 ```
 
 ---

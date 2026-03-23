@@ -6,7 +6,8 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sklearn_meta.core.tuning.orchestrator import FittedGraph, FittedNode
+    from sklearn_meta.artifacts.inference import InferenceGraph
+    from sklearn_meta.artifacts.training import NodeRunResult
 
 
 class ArtifactStore(ABC):
@@ -59,7 +60,7 @@ class ArtifactStore(ABC):
     @abstractmethod
     def save_fitted_node(
         self,
-        fitted_node: FittedNode,
+        fitted_node: NodeRunResult,
         tags: Optional[Dict[str, str]] = None,
     ) -> List[str]:
         """
@@ -76,7 +77,7 @@ class ArtifactStore(ABC):
     @abstractmethod
     def save_fitted_graph(
         self,
-        fitted_graph: FittedGraph,
+        fitted_graph: InferenceGraph,
         name: str,
         tags: Optional[Dict[str, str]] = None,
     ) -> str:

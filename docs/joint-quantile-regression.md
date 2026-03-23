@@ -9,7 +9,7 @@ Joint quantile regression models multiple correlated target properties using seq
 Instead of predicting point estimates for multiple targets, joint quantile regression models the full conditional distribution:
 
 ```
-P(Y₁, Y₂, ..., Yₙ | X) = P(Y₁|X) × P(Y₂|X,Y₁) × P(Y₃|X,Y₁,Y₂) × ...
+P(Y1, Y2, ..., Yn | X) = P(Y1|X) * P(Y2|X,Y1) * P(Y3|X,Y1,Y2) * ...
 ```
 
 Each conditional is modeled with quantile regression (typically 10-20 quantile levels) using XGBoost.
@@ -17,18 +17,18 @@ Each conditional is modeled with quantile regression (typically 10-20 quantile l
 ```mermaid
 graph TB
     subgraph "Chain Rule Decomposition"
-        X[Features X] --> Q1[P(Y₁|X)]
-        X --> Q2[P(Y₂|X,Y₁)]
-        X --> Q3[P(Y₃|X,Y₁,Y₂)]
+        X[Features X] --> Q1[P(Y1|X)]
+        X --> Q2[P(Y2|X,Y1)]
+        X --> Q3[P(Y3|X,Y1,Y2)]
         Q1 --> |"condition"| Q2
         Q1 --> |"condition"| Q3
         Q2 --> |"condition"| Q3
     end
 
     subgraph "Quantile Models"
-        Q1 --> |"τ=0.1,0.5,0.9"| D1[Distribution Y₁]
-        Q2 --> |"τ=0.1,0.5,0.9"| D2[Distribution Y₂]
-        Q3 --> |"τ=0.1,0.5,0.9"| D3[Distribution Y₃]
+        Q1 --> |"tau=0.1,0.5,0.9"| D1[Distribution Y1]
+        Q2 --> |"tau=0.1,0.5,0.9"| D2[Distribution Y2]
+        Q3 --> |"tau=0.1,0.5,0.9"| D3[Distribution Y3]
     end
 ```
 
@@ -49,22 +49,22 @@ graph TB
 - This ensures proper density estimation
 
 **During Inference:**
-- Sample from the quantile distribution of Y₁
-- Use sampled values to condition Y₂, Y₃, etc.
+- Sample from the quantile distribution of Y1
+- Use sampled values to condition Y2, Y3, etc.
 - Maintain consistent sampling paths for correlation
 
 ```mermaid
 graph LR
     subgraph "Training"
-        T1[Actual Y₁] --> T2[Train P(Y₂|X,Y₁)]
-        T1 --> T3[Train P(Y₃|X,Y₁,Y₂)]
-        T4[Actual Y₂] --> T3
+        T1[Actual Y1] --> T2[Train P(Y2|X,Y1)]
+        T1 --> T3[Train P(Y3|X,Y1,Y2)]
+        T4[Actual Y2] --> T3
     end
 
     subgraph "Inference"
-        I1[Sample Ŷ₁] --> I2[Predict P(Y₂|X,Ŷ₁)]
-        I1 --> I3[Predict P(Y₃|X,Ŷ₁,Ŷ₂)]
-        I2 --> |"Sample Ŷ₂"| I3
+        I1[Sample Y-hat-1] --> I2[Predict P(Y2|X,Y-hat-1)]
+        I1 --> I3[Predict P(Y3|X,Y-hat-1,Y-hat-2)]
+        I2 --> |"Sample Y-hat-2"| I3
     end
 ```
 
@@ -77,12 +77,12 @@ To preserve correlations, the same uniform random samples are used across all pr
 uniforms = [0.3, 0.7, 0.1, ...]  # n_samples values in [0,1]
 
 # For each sample path i:
-#   Y₁[i] = Q_Y₁(uniforms[i])  # Sample from Y₁ distribution
-#   Y₂[i] = Q_Y₂(uniforms[i])  # Sample from Y₂|Y₁ distribution
+#   Y1[i] = Q_Y1(uniforms[i])  # Sample from Y1 distribution
+#   Y2[i] = Q_Y2(uniforms[i])  # Sample from Y2|Y1 distribution
 #   ...
 ```
 
-This ensures that if sample i is at the 30th percentile of Y₁, it's also at the 30th percentile of Y₂|Y₁.
+This ensures that if sample i is at the 30th percentile of Y1, it's also at the 30th percentile of Y2|Y1.
 
 ---
 
@@ -96,20 +96,22 @@ graph TB
         QSC[QuantileScalingConfig]
     end
 
-    subgraph "Graph Structure"
-        JQG[JointQuantileGraph]
-        QMN[QuantileModelNode]
+    subgraph "Graph Spec"
+        JQG[JointQuantileGraphSpec]
+        QNS[QuantileNodeSpec]
         CSD[ConditionalSampleDependency]
     end
 
-    subgraph "Training"
-        JQO[JointQuantileOrchestrator]
-        FQN[FittedQuantileNode]
+    subgraph "Runtime"
+        RC[RunConfig]
+        GR[GraphRunner]
+        QNT[QuantileNodeTrainer]
     end
 
-    subgraph "Inference"
-        JQFG[JointQuantileFittedGraph]
-        QS[QuantileSampler]
+    subgraph "Artifacts"
+        TR[TrainingRun]
+        JQIG[JointQuantileInferenceGraph]
+        QFN[QuantileFittedNode]
     end
 
     subgraph "Persistence"
@@ -120,16 +122,18 @@ graph TB
     JQC --> JQG
     OC --> JQC
     QSC --> JQC
-    JQG --> |"nodes"| QMN
+    JQG --> |"nodes"| QNS
     JQG --> |"edges"| CSD
-    JQG --> JQO
-    JQO --> FQN
-    FQN --> JQFG
-    JQFG --> QS
-    JQFG --> |"save()"| MF
-    JQFG --> |"save()"| JL
-    MF --> |"load()"| JQFG
-    JL --> |"load()"| JQFG
+    JQG --> GR
+    RC --> GR
+    GR --> |"selects"| QNT
+    QNT --> TR
+    TR --> |"compile_inference()"| JQIG
+    JQIG --> QFN
+    JQIG --> |"save()"| MF
+    JQIG --> |"save()"| JL
+    MF --> |"load()"| JQIG
+    JL --> |"load()"| JQIG
 ```
 
 ---
@@ -139,16 +143,16 @@ graph TB
 ### Basic Usage
 
 ```python
-from sklearn_meta.core.model.joint_quantile_graph import (
-    JointQuantileGraph, JointQuantileConfig, OrderConstraint
+from sklearn_meta.spec.quantile import (
+    JointQuantileGraphSpec, JointQuantileConfig, OrderConstraint,
+    QuantileScalingConfig,
 )
-from sklearn_meta.core.model.quantile_node import QuantileScalingConfig
-from sklearn_meta.core.model.joint_quantile_fitted import JointQuantileFittedGraph
-from sklearn_meta.core.tuning.joint_quantile_orchestrator import JointQuantileOrchestrator
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.tuning.orchestrator import TuningConfig
+from sklearn_meta.artifacts.inference import JointQuantileInferenceGraph
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.data.view import DataView
+from sklearn_meta.runtime.config import RunConfig, CVConfig, CVStrategy, TuningConfig
+from sklearn_meta.runtime.services import RuntimeServices
+from sklearn_meta.search.backends.optuna import OptunaBackend
 from xgboost import XGBRegressor
 
 # 1. Configure
@@ -159,62 +163,85 @@ config = JointQuantileConfig(
     n_inference_samples=1000,
 )
 
-# 2. Build graph
-graph = JointQuantileGraph(config)
+# 2. Build graph spec
+graph = JointQuantileGraphSpec(config)
 
-# 3. Create orchestrator
-cv_config = CVConfig(n_splits=5, strategy=CVStrategy.RANDOM)
-tuning_config = TuningConfig(n_trials=50, cv_config=cv_config, verbose=1)
-
-orchestrator = JointQuantileOrchestrator(
-    graph=graph,
-    data_manager=DataManager(cv_config),
-    search_backend=optuna_backend,
-    tuning_config=tuning_config,
+# 3. Create RunConfig (CV + tuning are separate sub-configs)
+run_config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.RANDOM),
+    tuning=TuningConfig(n_trials=50),
 )
 
-# 4. Fit
-ctx = DataContext.from_Xy(X=X_train, y=y_price)  # y here is just for CV splitting
-fit_result = orchestrator.fit(ctx, targets={
-    "price": y_price,
-    "volume": y_volume,
-    "volatility": y_volatility,
-})
+# 4. Create DataView with named targets
+view = (
+    DataView.from_Xy(X=X_train, y=y_price)
+    .bind_target(y_price, name="price")
+    .bind_target(y_volume, name="volume")
+    .bind_target(y_volatility, name="volatility")
+)
 
-# 5. Create fitted graph for inference
-fitted = JointQuantileFittedGraph.from_fit_result(fit_result)
+# 5. Fit via GraphRunner (QuantileNodeTrainer is selected automatically)
+services = RuntimeServices(search_backend=OptunaBackend())
+runner = GraphRunner(services)
+training_run = runner.fit(graph, view, run_config)
 
-# 6. Sample from joint distribution
-samples = fitted.sample_joint(X_test, n_samples=1000)
-# Shape: (n_test, 1000, 3) — 1000 samples for each test point
+print(f"Fitting completed in {training_run.total_time:.1f}s")
 
-# 7. Point predictions
-medians = fitted.predict_median(X_test)  # Shape: (n_test, 3)
-q90 = fitted.predict_quantile(X_test, q=0.9)  # 90th percentile
+# 6. Compile to inference graph
+inference = training_run.compile_inference()
 
-# 8. Save for later use
-fitted.save("./models/joint_quantile/")
+# For joint quantile specifically, build the JointQuantileInferenceGraph
+from sklearn_meta.artifacts.inference import (
+    JointQuantileInferenceGraph, QuantileFittedNode,
+)
 
-# 9. Load from disk (no training code needed)
-loaded = JointQuantileFittedGraph.load("./models/joint_quantile/")
+fitted_nodes = {}
+for prop_name in graph.property_order:
+    node_name = f"quantile_{prop_name}"
+    result = training_run.node_results[node_name]
+    fitted_nodes[prop_name] = QuantileFittedNode(
+        quantile_models=result.quantile_models,
+        quantile_levels=list(graph.quantile_levels),
+        selected_features=result.selected_features,
+    )
+
+jq_inference = JointQuantileInferenceGraph(
+    graph=graph,
+    fitted_nodes=fitted_nodes,
+    quantile_sampler=graph.create_quantile_sampler(),
+)
+
+# 7. Sample from joint distribution
+samples = jq_inference.sample_joint(X_test, n_samples=1000)
+# Returns: Dict[str, np.ndarray] — each value has shape (n_test, 1000)
+
+# 8. Point predictions
+medians = jq_inference.predict_median(X_test)  # Dict[str, np.ndarray]
+q90 = jq_inference.predict_quantile(X_test, q=0.9)
+
+# 9. Save and reload
+jq_inference.save("./models/joint_quantile/")
+loaded = JointQuantileInferenceGraph.load("./models/joint_quantile/")
 ```
 
 ---
 
 ## Feature Selection
 
-Joint quantile training supports the same feature-selection config used by
-`TuningOrchestrator`, via `TuningConfig.feature_selection`.
+Joint quantile training supports feature selection through `RunConfig.feature_selection`.
 
 ```python
-from sklearn_meta.selection.selector import FeatureSelectionConfig
+from sklearn_meta.runtime.config import (
+    RunConfig, CVConfig, CVStrategy, TuningConfig,
+    FeatureSelectionConfig, FeatureSelectionMethod,
+)
 
-tuning_config = TuningConfig(
-    n_trials=50,
-    cv_config=cv_config,
+run_config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.RANDOM),
+    tuning=TuningConfig(n_trials=50),
     feature_selection=FeatureSelectionConfig(
         enabled=True,
-        method="shadow",
+        method=FeatureSelectionMethod.SHADOW,
         n_shadows=5,
         threshold_mult=1.414,
         retune_after_pruning=True,
@@ -247,12 +274,15 @@ Behavior notes:
 | `sampling_strategy` | `SamplingStrategy` | LINEAR_INTERPOLATION | How to sample from quantiles |
 | `n_inference_samples` | `int` | 1000 | Samples per prediction |
 | `random_state` | `int` | None | Random seed |
+| `fixed_params` | `Dict[str, Any]` | `{}` | Fixed estimator parameters |
 
 ### QuantileScalingConfig
 
-Scale hyperparameters based on distance from median (τ=0.5):
+Scale hyperparameters based on distance from median (tau=0.5):
 
 ```python
+from sklearn_meta.spec.quantile import QuantileScalingConfig
+
 scaling = QuantileScalingConfig(
     base_params={"n_estimators": 100, "max_depth": 6},
     scaling_rules={
@@ -262,16 +292,16 @@ scaling = QuantileScalingConfig(
 )
 ```
 
-At extreme quantiles (τ=0.05 or τ=0.95), regularization is increased to prevent overfitting where data is sparse.
+At extreme quantiles (tau=0.05 or tau=0.95), regularization is increased to prevent overfitting where data is sparse.
 
 ```mermaid
 graph LR
     subgraph "Parameter Scaling"
-        M[τ=0.5: reg_lambda=1.0]
-        T1[τ=0.1: reg_lambda=1.8]
-        T2[τ=0.9: reg_lambda=1.8]
-        E1[τ=0.05: reg_lambda=2.0]
-        E2[τ=0.95: reg_lambda=2.0]
+        M[tau=0.5: reg_lambda=1.0]
+        T1[tau=0.1: reg_lambda=1.8]
+        T2[tau=0.9: reg_lambda=1.8]
+        E1[tau=0.05: reg_lambda=2.0]
+        E2[tau=0.95: reg_lambda=2.0]
     end
 ```
 
@@ -280,6 +310,8 @@ graph LR
 Control the ordering of properties in the chain:
 
 ```python
+from sklearn_meta.spec.quantile import OrderConstraint
+
 constraint = OrderConstraint(
     # Price must always be first
     fixed_positions={"price": 0},
@@ -315,7 +347,7 @@ config = JointQuantileConfig(
 Fit a parametric distribution to quantiles:
 
 ```python
-from sklearn_meta.core.model.quantile_sampler import SamplingStrategy
+from sklearn_meta.spec.quantile_sampler import SamplingStrategy
 
 # Normal distribution
 config = JointQuantileConfig(
@@ -364,9 +396,9 @@ search_config = OrderSearchConfig(
 plugin = OrderSearchPlugin(config=search_config)
 result = plugin.search_order(
     graph=graph,
-    ctx=ctx,
-    targets=targets,
-    orchestrator=orchestrator,
+    data=view,
+    run_config=run_config,
+    runner=runner,
 )
 
 print(f"Best order: {result.best_order}")
@@ -406,31 +438,31 @@ graph TB
 
 ```mermaid
 sequenceDiagram
-    participant O as Orchestrator
-    participant G as Graph
-    participant N as QuantileNode
-    participant D as DataManager
+    participant R as GraphRunner
+    participant G as JointQuantileGraphSpec
+    participant T as QuantileNodeTrainer
+    participant CV as CVEngine
 
-    O->>G: Get property order
-    G-->>O: [Y₁, Y₂, Y₃]
+    R->>G: Get property order
+    G-->>R: [Y1, Y2, Y3]
 
-    loop For each property
-        O->>O: Prepare conditional features
-        Note over O: Add actual Y values<br/>from upstream properties
+    loop For each property node
+        R->>R: Inject conditional sample overlays<br/>(actual target values from DataView)
 
-        O->>N: Tune at median quantile
-        N-->>O: Best params
+        R->>T: fit_node(node, data, config, ...)
+        T->>T: Optimize at median quantile
+        T-->>T: Best params
 
-        loop For each quantile τ
-            O->>N: Train model(τ, params)
-            O->>D: Cross-validate
-            D-->>O: OOF predictions
+        loop For each quantile tau
+            T->>CV: Cross-validate quantile model
+            CV-->>T: fold_models, OOF predictions
         end
 
-        O->>O: Store FittedQuantileNode
+        T-->>R: QuantileNodeRunResult
+        R->>R: Cache OOF predictions
     end
 
-    O-->>O: Return JointQuantileFitResult
+    R-->>R: Return TrainingRun
 ```
 
 ### Inference Flow
@@ -438,24 +470,24 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant F as FittedGraph
-    participant S as Sampler
-    participant N as FittedNodes
+    participant JQ as JointQuantileInferenceGraph
+    participant S as QuantileSampler
+    participant N as QuantileFittedNode
 
-    U->>F: sample_joint(X, n_samples=1000)
-    F->>S: Generate uniform samples
+    U->>JQ: sample_joint(X, n_samples=1000)
+    JQ->>S: Reset uniform samples
 
     loop For each property in order
-        F->>N: Predict quantiles
-        N-->>F: Quantile predictions
+        JQ->>N: predict_quantiles(X_augmented)
+        N-->>JQ: Quantile predictions
 
-        F->>S: Sample using uniforms
-        S-->>F: Sampled values
+        JQ->>S: sample_property_batched(...)
+        S-->>JQ: Sampled values
 
-        Note over F: Add samples as<br/>conditioning features
+        Note over JQ: Add median as<br/>conditioning feature (cond_*)
     end
 
-    F-->>U: Samples (n_data, 1000, n_props)
+    JQ-->>U: Dict[str, ndarray] — per-property samples
 ```
 
 ---
@@ -467,16 +499,17 @@ import numpy as np
 import pandas as pd
 from xgboost import XGBRegressor
 
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.joint_quantile_graph import (
-    JointQuantileGraph, JointQuantileConfig, OrderConstraint
+from sklearn_meta.spec.quantile import (
+    JointQuantileGraphSpec, JointQuantileConfig, OrderConstraint,
+    QuantileScalingConfig,
 )
-from sklearn_meta.core.model.quantile_node import QuantileScalingConfig
-from sklearn_meta.core.model.joint_quantile_fitted import JointQuantileFittedGraph
-from sklearn_meta.core.tuning.joint_quantile_orchestrator import JointQuantileOrchestrator
-from sklearn_meta.core.tuning.orchestrator import TuningConfig
+from sklearn_meta.artifacts.inference import (
+    JointQuantileInferenceGraph, QuantileFittedNode,
+)
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.data.view import DataView
+from sklearn_meta.runtime.config import RunConfig, CVConfig, CVStrategy, TuningConfig
+from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.search.backends.optuna import OptunaBackend
 from sklearn_meta.search.space import SearchSpace
 
@@ -492,18 +525,21 @@ y_price = 2*X[:, 0] + X[:, 1] + np.random.randn(n_samples) * 0.5
 y_volume = X[:, 2] + 0.5*y_price + np.random.randn(n_samples) * 0.3
 y_volatility = 0.3*y_price + 0.4*y_volume + np.random.randn(n_samples) * 0.2
 
-targets = {
-    "price": pd.Series(y_price),
-    "volume": pd.Series(y_volume),
-    "volatility": pd.Series(y_volatility),
-}
-
 # Split
 train_idx = np.arange(1500)
 test_idx = np.arange(1500, 2000)
 X_train, X_test = X_df.iloc[train_idx], X_df.iloc[test_idx]
-targets_train = {k: v.iloc[train_idx] for k, v in targets.items()}
-targets_test = {k: v.iloc[test_idx] for k, v in targets.items()}
+
+targets_train = {
+    "price": pd.Series(y_price[train_idx]),
+    "volume": pd.Series(y_volume[train_idx]),
+    "volatility": pd.Series(y_volatility[train_idx]),
+}
+targets_test = {
+    "price": pd.Series(y_price[test_idx]),
+    "volume": pd.Series(y_volume[test_idx]),
+    "volatility": pd.Series(y_volatility[test_idx]),
+}
 
 # === Configure Joint Quantile Model ===
 search_space = SearchSpace()
@@ -518,7 +554,7 @@ scaling = QuantileScalingConfig(
     }
 )
 
-config = JointQuantileConfig(
+jq_config = JointQuantileConfig(
     property_names=["price", "volume", "volatility"],
     quantile_levels=[0.1, 0.25, 0.5, 0.75, 0.9],
     estimator_class=XGBRegressor,
@@ -531,59 +567,76 @@ config = JointQuantileConfig(
     random_state=42,
 )
 
-# === Build and Fit ===
-graph = JointQuantileGraph(config)
+# === Build Graph Spec ===
+graph = JointQuantileGraphSpec(jq_config)
 print(f"Property order: {graph.property_order}")
 print(f"Quantile levels: {graph.quantile_levels}")
 
-cv_config = CVConfig(n_splits=5, strategy=CVStrategy.RANDOM, random_state=42)
-tuning_config = TuningConfig(
-    n_trials=20,
-    cv_config=cv_config,
-    verbose=1,
+# === Create RunConfig ===
+run_config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.RANDOM, random_state=42),
+    tuning=TuningConfig(n_trials=20),
 )
 
-orchestrator = JointQuantileOrchestrator(
+# === Create DataView with named targets ===
+view = (
+    DataView.from_Xy(X=X_train, y=targets_train["price"])
+    .bind_target(targets_train["price"], name="price")
+    .bind_target(targets_train["volume"], name="volume")
+    .bind_target(targets_train["volatility"], name="volatility")
+)
+
+# === Fit via GraphRunner ===
+services = RuntimeServices(search_backend=OptunaBackend())
+runner = GraphRunner(services)
+training_run = runner.fit(graph, view, run_config)
+
+print(f"\nFitting completed in {training_run.total_time:.1f}s")
+
+# === Build JointQuantileInferenceGraph ===
+fitted_nodes = {}
+for prop_name in graph.property_order:
+    node_name = f"quantile_{prop_name}"
+    result = training_run.node_results[node_name]
+    fitted_nodes[prop_name] = QuantileFittedNode(
+        quantile_models=result.quantile_models,
+        quantile_levels=list(graph.quantile_levels),
+        selected_features=result.selected_features,
+    )
+
+jq_inference = JointQuantileInferenceGraph(
     graph=graph,
-    data_manager=DataManager(cv_config),
-    search_backend=OptunaBackend(),
-    tuning_config=tuning_config,
+    fitted_nodes=fitted_nodes,
+    quantile_sampler=graph.create_quantile_sampler(),
 )
 
-ctx = DataContext.from_Xy(X=X_train, y=targets_train["price"])
-fit_result = orchestrator.fit(ctx, targets_train)
+# === Sample from Joint Distribution ===
+samples = jq_inference.sample_joint(X_test, n_samples=1000)
+# samples["price"].shape == (500, 1000)
+print(f"\nSample shapes: { {k: v.shape for k, v in samples.items()} }")
 
-print(f"\nFitting completed in {fit_result.total_time:.1f}s")
+# === Point Predictions ===
+medians = jq_inference.predict_median(X_test)
+# medians["price"].shape == (500,)
 
-# === Inference ===
-fitted = JointQuantileFittedGraph.from_fit_result(fit_result)
+# === Prediction Intervals ===
+q10 = jq_inference.predict_quantile(X_test, 0.1)
+q90 = jq_inference.predict_quantile(X_test, 0.9)
 
-# Sample from joint distribution
-samples = fitted.sample_joint(X_test, n_samples=1000)
-print(f"\nSample shape: {samples.shape}")  # (500, 1000, 3)
-
-# Point predictions
-medians = fitted.predict_median(X_test)
-print(f"Median shape: {medians.shape}")  # (500, 3)
-
-# Prediction intervals
-q10 = fitted.predict_quantile(X_test, 0.1)
-q90 = fitted.predict_quantile(X_test, 0.9)
-
-# === Evaluate ===
 print("\n=== Prediction Intervals ===")
-for i, prop in enumerate(["price", "volume", "volatility"]):
+for prop in ["price", "volume", "volatility"]:
     y_true = targets_test[prop].values
-    coverage = np.mean((y_true >= q10[:, i]) & (y_true <= q90[:, i]))
+    coverage = np.mean((y_true >= q10[prop]) & (y_true <= q90[prop]))
     print(f"{prop}: 80% interval coverage = {coverage:.1%}")
 
 # === Save and Reload ===
-fitted.save("./models/joint_quantile/")
-loaded = JointQuantileFittedGraph.load("./models/joint_quantile/")
+jq_inference.save("./models/joint_quantile/")
+loaded = JointQuantileInferenceGraph.load("./models/joint_quantile/")
 
 # Verify loaded model produces same predictions
 loaded_medians = loaded.predict_median(X_test)
-assert np.allclose(medians, loaded_medians)
+for prop in ["price", "volume", "volatility"]:
+    assert np.allclose(medians[prop], loaded_medians[prop])
 
 # === Analyze Correlations ===
 print("\n=== Sample Correlations (should match data) ===")
@@ -593,7 +646,8 @@ true_corr = np.corrcoef([targets_test[p].values for p in ["price", "volume", "vo
 # Sample correlations (average over test points)
 sample_corrs = []
 for i in range(len(X_test)):
-    corr = np.corrcoef(samples[i].T)
+    row_samples = np.column_stack([samples[p][i] for p in ["price", "volume", "volatility"]])
+    corr = np.corrcoef(row_samples.T)
     sample_corrs.append(corr)
 sample_corr = np.mean(sample_corrs, axis=0)
 
@@ -605,34 +659,39 @@ print(f"Sample price-volume correlation: {sample_corr[0, 1]:.3f}")
 
 ## Saving and Loading Models
 
-Each property's fitted model is saved as an independent `.joblib` file, with a JSON manifest capturing the graph structure. This enables retraining individual properties without touching others, swapping nodes for experimentation, and cleaner deployment artifacts.
+Each property's fitted models are saved as independent `.joblib` files, with a JSON manifest capturing the graph structure. This enables retraining individual properties without touching others, swapping nodes for experimentation, and cleaner deployment artifacts.
 
 ### Save and Load
 
 ```python
-# Save fitted graph to a directory
-fitted.save("./models/joint_quantile/")
+# Save inference graph to a directory
+jq_inference.save("./models/joint_quantile/")
 # Creates:
 #   models/joint_quantile/manifest.json
-#   models/joint_quantile/price.joblib
-#   models/joint_quantile/volume.joblib
-#   models/joint_quantile/volatility.joblib
+#   models/joint_quantile/nodes/price/q0.1000_fold_0.joblib
+#   models/joint_quantile/nodes/price/q0.5000_fold_0.joblib
+#   ... (one file per quantile per fold per property)
 
 # Load from directory
-loaded = JointQuantileFittedGraph.load("./models/joint_quantile/")
+loaded = JointQuantileInferenceGraph.load("./models/joint_quantile/")
 medians = loaded.predict_median(X_test)
 ```
 
-### Training Artifacts
+### TrainingRun Artifacts
 
-By default, `save()` strips training-only data (OOF predictions, optimization results) for smaller files. Pass `include_training_artifacts=True` to keep them:
+`TrainingRun.save()` can include or strip training-only data (OOF predictions, optimization results):
 
 ```python
-# Production deployment (smaller files)
-fitted.save("./models/prod/")
+# Full training artifacts (for diagnostics, retraining)
+training_run.save("./models/dev/", include_training_artifacts=True)
 
-# Development (keep OOF predictions for diagnostics)
-fitted.save("./models/dev/", include_training_artifacts=True)
+# Reload the full training run
+from sklearn_meta.artifacts.training import TrainingRun
+reloaded_run = TrainingRun.load("./models/dev/")
+
+# Or compile a lightweight InferenceGraph from a TrainingRun
+inference_graph = training_run.compile_inference()
+inference_graph.save("./models/prod/")
 ```
 
 ### Swapping Individual Nodes
@@ -640,17 +699,19 @@ fitted.save("./models/dev/", include_training_artifacts=True)
 Since each property's model is independent, you can retrain one and swap it in:
 
 ```python
-from sklearn_meta.core.tuning.joint_quantile_orchestrator import FittedQuantileNode
+from sklearn_meta.artifacts.inference import QuantileFittedNode
 
-# Load existing graph
-fitted = JointQuantileFittedGraph.load("./models/v1/")
+# Load existing inference graph
+loaded = JointQuantileInferenceGraph.load("./models/v1/")
 
-# Load a retrained node
-new_volume = FittedQuantileNode.load("./retrained_volume.joblib")
-fitted.fitted_nodes["volume"] = new_volume
+# Replace a node with a retrained one
+loaded.fitted_nodes["volume"] = QuantileFittedNode(
+    quantile_models=new_volume_models,
+    quantile_levels=loaded.graph.quantile_levels,
+)
 
 # Save updated version
-fitted.save("./models/v2/")
+loaded.save("./models/v2/")
 ```
 
 ### Manifest Schema
@@ -659,16 +720,31 @@ The `manifest.json` records graph structure and sampling configuration:
 
 ```json
 {
-  "version": 1,
+  "version": 3,
+  "type": "joint_quantile_inference",
   "property_order": ["price", "volume", "volatility"],
   "quantile_levels": [0.1, 0.25, 0.5, 0.75, 0.9],
-  "sampling_strategy": "linear_interpolation",
-  "n_inference_samples": 1000,
-  "random_state": 42,
-  "node_files": {
-    "price": "price.joblib",
-    "volume": "volume.joblib",
-    "volatility": "volatility.joblib"
+  "sampler": {
+    "strategy": "linear_interpolation",
+    "n_samples": 1000,
+    "random_state": 42
+  },
+  "nodes": {
+    "price": {
+      "quantile_levels": [0.1, 0.25, 0.5, 0.75, 0.9],
+      "n_folds": 5,
+      "selected_features": null
+    },
+    "volume": {
+      "quantile_levels": [0.1, 0.25, 0.5, 0.75, 0.9],
+      "n_folds": 5,
+      "selected_features": null
+    },
+    "volatility": {
+      "quantile_levels": [0.1, 0.25, 0.5, 0.75, 0.9],
+      "n_folds": 5,
+      "selected_features": null
+    }
   }
 }
 ```
@@ -681,7 +757,7 @@ The `manifest.json` records graph structure and sampling configuration:
 
 ```python
 # Good: Independent or causal variables first
-order = ["price", "volume", "volatility"]  # price → volume → volatility
+order = ["price", "volume", "volatility"]  # price -> volume -> volatility
 
 # Less effective: Random order may miss dependencies
 order = ["volatility", "price", "volume"]
@@ -703,6 +779,8 @@ quantile_levels = np.linspace(0.05, 0.95, 19).tolist()
 ### 3. Scale Parameters for Tail Quantiles
 
 ```python
+from sklearn_meta.spec.quantile import QuantileScalingConfig
+
 # Increase regularization at extremes
 scaling = QuantileScalingConfig(
     base_params={"reg_lambda": 1.0, "reg_alpha": 0.1},
@@ -731,26 +809,27 @@ n_samples = 10000  # May be needed
 ```python
 # Check that 80% prediction intervals actually contain 80% of true values
 for tau_low, tau_high in [(0.1, 0.9), (0.25, 0.75)]:
-    q_low = fitted.predict_quantile(X_test, tau_low)
-    q_high = fitted.predict_quantile(X_test, tau_high)
-    coverage = np.mean((y_true >= q_low) & (y_true <= q_high))
-    expected = tau_high - tau_low
-    print(f"Expected {expected:.0%}, Actual {coverage:.0%}")
+    q_low = jq_inference.predict_quantile(X_test, tau_low)
+    q_high = jq_inference.predict_quantile(X_test, tau_high)
+    for prop in jq_config.property_names:
+        coverage = np.mean((y_true[prop] >= q_low[prop]) & (y_true[prop] <= q_high[prop]))
+        expected = tau_high - tau_low
+        print(f"{prop}: Expected {expected:.0%}, Actual {coverage:.0%}")
 ```
 
 ---
 
 ## API Reference
 
-### JointQuantileGraph
+### JointQuantileGraphSpec
 
 ```python
-class JointQuantileGraph(ModelGraph):
+class JointQuantileGraphSpec(GraphSpec):
     def __init__(self, config: JointQuantileConfig)
     def set_order(self, new_order: List[str])
     def swap_adjacent(self, position: int)
     def get_valid_swaps(self) -> List[Tuple[int, int]]
-    def get_quantile_node(self, property_name: str) -> QuantileModelNode
+    def get_quantile_node(self, property_name: str) -> QuantileNodeSpec
     def get_conditioning_properties(self, property_name: str) -> List[str]
     def create_quantile_sampler(self) -> QuantileSampler
 
@@ -762,41 +841,48 @@ class JointQuantileGraph(ModelGraph):
     def quantile_levels(self) -> List[float]
 ```
 
-### JointQuantileFittedGraph
+### JointQuantileInferenceGraph
 
 ```python
-class JointQuantileFittedGraph:
-    def sample_joint(self, X: pd.DataFrame, n_samples: int = None) -> np.ndarray
-    def sample_joint_efficient(self, X: pd.DataFrame, n_samples: int = None) -> np.ndarray
-    def predict_median(self, X: pd.DataFrame) -> np.ndarray
-    def predict_quantile(self, X: pd.DataFrame, q: float) -> np.ndarray
-    def predict_quantiles_all(self, X: pd.DataFrame, quantiles: List[float] = None) -> np.ndarray
-    def save(self, directory: str | Path, include_training_artifacts: bool = False)
-    def get_property_quantiles(self, X: pd.DataFrame, property_name: str) -> np.ndarray
+class JointQuantileInferenceGraph:
+    graph: JointQuantileGraphSpec
+    fitted_nodes: Dict[str, QuantileFittedNode]
+    quantile_sampler: QuantileSampler
 
+    def sample_joint(self, X: pd.DataFrame, n_samples: int = None) -> Dict[str, np.ndarray]
+    def predict_median(self, X: pd.DataFrame) -> Dict[str, np.ndarray]
+    def predict_quantile(self, X: pd.DataFrame, q: float) -> Dict[str, np.ndarray]
+    def save(self, path: str | Path)
     @classmethod
-    def from_fit_result(cls, fit_result: JointQuantileFitResult) -> JointQuantileFittedGraph
-    @classmethod
-    def load(cls, directory: str | Path) -> JointQuantileFittedGraph
+    def load(cls, path: str | Path) -> JointQuantileInferenceGraph
 ```
 
-### FittedQuantileNode
+### QuantileFittedNode
 
 ```python
-class FittedQuantileNode:
-    def predict_quantiles(self, X: pd.DataFrame) -> np.ndarray
-    def predict_median(self, X: pd.DataFrame) -> np.ndarray
-    def save(self, path: str | Path, include_training_artifacts: bool = False)
+class QuantileFittedNode:
+    quantile_models: Dict[float, List[Any]]
+    quantile_levels: List[float]
+    selected_features: Optional[List[str]]
 
-    @classmethod
-    def load(cls, path: str | Path) -> FittedQuantileNode
+    def predict_quantiles(self, X: pd.DataFrame) -> np.ndarray
+```
+
+### QuantileNodeSpec
+
+```python
+class QuantileNodeSpec(NodeSpec):
+    property_name: str
+    quantile_levels: List[float]
+    quantile_scaling: Optional[QuantileScalingConfig]
+
+    def create_estimator_for_quantile(self, tau: float, params: Dict = None) -> Any
+    def get_params_for_quantile(self, tau: float, tuned_params: Dict = None) -> Dict[str, Any]
 
     @property
-    def quantile_levels(self) -> List[float]
+    def median_quantile(self) -> float
     @property
     def n_quantiles(self) -> int
-    @property
-    def n_folds(self) -> int
 ```
 
 ### QuantileSampler
@@ -804,20 +890,27 @@ class FittedQuantileNode:
 ```python
 class QuantileSampler:
     def __init__(self, strategy: SamplingStrategy, n_samples: int, random_state: int = None)
-    def sample_property(self, property_name: str, quantile_levels, quantile_predictions) -> np.ndarray
+    def sample_property_batched(self, property_name: str, quantile_levels, quantile_predictions) -> np.ndarray
     def get_median(self, quantile_levels, quantile_predictions) -> np.ndarray
     def get_quantile(self, q: float, quantile_levels, quantile_predictions) -> np.ndarray
     def reset_samples(self)
+```
 
-    @property
-    def uniform_samples(self) -> np.ndarray
+### RunConfig (for joint quantile)
+
+```python
+run_config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.RANDOM, random_state=42),
+    tuning=TuningConfig(n_trials=50),
+    feature_selection=FeatureSelectionConfig(enabled=True, method=FeatureSelectionMethod.SHADOW),
+)
 ```
 
 ---
 
 ## Next Steps
 
-- [Model Graphs](model-graphs.md) — How graphs and dependencies work
-- [Tuning](tuning.md) — Hyperparameter optimization strategies
-- [Plugins](plugins.md) — Extending with OrderSearchPlugin
-- [Cross-Validation](cross-validation.md) — OOF prediction handling
+- [Model Graphs](model-graphs.md) -- How graphs and dependencies work
+- [Tuning](tuning.md) -- Hyperparameter optimization strategies
+- [Plugins](plugins.md) -- Extending with OrderSearchPlugin
+- [Cross-Validation](cross-validation.md) -- OOF prediction handling

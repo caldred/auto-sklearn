@@ -11,8 +11,9 @@ from sklearn_meta.plugins.base import ModelPlugin
 from sklearn_meta.plugins.xgboost import XGBOOST_CLASS_NAMES
 
 if TYPE_CHECKING:
-    from sklearn_meta.core.data.context import DataContext
-    from sklearn_meta.core.model.node import ModelNode
+    from sklearn_meta.data.view import DataView
+    from sklearn_meta.data.batch import MaterializedBatch
+    from sklearn_meta.spec.node import NodeSpec
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ class XGBMultiplierPlugin(ModelPlugin):
     def modify_fit_params(
         self,
         params: Dict[str, Any],
-        ctx: DataContext,
+        batch: MaterializedBatch,
     ) -> Dict[str, Any]:
         """
         Modify fit parameters for XGBoost.
@@ -86,16 +87,16 @@ class XGBMultiplierPlugin(ModelPlugin):
     def post_tune(
         self,
         best_params: Dict[str, Any],
-        node: ModelNode,
-        ctx: DataContext,
+        node: NodeSpec,
+        data: DataView,
     ) -> Dict[str, Any]:
         """
         Search over learning_rate/n_estimators multipliers.
 
         Args:
             best_params: Best parameters from initial tuning.
-            node: The model node.
-            ctx: Data context.
+            node: The node spec.
+            data: Data view.
 
         Returns:
             Refined parameters with optimal multiplier applied.
@@ -111,6 +112,9 @@ class XGBMultiplierPlugin(ModelPlugin):
         if base_lr is None or base_n_estimators is None:
             return best_params
 
+        # Materialize once for all multiplier evaluations
+        batch = data.materialize()
+
         best_score = float("inf")
         best_multiplier = 1.0
 
@@ -124,7 +128,7 @@ class XGBMultiplierPlugin(ModelPlugin):
             test_params["n_estimators"] = max(10, test_params["n_estimators"])
 
             # Evaluate with CV
-            score = self._evaluate_params(node, ctx, test_params)
+            score = self._evaluate_params(node, batch, test_params)
 
             if score < best_score:
                 best_score = score
@@ -141,22 +145,23 @@ class XGBMultiplierPlugin(ModelPlugin):
 
     def _evaluate_params(
         self,
-        node: ModelNode,
-        ctx: DataContext,
+        node: NodeSpec,
+        batch: MaterializedBatch,
         params: Dict[str, Any],
     ) -> float:
-        """Evaluate parameters using CV."""
+        """Evaluate parameters using CV on a pre-materialized batch."""
         try:
             from sklearn.model_selection import cross_val_score
 
             # Create model
-            model = node.create_estimator(params)
+            from sklearn_meta.engine.estimator_factory import create_estimator
+            model = create_estimator(node, params)
 
             # Use simple CV for speed
             scores = cross_val_score(
                 model,
-                ctx.X,
-                ctx.y,
+                batch.X,
+                batch.y,
                 cv=self.cv_folds,
                 scoring="neg_mean_squared_error",
             )

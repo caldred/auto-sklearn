@@ -6,8 +6,9 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Type, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sklearn_meta.core.data.context import DataContext
-    from sklearn_meta.core.model.node import ModelNode
+    from sklearn_meta.data.view import DataView
+    from sklearn_meta.data.batch import MaterializedBatch
+    from sklearn_meta.spec.node import NodeSpec
     from sklearn_meta.search.space import SearchSpace
 
 
@@ -26,7 +27,7 @@ class ModelPlugin(ABC):
             def applies_to(self, cls):
                 return hasattr(cls, 'get_booster')
 
-            def modify_fit_params(self, params, ctx):
+            def modify_fit_params(self, params, batch):
                 params['verbose'] = False
                 return params
     """
@@ -52,7 +53,7 @@ class ModelPlugin(ABC):
     def modify_search_space(
         self,
         space: SearchSpace,
-        node: ModelNode,
+        node: NodeSpec,
     ) -> SearchSpace:
         """
         Modify the search space before optimization.
@@ -62,7 +63,7 @@ class ModelPlugin(ABC):
 
         Args:
             space: The original search space.
-            node: The model node being tuned.
+            node: The node spec being tuned.
 
         Returns:
             Modified search space.
@@ -72,21 +73,17 @@ class ModelPlugin(ABC):
     def modify_params(
         self,
         params: Dict[str, Any],
-        node: ModelNode,
+        node: NodeSpec,
     ) -> Dict[str, Any]:
         """
         Modify hyperparameters before model creation.
 
-        This hook is called after sampling from the search space,
-        before creating the estimator instance.
-
-        Note: This is an extension point. The default orchestrator does not
-        call this method; it is available for custom orchestrators or
-        external tooling.
+        Called after sampling from the search space, before creating
+        the estimator instance.
 
         Args:
             params: The sampled/fixed parameters.
-            node: The model node.
+            node: The node spec.
 
         Returns:
             Modified parameters.
@@ -96,17 +93,17 @@ class ModelPlugin(ABC):
     def modify_fit_params(
         self,
         params: Dict[str, Any],
-        ctx: DataContext,
+        batch: MaterializedBatch,
     ) -> Dict[str, Any]:
         """
         Modify parameters passed to fit().
 
         This hook allows customizing fit behavior based on
-        the data context (e.g., adding eval_set, sample_weight).
+        the materialized batch (e.g., adding eval_set, sample_weight).
 
         Args:
             params: The current fit parameters.
-            ctx: The data context for this fit.
+            batch: The materialized batch for this fit.
 
         Returns:
             Modified fit parameters.
@@ -116,22 +113,18 @@ class ModelPlugin(ABC):
     def pre_fit(
         self,
         model: Any,
-        node: ModelNode,
-        ctx: DataContext,
+        node: NodeSpec,
+        batch: MaterializedBatch,
     ) -> Any:
         """
         Pre-process model before fitting.
 
-        This hook is called after model creation but before fit().
-
-        Note: This is an extension point. The default orchestrator does not
-        call this method; it is available for custom orchestrators or
-        external tooling.
+        Called after model creation but before fit().
 
         Args:
             model: The model instance.
-            node: The model node.
-            ctx: The data context.
+            node: The node spec.
+            batch: The materialized batch.
 
         Returns:
             The (possibly modified) model.
@@ -141,8 +134,8 @@ class ModelPlugin(ABC):
     def post_fit(
         self,
         model: Any,
-        node: ModelNode,
-        ctx: DataContext,
+        node: NodeSpec,
+        batch: MaterializedBatch,
     ) -> Any:
         """
         Post-process model after fitting.
@@ -152,8 +145,8 @@ class ModelPlugin(ABC):
 
         Args:
             model: The fitted model.
-            node: The model node.
-            ctx: The data context.
+            node: The node spec.
+            batch: The materialized batch.
 
         Returns:
             The (possibly modified) model.
@@ -163,8 +156,8 @@ class ModelPlugin(ABC):
     def post_tune(
         self,
         best_params: Dict[str, Any],
-        node: ModelNode,
-        ctx: DataContext,
+        node: NodeSpec,
+        data: DataView,
     ) -> Dict[str, Any]:
         """
         Post-process tuning results.
@@ -174,8 +167,8 @@ class ModelPlugin(ABC):
 
         Args:
             best_params: The best parameters found.
-            node: The model node.
-            ctx: The data context.
+            node: The node spec.
+            data: The data view.
 
         Returns:
             Potentially refined parameters.
@@ -185,16 +178,16 @@ class ModelPlugin(ABC):
     def on_fold_start(
         self,
         fold_idx: int,
-        node: ModelNode,
-        ctx: DataContext,
+        node: NodeSpec,
+        data: DataView,
     ) -> None:
         """
         Called at the start of each CV fold.
 
         Args:
             fold_idx: The fold index.
-            node: The model node.
-            ctx: The data context for this fold.
+            node: The node spec.
+            data: The data view for this fold.
         """
         pass
 
@@ -203,7 +196,7 @@ class ModelPlugin(ABC):
         fold_idx: int,
         model: Any,
         score: float,
-        node: ModelNode,
+        node: NodeSpec,
     ) -> None:
         """
         Called at the end of each CV fold.
@@ -212,7 +205,7 @@ class ModelPlugin(ABC):
             fold_idx: The fold index.
             model: The fitted model.
             score: The validation score.
-            node: The model node.
+            node: The node spec.
         """
         pass
 
@@ -249,36 +242,36 @@ class CompositePlugin(ModelPlugin):
         """Get plugins that apply to the estimator."""
         return [p for p in self._plugins if p.applies_to(estimator_class)]
 
-    def modify_search_space(self, space: SearchSpace, node: ModelNode) -> SearchSpace:
+    def modify_search_space(self, space: SearchSpace, node: NodeSpec) -> SearchSpace:
         for plugin in self._get_applicable(node.estimator_class):
             space = plugin.modify_search_space(space, node)
         return space
 
-    def modify_params(self, params: Dict[str, Any], node: ModelNode) -> Dict[str, Any]:
+    def modify_params(self, params: Dict[str, Any], node: NodeSpec) -> Dict[str, Any]:
         for plugin in self._get_applicable(node.estimator_class):
             params = plugin.modify_params(params, node)
         return params
 
-    def modify_fit_params(self, params: Dict[str, Any], ctx: DataContext) -> Dict[str, Any]:
+    def modify_fit_params(self, params: Dict[str, Any], batch: MaterializedBatch) -> Dict[str, Any]:
         for plugin in self._plugins:
-            params = plugin.modify_fit_params(params, ctx)
+            params = plugin.modify_fit_params(params, batch)
         return params
 
-    def pre_fit(self, model: Any, node: ModelNode, ctx: DataContext) -> Any:
+    def pre_fit(self, model: Any, node: NodeSpec, batch: MaterializedBatch) -> Any:
         for plugin in self._get_applicable(node.estimator_class):
-            model = plugin.pre_fit(model, node, ctx)
+            model = plugin.pre_fit(model, node, batch)
         return model
 
-    def post_fit(self, model: Any, node: ModelNode, ctx: DataContext) -> Any:
+    def post_fit(self, model: Any, node: NodeSpec, batch: MaterializedBatch) -> Any:
         for plugin in self._get_applicable(node.estimator_class):
-            model = plugin.post_fit(model, node, ctx)
+            model = plugin.post_fit(model, node, batch)
         return model
 
     def post_tune(
-        self, best_params: Dict[str, Any], node: ModelNode, ctx: DataContext
+        self, best_params: Dict[str, Any], node: NodeSpec, data: DataView
     ) -> Dict[str, Any]:
         for plugin in self._get_applicable(node.estimator_class):
-            best_params = plugin.post_tune(best_params, node, ctx)
+            best_params = plugin.post_tune(best_params, node, data)
         return best_params
 
     def __repr__(self) -> str:

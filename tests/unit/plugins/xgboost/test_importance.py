@@ -209,8 +209,9 @@ class TestXGBImportancePluginPostFit:
         plugin = XGBImportancePlugin()
         model = MockXGBModel(scores={"f0": 10.0, "f1": 20.0})
         node = MagicMock()
+        batch = data_context.materialize()
 
-        result = plugin.post_fit(model, node, data_context)
+        result = plugin.post_fit(model, node, batch)
 
         assert "_sklearn_meta_meta" in dir(result)
         assert "feature_importance" in result._sklearn_meta_meta
@@ -221,8 +222,9 @@ class TestXGBImportancePluginPostFit:
         plugin = XGBImportancePlugin()
         model = MockXGBModel()
         node = MagicMock()
+        batch = data_context.materialize()
 
-        result = plugin.post_fit(model, node, data_context)
+        result = plugin.post_fit(model, node, batch)
 
         assert result is model
 
@@ -231,10 +233,11 @@ class TestXGBImportancePluginPostFit:
         plugin = XGBImportancePlugin(prune_zero_importance=True)
         model = MockXGBModel(scores={"f0": 10.0})  # f1, f2 will be zero
         node = MagicMock()
+        batch = data_context.materialize()
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            plugin.post_fit(model, node, data_context)
+            plugin.post_fit(model, node, batch)
 
             # Should have a warning about zero importance features
             zero_warnings = [warning for warning in w if "zero importance" in str(warning.message)]
@@ -245,10 +248,11 @@ class TestXGBImportancePluginPostFit:
         plugin = XGBImportancePlugin(prune_zero_importance=False)
         model = MockXGBModel(scores={"f0": 10.0})  # f1, f2 will be zero
         node = MagicMock()
+        batch = data_context.materialize()
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            plugin.post_fit(model, node, data_context)
+            plugin.post_fit(model, node, batch)
 
             zero_warnings = [warning for warning in w if "zero importance" in str(warning.message)]
             assert len(zero_warnings) == 0

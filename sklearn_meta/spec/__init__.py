@@ -1,0 +1,1 @@
+"""spec/ — Pure graph descriptions."""

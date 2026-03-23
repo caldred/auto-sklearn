@@ -6,46 +6,53 @@ Model graphs allow you to define complex machine learning pipelines as directed 
 
 ## Quick Start with GraphBuilder
 
-The `GraphBuilder` fluent API is the recommended way to build model graphs:
+The `GraphBuilder` fluent API is the recommended way to build model graphs. It produces a `GraphSpec` via `.compile()`:
 
 ```python
-from sklearn_meta.api import GraphBuilder
+from sklearn_meta import GraphBuilder, RunConfig, DataView, fit
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 
-pipeline = (
+graph = (
     GraphBuilder("stacking_pipeline")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200), max_depth=(3, 15))
+    .int_param("n_estimators", 50, 200)
+    .int_param("max_depth", 3, 15)
     .add_model("gb", GradientBoostingClassifier)
-    .with_search_space(n_estimators=(50, 200), learning_rate=(0.01, 0.3))
+    .int_param("n_estimators", 50, 200)
+    .param("learning_rate", 0.01, 0.3, log=True)
     .add_model("meta", LogisticRegression)
-    .with_search_space(C=(0.01, 10.0))
-    .stacks_proba("rf")
-    .stacks_proba("gb")
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+    .param("C", 0.01, 10.0, log=True)
+    .stacks_proba("rf", "gb")
+    .compile()
 )
+
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+)
+
+data = DataView.from_Xy(X_train, y_train)
+result = fit(graph, data, config)
 ```
 
 ---
 
 ## Concepts
 
-### ModelNode
+### NodeSpec
 
-A `ModelNode` represents a single model in your pipeline:
+A `NodeSpec` represents a single model in your pipeline:
 
 ```python
-from sklearn_meta.core.model.node import ModelNode
+from sklearn_meta import NodeSpec
 from sklearn_meta.search.space import SearchSpace
 from sklearn.ensemble import RandomForestClassifier
 
 space = SearchSpace()
 space.add_int("n_estimators", 50, 200)
 
-node = ModelNode(
+node = NodeSpec(
     name="rf",                              # Unique identifier
     estimator_class=RandomForestClassifier, # sklearn-compatible estimator
     search_space=space,                     # Hyperparameters to tune
@@ -53,14 +60,14 @@ node = ModelNode(
 )
 ```
 
-### ModelGraph
+### GraphSpec
 
-A `ModelGraph` contains nodes and their dependencies:
+A `GraphSpec` contains nodes and their dependencies:
 
 ```python
-from sklearn_meta.core.model.graph import ModelGraph
+from sklearn_meta import GraphSpec
 
-graph = ModelGraph()
+graph = GraphSpec()
 graph.add_node(rf_node)
 graph.add_node(xgb_node)
 ```
@@ -70,7 +77,7 @@ graph.add_node(xgb_node)
 Dependencies define how nodes connect. All dependency types use the `DependencyEdge` class with a `DependencyType` enum:
 
 ```python
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta import DependencyEdge, DependencyType
 
 # Meta-learner uses predictions from base models
 graph.add_edge(
@@ -95,19 +102,20 @@ graph LR
 **Using GraphBuilder (recommended):**
 
 ```python
-pipeline = (
+from sklearn_meta import GraphBuilder
+
+graph = (
     GraphBuilder("single_model")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200))
-    .with_tuning(n_trials=20, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+    .int_param("n_estimators", 50, 200)
+    .compile()
 )
 ```
 
 **Using low-level API:**
 
 ```python
-graph = ModelGraph()
+graph = GraphSpec()
 graph.add_node(rf_node)
 ```
 
@@ -126,7 +134,7 @@ graph LR
 ```
 
 ```python
-graph = ModelGraph()
+graph = GraphSpec()
 graph.add_node(rf_node)
 graph.add_node(xgb_node)
 graph.add_node(lgbm_node)
@@ -157,28 +165,27 @@ graph TB
 **Using GraphBuilder (recommended):**
 
 ```python
-pipeline = (
+from sklearn_meta import GraphBuilder
+
+graph = (
     GraphBuilder("two_level_stack")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200))
+    .int_param("n_estimators", 50, 200)
     .add_model("xgb", XGBClassifier)
-    .with_search_space(n_estimators=(50, 200))
+    .int_param("n_estimators", 50, 200)
     .add_model("svm", SVC)
-    .with_search_space(C=(0.1, 10.0))
+    .param("C", 0.1, 10.0, log=True)
+    .fixed_params(probability=True)
     .add_model("meta", LogisticRegression)
-    .stacks_proba("rf")
-    .stacks_proba("xgb")
-    .stacks_proba("svm")
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+    .stacks_proba("rf", "xgb", "svm")
+    .compile()
 )
 ```
 
 **Using low-level API:**
 
 ```python
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta import DependencyEdge, DependencyType
 
 # Base models
 graph.add_node(rf_node)
@@ -229,7 +236,7 @@ graph TB
 All dependency types are expressed using `DependencyEdge` with a `DependencyType` enum value:
 
 ```python
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta import DependencyEdge, DependencyType
 ```
 
 ### PREDICTION
@@ -386,13 +393,13 @@ graph LR
 ```
 
 ```python
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta import DependencyEdge, DependencyType
 
 # This will cause a cycle
 graph.add_edge(
     DependencyEdge(source="c", target="a", dep_type=DependencyType.PREDICTION)
 )
-graph.validate()  # Raises CycleError
+# Raises CycleError immediately on add_edge()
 ```
 
 ---
@@ -406,29 +413,31 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 
-from sklearn_meta.api import GraphBuilder
+from sklearn_meta import GraphBuilder
 
-pipeline = (
+graph = (
     GraphBuilder("classification_stack")
     # Base Model 1: Random Forest
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200), max_depth=(3, 15))
+    .int_param("n_estimators", 50, 200)
+    .int_param("max_depth", 3, 15)
+    .fixed_params(random_state=42)
     # Base Model 2: Gradient Boosting
     .add_model("gb", GradientBoostingClassifier)
-    .with_search_space(n_estimators=(50, 200), learning_rate=(0.01, 0.3))
+    .int_param("n_estimators", 50, 200)
+    .param("learning_rate", 0.01, 0.3, log=True)
+    .fixed_params(random_state=42)
     # Base Model 3: SVM
     .add_model("svm", SVC)
-    .with_search_space(C=(0.1, 10.0))
+    .param("C", 0.1, 10.0, log=True)
+    .cat_param("kernel", ["rbf", "poly"])
+    .fixed_params(probability=True, random_state=42)
     # Meta-Learner: Logistic Regression
     .add_model("meta", LogisticRegression)
-    .with_search_space(C=(0.01, 10.0))
-    .stacks_proba("rf")
-    .stacks_proba("gb")
-    .stacks_proba("svm")
-    # CV and tuning
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+    .param("C", 0.01, 10.0, log=True)
+    .fixed_params(random_state=42, max_iter=1000)
+    .stacks_proba("rf", "gb", "svm")
+    .compile()
 )
 ```
 
@@ -439,9 +448,7 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 
-from sklearn_meta.core.model.node import ModelNode
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta import NodeSpec, GraphSpec, DependencyEdge, DependencyType
 from sklearn_meta.search.space import SearchSpace
 
 # === Base Model 1: Random Forest ===
@@ -449,7 +456,7 @@ rf_space = SearchSpace()
 rf_space.add_int("n_estimators", 50, 200)
 rf_space.add_int("max_depth", 3, 15)
 
-rf_node = ModelNode(
+rf_node = NodeSpec(
     name="rf",
     estimator_class=RandomForestClassifier,
     search_space=rf_space,
@@ -461,7 +468,7 @@ gb_space = SearchSpace()
 gb_space.add_int("n_estimators", 50, 200)
 gb_space.add_float("learning_rate", 0.01, 0.3, log=True)
 
-gb_node = ModelNode(
+gb_node = NodeSpec(
     name="gb",
     estimator_class=GradientBoostingClassifier,
     search_space=gb_space,
@@ -473,7 +480,7 @@ svm_space = SearchSpace()
 svm_space.add_float("C", 0.1, 10.0, log=True)
 svm_space.add_categorical("kernel", ["rbf", "poly"])
 
-svm_node = ModelNode(
+svm_node = NodeSpec(
     name="svm",
     estimator_class=SVC,
     search_space=svm_space,
@@ -484,7 +491,7 @@ svm_node = ModelNode(
 meta_space = SearchSpace()
 meta_space.add_float("C", 0.01, 10.0, log=True)
 
-meta_node = ModelNode(
+meta_node = NodeSpec(
     name="meta",
     estimator_class=LogisticRegression,
     search_space=meta_space,
@@ -492,7 +499,7 @@ meta_node = ModelNode(
 )
 
 # === Build Graph ===
-graph = ModelGraph()
+graph = GraphSpec()
 
 # Add all nodes
 graph.add_node(rf_node)
@@ -526,12 +533,12 @@ Execution order: ['rf', 'gb', 'svm', 'meta']
 
 ```python
 # Good
-ModelNode(name="xgb_base_classifier", ...)
-ModelNode(name="lr_meta_learner", ...)
+NodeSpec(name="xgb_base_classifier", ...)
+NodeSpec(name="lr_meta_learner", ...)
 
 # Avoid
-ModelNode(name="model1", ...)
-ModelNode(name="m", ...)
+NodeSpec(name="model1", ...)
+NodeSpec(name="m", ...)
 ```
 
 ### 2. Use Probability Dependencies for Classification
@@ -579,7 +586,7 @@ graph LR
 ### 4. Validate Before Training
 
 ```python
-graph.validate()  # Always validate before fit()
+graph.validate()  # Always validate before passing to fit()
 ```
 
 ---

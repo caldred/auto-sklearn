@@ -3,40 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
+from sklearn_meta.runtime.config import FeatureSelectionConfig, FeatureSelectionMethod
 from sklearn_meta.selection.importance import ImportanceRegistry, PermutationImportanceExtractor
 from sklearn_meta.selection.shadow import ShadowFeatureSelector, ShadowResult
 
 if TYPE_CHECKING:
-    from sklearn_meta.core.data.context import DataContext
-    from sklearn_meta.core.model.node import ModelNode
-
-
-class FeatureSelectionMethod(str, Enum):
-    SHADOW = "shadow"
-    PERMUTATION = "permutation"
-    THRESHOLD = "threshold"
-
-
-@dataclass
-class FeatureSelectionConfig:
-    """Configuration for feature selection."""
-
-    enabled: bool = True
-    method: FeatureSelectionMethod = FeatureSelectionMethod.SHADOW
-    n_shadows: int = 5  # Number of shadow rounds (per-round fraction is 1 / n_shadows)
-    threshold_mult: float = 1.414
-    threshold_percentile: float = 10.0  # For threshold method
-    retune_after_pruning: bool = True
-    min_features: int = 1
-    max_features: Optional[int] = None
-    random_state: int = 42
-    feature_groups: Optional[Dict[str, List[str]]] = None
+    from sklearn_meta.data.view import DataView
+    from sklearn_meta.spec.node import NodeSpec
 
 
 @dataclass
@@ -110,13 +88,13 @@ class FeatureSelector:
 
         grouping = self._resolve_feature_groups(feature_cols)
 
-        if self.config.method == "shadow":
+        if self.config.method == FeatureSelectionMethod.SHADOW:
             return self._select_shadow(model, X, y, feature_cols, grouping, X_val, y_val)
-        elif self.config.method == "permutation":
+        elif self.config.method == FeatureSelectionMethod.PERMUTATION:
             return self._select_permutation(
                 model, X, y, feature_cols, grouping, X_val, y_val
             )
-        elif self.config.method == "threshold":
+        elif self.config.method == FeatureSelectionMethod.THRESHOLD:
             return self._select_threshold(model, X, y, feature_cols, grouping)
         else:
             raise ValueError(f"Unknown selection method: {self.config.method}")
@@ -494,8 +472,8 @@ class FeatureSelector:
 
     def select_for_node(
         self,
-        node: ModelNode,
-        ctx: DataContext,
+        node: NodeSpec,
+        data: DataView,
         params: Dict[str, Any],
     ) -> FeatureSelectionResult:
         """
@@ -503,22 +481,24 @@ class FeatureSelector:
 
         Args:
             node: The model node.
-            ctx: Data context.
+            data: Data view.
             params: Model parameters.
 
         Returns:
             FeatureSelectionResult for this node.
         """
         # Create model instance
-        model = node.create_estimator(params)
+        from sklearn_meta.engine.estimator_factory import create_estimator
+        model = create_estimator(node, params)
 
-        # Get feature columns
-        feature_cols = node.feature_cols or list(ctx.X.columns)
+        # Materialize to get concrete X and y
+        batch = data.materialize()
+        feature_cols = node.feature_cols or list(batch.X.columns)
 
         return self.select(
             model=model,
-            X=ctx.X[feature_cols],
-            y=ctx.y,
+            X=batch.X[feature_cols],
+            y=batch.y,
             feature_cols=feature_cols,
         )
 

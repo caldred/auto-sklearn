@@ -77,50 +77,70 @@ Each sample's prediction comes from a model that **never saw that sample**.
 
 ## Quick Start with GraphBuilder
 
-The `GraphBuilder` fluent API is the easiest way to build stacking pipelines:
+The `GraphBuilder` fluent API is the easiest way to build stacking pipelines. `GraphBuilder` produces a `GraphSpec` (the graph definition); runtime concerns (CV, tuning, fitting) are handled separately by `RunConfig` and `GraphRunner`.
 
 ```python
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
-from sklearn_meta.api import GraphBuilder
 
-fitted = (
+from sklearn_meta import (
+    GraphBuilder, RunConfig, RunConfigBuilder,
+    RuntimeServices, GraphRunner, DataView, OptunaBackend,
+)
+
+# 1. Build the graph spec
+graph = (
     GraphBuilder("stacking_pipeline")
     # Base models
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200), max_depth=(3, 15))
+        .param("n_estimators", 50, 200)
+        .int_param("max_depth", 3, 15)
     .add_model("gb", GradientBoostingClassifier)
-    .with_search_space(n_estimators=(50, 200), learning_rate=(0.01, 0.3))
+        .param("n_estimators", 50, 200)
+        .param("learning_rate", 0.01, 0.3, log=True)
     .add_model("svm", SVC)
-    .with_search_space(C=(0.1, 10.0))
+        .param("C", 0.1, 10.0)
+        .fixed_params(probability=True)
     # Meta-learner stacking on base model probabilities
     .add_model("meta", LogisticRegression)
-    .with_search_space(C=(0.01, 100.0))
-    .stacks_proba("rf")
-    .stacks_proba("gb")
-    .stacks_proba("svm")
-    # Configuration
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(
+        .param("C", 0.01, 100.0, log=True)
+        .stacks_proba("rf", "gb", "svm")
+    .compile()
+)
+
+# 2. Configure the run
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(
         n_trials=50,
         metric="roc_auc",
         greater_is_better=True,
         early_stopping_rounds=20,
         show_progress=True,
     )
-    .fit(X_train, y_train)
+    .build()
 )
 
-predictions = fitted.predict(X_test)
+# 3. Fit
+data = DataView.from_Xy(X=X_train, y=y_train)
+services = RuntimeServices(search_backend=OptunaBackend(direction="maximize"))
+training_run = GraphRunner(services).fit(graph, data, config)
+
+# 4. Predict
+inference = training_run.compile_inference()
+predictions = inference.predict(X_test)
 ```
 
-### GraphBuilder Dependency Methods
+### NodeBuilder Dependency Methods
 
 | Method | Description |
 |--------|-------------|
-| `.stacks("node_name")` | Prediction dependency (class labels or regression values) |
-| `.stacks_proba("node_name")` | Probability dependency (class probabilities) |
+| `.stacks("source_node")` | Prediction dependency (class labels or regression values) |
+| `.stacks_proba("source_node")` | Probability dependency (class probabilities) |
+
+Both methods accept multiple source names: `.stacks("a", "b")` and `.stacks_proba("a", "b")`.
 
 ---
 
@@ -131,20 +151,20 @@ predictions = fitted.predict(X_test)
 ```python
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
-from sklearn_meta.core.model.node import ModelNode
+from sklearn_meta import NodeSpec
 from sklearn_meta.search.space import SearchSpace
 
 # Random Forest
 rf_space = SearchSpace().add_int("n_estimators", 50, 200).add_int("max_depth", 3, 15)
-rf_node = ModelNode(name="rf", estimator_class=RandomForestClassifier, search_space=rf_space, fixed_params={"random_state": 42})
+rf_node = NodeSpec(name="rf", estimator_class=RandomForestClassifier, search_space=rf_space, fixed_params={"random_state": 42})
 
 # Gradient Boosting
 gb_space = SearchSpace().add_int("n_estimators", 50, 200).add_float("learning_rate", 0.01, 0.3, log=True)
-gb_node = ModelNode(name="gb", estimator_class=GradientBoostingClassifier, search_space=gb_space, fixed_params={"random_state": 42})
+gb_node = NodeSpec(name="gb", estimator_class=GradientBoostingClassifier, search_space=gb_space, fixed_params={"random_state": 42})
 
 # SVM
 svm_space = SearchSpace().add_float("C", 0.1, 10, log=True)
-svm_node = ModelNode(name="svm", estimator_class=SVC, search_space=svm_space, fixed_params={"probability": True, "random_state": 42})
+svm_node = NodeSpec(name="svm", estimator_class=SVC, search_space=svm_space, fixed_params={"probability": True, "random_state": 42})
 ```
 
 ### Step 2: Define Meta-Learner
@@ -153,16 +173,15 @@ svm_node = ModelNode(name="svm", estimator_class=SVC, search_space=svm_space, fi
 from sklearn.linear_model import LogisticRegression
 
 meta_space = SearchSpace().add_float("C", 0.01, 100, log=True)
-meta_node = ModelNode(name="meta", estimator_class=LogisticRegression, search_space=meta_space, fixed_params={"random_state": 42})
+meta_node = NodeSpec(name="meta", estimator_class=LogisticRegression, search_space=meta_space, fixed_params={"random_state": 42})
 ```
 
 ### Step 3: Create Graph with Dependencies
 
 ```python
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta import GraphSpec, DependencyEdge, DependencyType
 
-graph = ModelGraph()
+graph = GraphSpec()
 
 # Add nodes
 graph.add_node(rf_node)
@@ -176,44 +195,35 @@ graph.add_edge(DependencyEdge(source="gb", target="meta", dep_type=DependencyTyp
 graph.add_edge(DependencyEdge(source="svm", target="meta", dep_type=DependencyType.PROBA))
 ```
 
-### Step 4: Tune and Fit
+### Step 4: Configure, Run, and Fit
 
 ```python
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
-from sklearn_meta.search.backends.optuna import OptunaBackend
-
-ctx = DataContext.from_Xy(X=X_train, y=y_train)
-cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED)
-
-tuning_config = TuningConfig(
-    strategy=OptimizationStrategy.LAYER_BY_LAYER,
-    n_trials=30,
-    cv_config=cv_config,
-    metric="roc_auc",
-    greater_is_better=True,
-    show_progress=True,
+from sklearn_meta import (
+    DataView, RunConfig, CVConfig, CVStrategy, TuningConfig,
+    RuntimeServices, GraphRunner, OptunaBackend,
 )
 
-backend = OptunaBackend(direction="maximize", random_state=42)
+data = DataView.from_Xy(X=X_train, y=y_train)
 
-orchestrator = TuningOrchestrator(
-    graph=graph,
-    data_manager=DataManager(cv_config),
-    search_backend=backend,
-    tuning_config=tuning_config,
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
+    tuning=TuningConfig(
+        n_trials=30,
+        metric="roc_auc",
+        greater_is_better=True,
+        show_progress=True,
+    ),
 )
 
-fitted_graph = orchestrator.fit(ctx)
+services = RuntimeServices(search_backend=OptunaBackend(direction="maximize"))
+training_run = GraphRunner(services).fit(graph, data, config)
 ```
 
 ### Step 5: Predict
 
 ```python
-predictions = fitted_graph.predict(X_test)
+inference = training_run.compile_inference()
+predictions = inference.predict(X_test)
 ```
 
 ---
@@ -223,7 +233,7 @@ predictions = fitted_graph.predict(X_test)
 All dependencies use `DependencyEdge` with a `DependencyType` enum:
 
 ```python
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta import DependencyEdge, DependencyType
 ```
 
 ### Prediction Dependency
@@ -261,6 +271,9 @@ builder.stacks("base_model")
 
 # Probability dependency
 builder.stacks_proba("base_model")
+
+# Multiple sources at once
+builder.stacks_proba("rf", "gb", "svm")
 ```
 
 ---
@@ -296,7 +309,9 @@ graph TB
 ### Low-Level API
 
 ```python
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta import GraphSpec, DependencyEdge, DependencyType
+
+graph = GraphSpec()
 
 # Layer 0
 graph.add_node(rf_node)
@@ -322,36 +337,43 @@ graph.add_edge(DependencyEdge(source="meta2", target="final", dep_type=Dependenc
 ### GraphBuilder API
 
 ```python
-fitted = (
+from sklearn_meta import GraphBuilder, RunConfigBuilder, RuntimeServices, GraphRunner, DataView, OptunaBackend
+
+graph = (
     GraphBuilder("deep_stack")
     # Layer 0
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200))
+        .int_param("n_estimators", 50, 200)
     .add_model("xgb", XGBClassifier)
-    .with_search_space(n_estimators=(50, 200))
+        .int_param("n_estimators", 50, 200)
     .add_model("lgbm", LGBMClassifier)
-    .with_search_space(n_estimators=(50, 200))
+        .int_param("n_estimators", 50, 200)
     .add_model("cat", CatBoostClassifier)
-    .with_search_space(iterations=(50, 200))
+        .int_param("iterations", 50, 200)
     # Layer 1
     .add_model("meta1", LogisticRegression)
-    .with_search_space(C=(0.01, 100.0))
-    .stacks_proba("rf")
-    .stacks_proba("xgb")
+        .param("C", 0.01, 100.0, log=True)
+        .stacks_proba("rf", "xgb")
     .add_model("meta2", LogisticRegression)
-    .with_search_space(C=(0.01, 100.0))
-    .stacks_proba("lgbm")
-    .stacks_proba("cat")
+        .param("C", 0.01, 100.0, log=True)
+        .stacks_proba("lgbm", "cat")
     # Layer 2
     .add_model("final", Ridge)
-    .with_search_space(alpha=(0.01, 100.0))
-    .stacks_proba("meta1")
-    .stacks_proba("meta2")
-    # Config
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True, show_progress=True)
-    .fit(X_train, y_train)
+        .param("alpha", 0.01, 100.0, log=True)
+        .stacks_proba("meta1", "meta2")
+    .compile()
 )
+
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True, show_progress=True)
+    .build()
+)
+
+data = DataView.from_Xy(X=X_train, y=y_train)
+services = RuntimeServices(search_backend=OptunaBackend(direction="maximize"))
+training_run = GraphRunner(services).fit(graph, data, config)
 ```
 
 ---
@@ -362,23 +384,23 @@ fitted = (
 
 ```mermaid
 sequenceDiagram
-    participant O as Orchestrator
+    participant R as GraphRunner
     participant B as Base Model
-    participant D as DataManager
+    participant D as DataView
     participant M as Meta Model
 
-    O->>D: Create 5 folds
+    R->>D: Create 5 folds
 
     loop For each fold i
-        O->>B: Train on folds != i
-        B->>O: Model_i
-        O->>B: Predict fold i
-        B->>D: Store predictions
+        R->>B: Train on folds != i
+        B->>R: Model_i
+        R->>B: Predict fold i
+        B->>D: Store OOF predictions as overlay
     end
 
     D->>D: Combine OOF predictions
     D->>M: OOF as training features
-    O->>M: Train meta on OOF
+    R->>M: Train meta on OOF
 ```
 
 ### Prediction Time
@@ -386,7 +408,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant G as FittedGraph
+    participant G as InferenceGraph
     participant B as Base Models
     participant M as Meta Model
 
@@ -402,49 +424,51 @@ sequenceDiagram
 
 ## Working with Results
 
-### FittedGraph
+### TrainingRun
 
 ```python
-# Predict through the full graph recursively
-predictions = fitted_graph.predict(X_test)
+# Compile to an InferenceGraph for predictions
+inference = training_run.compile_inference()
+
+# Predict through the full graph (starting from leaf nodes)
+predictions = inference.predict(X_test)
 
 # Predict from a specific node
-rf_predictions = fitted_graph.predict(X_test, node_name="rf")
+rf_predictions = inference.predict(X_test, node_name="rf")
 
-# Access a fitted node
-rf_fitted = fitted_graph.get_node("rf")
+# Access a node's training results
+rf_result = training_run.node_results["rf"]
 
 # Get OOF predictions for a node
-rf_oof = fitted_graph.get_oof_predictions("rf")
+rf_oof = rf_result.oof_predictions
 ```
 
 ### Getting Probability Predictions
 
-`FittedGraph.predict()` returns class labels. To get probabilities, average `predict_proba` across the fold models:
+`InferenceGraph.predict()` returns class labels or regression values. To get probabilities, average `predict_proba` across the fold models:
 
 ```python
 import numpy as np
 
-node = fitted_graph.get_node("rf")
+models = training_run.node_results["rf"].models
 probas = np.mean(
-    [model.predict_proba(X_test) for model in node.models],
+    [model.predict_proba(X_test) for model in models],
     axis=0,
 )
 ```
 
-### FittedNode
+### NodeRunResult
 
 ```python
-rf_fitted = fitted_graph.get_node("rf")
+rf_result = training_run.node_results["rf"]
 
-rf_fitted.best_params          # best hyperparameters dict
-rf_fitted.mean_score           # mean CV score
-rf_fitted.oof_predictions      # out-of-fold predictions
-rf_fitted.models               # list of fitted model objects
-rf_fitted.cv_result            # cross-validation result
-rf_fitted.optimization_result  # full optimization result
-rf_fitted.selected_features    # selected features (if feature selection enabled)
-rf_fitted.node                 # original ModelNode
+rf_result.best_params          # best hyperparameters dict
+rf_result.mean_score           # mean CV score
+rf_result.oof_predictions      # out-of-fold predictions
+rf_result.models               # list of fitted model objects (one per fold)
+rf_result.cv_result            # cross-validation result
+rf_result.optimization_result  # full optimization result
+rf_result.selected_features    # selected features (if feature selection enabled)
 ```
 
 ---
@@ -490,20 +514,30 @@ Meta-learner is constrained to linear combination:
 
 ```python
 from sklearn.linear_model import Ridge
+from sklearn_meta import GraphBuilder, RunConfigBuilder, RuntimeServices, GraphRunner, DataView, OptunaBackend
 
-fitted = (
+graph = (
     GraphBuilder("fwls")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200))
+        .int_param("n_estimators", 50, 200)
     .add_model("xgb", XGBClassifier)
-    .with_search_space(n_estimators=(50, 200))
+        .int_param("n_estimators", 50, 200)
     .add_model("meta", Ridge)
-    .with_search_space(alpha=(0.01, 100.0))
-    .stacks_proba("rf")
-    .stacks_proba("xgb")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+        .param("alpha", 0.01, 100.0, log=True)
+        .stacks_proba("rf", "xgb")
+    .compile()
 )
+
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .build()
+)
+
+data = DataView.from_Xy(X=X_train, y=y_train)
+services = RuntimeServices(search_backend=OptunaBackend(direction="maximize"))
+training_run = GraphRunner(services).fit(graph, data, config)
 ```
 
 **Pros:** Interpretable, less overfitting
@@ -522,15 +556,11 @@ from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, roc_auc_score
 import pandas as pd
 
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.node import ModelNode
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
-from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
-from sklearn_meta.search.backends.optuna import OptunaBackend
+from sklearn_meta import (
+    GraphBuilder, GraphSpec, NodeSpec, DependencyEdge, DependencyType,
+    DataView, RunConfig, RunConfigBuilder, CVConfig, CVStrategy, TuningConfig,
+    RuntimeServices, GraphRunner, OptunaBackend,
+)
 from sklearn_meta.search.space import SearchSpace
 
 # === Data ===
@@ -543,96 +573,75 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_
 X_train, X_test = pd.DataFrame(X_train), pd.DataFrame(X_test)
 y_train, y_test = pd.Series(y_train), pd.Series(y_test)
 
-# === Base Model 1: Random Forest ===
-rf_space = (
-    SearchSpace()
-    .add_int("n_estimators", 50, 300)
-    .add_int("max_depth", 3, 15)
-    .add_float("min_samples_split", 0.01, 0.1)
+# === Build graph with GraphBuilder ===
+graph = (
+    GraphBuilder("stacking_pipeline")
+    # Base Model 1: Random Forest
+    .add_model("rf", RandomForestClassifier)
+        .int_param("n_estimators", 50, 300)
+        .int_param("max_depth", 3, 15)
+        .param("min_samples_split", 0.01, 0.1)
+        .fixed_params(random_state=42, n_jobs=-1)
+    # Base Model 2: Gradient Boosting
+    .add_model("gb", GradientBoostingClassifier)
+        .int_param("n_estimators", 50, 300)
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .int_param("max_depth", 3, 8)
+        .fixed_params(random_state=42)
+    # Base Model 3: SVM
+    .add_model("svm", SVC)
+        .param("C", 0.1, 100.0, log=True)
+        .cat_param("kernel", ["rbf", "poly"])
+        .fixed_params(probability=True, random_state=42)
+    # Meta-Learner: Logistic Regression
+    .add_model("meta", LogisticRegression)
+        .param("C", 0.01, 100.0, log=True)
+        .fixed_params(random_state=42, max_iter=1000)
+        .stacks_proba("rf", "gb", "svm")
+    .compile()
 )
-rf_node = ModelNode(name="rf", estimator_class=RandomForestClassifier, search_space=rf_space, fixed_params={"random_state": 42, "n_jobs": -1})
-
-# === Base Model 2: Gradient Boosting ===
-gb_space = (
-    SearchSpace()
-    .add_int("n_estimators", 50, 300)
-    .add_float("learning_rate", 0.01, 0.3, log=True)
-    .add_int("max_depth", 3, 8)
-)
-gb_node = ModelNode(name="gb", estimator_class=GradientBoostingClassifier, search_space=gb_space, fixed_params={"random_state": 42})
-
-# === Base Model 3: SVM ===
-svm_space = (
-    SearchSpace()
-    .add_float("C", 0.1, 100, log=True)
-    .add_categorical("kernel", ["rbf", "poly"])
-)
-svm_node = ModelNode(name="svm", estimator_class=SVC, search_space=svm_space, fixed_params={"probability": True, "random_state": 42})
-
-# === Meta-Learner: Logistic Regression ===
-meta_space = SearchSpace().add_float("C", 0.01, 100, log=True)
-meta_node = ModelNode(name="meta", estimator_class=LogisticRegression, search_space=meta_space, fixed_params={"random_state": 42, "max_iter": 1000})
-
-# === Build Stacking Graph ===
-graph = ModelGraph()
-
-# Add all nodes
-graph.add_node(rf_node)
-graph.add_node(gb_node)
-graph.add_node(svm_node)
-graph.add_node(meta_node)
-
-# Connect base models to meta-learner with DependencyEdge
-graph.add_edge(DependencyEdge(source="rf", target="meta", dep_type=DependencyType.PROBA))
-graph.add_edge(DependencyEdge(source="gb", target="meta", dep_type=DependencyType.PROBA))
-graph.add_edge(DependencyEdge(source="svm", target="meta", dep_type=DependencyType.PROBA))
 
 # Validate
 graph.validate()
 print(f"Execution order: {graph.topological_order()}")
 
-# === Configure Tuning ===
-cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED)
-
-tuning_config = TuningConfig(
-    strategy=OptimizationStrategy.LAYER_BY_LAYER,
-    n_trials=30,
-    cv_config=cv_config,
-    metric="roc_auc",
-    greater_is_better=True,
-    early_stopping_rounds=15,
-    show_progress=True,
+# === Configure the run ===
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(
+        n_trials=30,
+        metric="roc_auc",
+        greater_is_better=True,
+        early_stopping_rounds=15,
+        show_progress=True,
+    )
+    .build()
 )
-
-backend = OptunaBackend(direction="maximize", random_state=42)
 
 # === Run Stacking Pipeline ===
-ctx = DataContext.from_Xy(X=X_train, y=y_train)
-orchestrator = TuningOrchestrator(
-    graph=graph,
-    data_manager=DataManager(cv_config),
-    search_backend=backend,
-    tuning_config=tuning_config,
-)
+data = DataView.from_Xy(X=X_train, y=y_train)
+services = RuntimeServices(search_backend=OptunaBackend(direction="maximize"))
 
 print("\nTuning stacking pipeline...")
-fitted_graph = orchestrator.fit(ctx)
+training_run = GraphRunner(services).fit(graph, data, config)
 
 # === Evaluate ===
 print("\n=== Results ===")
 print("\nBest parameters per node:")
 for name in ["rf", "gb", "svm", "meta"]:
-    node = fitted_graph.get_node(name)
-    print(f"  {name}: {node.best_params} (score: {node.mean_score:.4f})")
+    result = training_run.node_results[name]
+    print(f"  {name}: {result.best_params} (score: {result.mean_score:.4f})")
 
-# Predictions
-predictions = fitted_graph.predict(X_test)
+# Compile to InferenceGraph for predictions
+inference = training_run.compile_inference()
+predictions = inference.predict(X_test)
 print(f"\nStacking Accuracy: {accuracy_score(y_test, predictions):.4f}")
 
 # Compare individual models
 print("\nIndividual Model Performance (for comparison):")
 for name in ["rf", "gb", "svm"]:
-    node_pred = fitted_graph.predict(X_test, node_name=name)
+    node_pred = inference.predict(X_test, node_name=name)
     print(f"  {name}: Accuracy={accuracy_score(y_test, node_pred):.4f}")
 ```
 

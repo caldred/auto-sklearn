@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 from scipy import stats
 
-from sklearn_meta.core.model.quantile_sampler import (
+from sklearn_meta.spec.quantile_sampler import (
     LinearInterpolationSampler,
     ParametricSampler,
     AutoSelectSampler,

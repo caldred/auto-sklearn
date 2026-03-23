@@ -8,19 +8,19 @@ The tuning system orchestrates hyperparameter optimization across your model gra
 
 ```mermaid
 graph TB
-    subgraph "Tuning Pipeline"
-        TC[TuningConfig] --> TO[TuningOrchestrator]
-        MG[ModelGraph] --> TO
-        DM[DataManager] --> TO
-        SB[OptunaBackend] --> TO
+    subgraph "Training Pipeline"
+        RC[RunConfig] --> GR[GraphRunner]
+        GS[GraphSpec] --> GR
+        DV[DataView] --> GR
+        RS[RuntimeServices] --> GR
 
-        TO --> |For each layer| L[Process Layer]
+        GR --> |For each layer| L[Process Layer]
         L --> |For each node| N[Tune Node]
         N --> |For each trial| T[Evaluate Trial]
 
         T --> CV[Cross-Validation]
         CV --> S[Score]
-        S --> OPT[Optimizer]
+        S --> OPT[SearchBackend]
         OPT --> |Next params| T
     end
 ```
@@ -29,91 +29,142 @@ graph TB
 
 ## Quick Start with GraphBuilder
 
-The `GraphBuilder` fluent API is the recommended way to configure and run tuning:
+The `GraphBuilder` fluent API is the recommended way to define model graphs. Graph definition and training execution are separate steps in v2:
 
 ```python
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn_meta.api import GraphBuilder
+from sklearn_meta.spec.builder import GraphBuilder
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.runtime.config import RunConfig, CVConfig, TuningConfig
+from sklearn_meta.runtime.services import RuntimeServices
+from sklearn_meta.data.view import DataView
 
-fitted = (
+# 1. Define the graph
+graph = (
     GraphBuilder("my_stack")
     # Base model 1
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 300), max_depth=(3, 15))
+        .int_param("n_estimators", 50, 300)
+        .int_param("max_depth", 3, 15)
     # Base model 2
     .add_model("gb", GradientBoostingClassifier)
-    .with_search_space(n_estimators=(50, 300), learning_rate=(0.01, 0.3), max_depth=(3, 10))
+        .int_param("n_estimators", 50, 300)
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .int_param("max_depth", 3, 10)
     # Meta-learner stacking on base models
     .add_model("meta", LogisticRegression)
-    .with_search_space(C=(0.01, 100.0))
-    .stacks_proba("rf")
-    .stacks_proba("gb")
-    # CV and tuning configuration
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(
+        .param("C", 0.01, 100.0, log=True)
+        .stacks_proba("rf", "gb")
+    .compile()
+)
+
+# 2. Configure the run
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy="stratified"),
+    tuning=TuningConfig(
         n_trials=100,
         metric="roc_auc",
         greater_is_better=True,
         early_stopping_rounds=20,
         show_progress=True,
-    )
-    .fit(X_train, y_train)
+    ),
+    verbosity=2,
 )
 
-predictions = fitted.predict(X_test)
+# 3. Build services and data, then fit
+services = RuntimeServices.default()
+data = DataView.from_Xy(X_train, y_train)
+run = GraphRunner(services).fit(graph, data, config)
+
+# 4. Get predictions via an InferenceGraph
+inference = run.compile_inference()
+predictions = inference.predict(X_test)
 ```
+
+---
+
+## RunConfig
+
+`RunConfig` is the unified configuration object for a training run. It composes separate config objects for each concern:
+
+```python
+from sklearn_meta.runtime.config import (
+    RunConfig,
+    CVConfig,
+    CVStrategy,
+    TuningConfig,
+    FeatureSelectionConfig,
+)
+from sklearn_meta.engine.strategy import OptimizationStrategy
+
+config = RunConfig(
+    cv=CVConfig(
+        n_splits=5,
+        n_repeats=1,
+        strategy=CVStrategy.STRATIFIED,
+        shuffle=True,
+        random_state=42,
+    ),
+    tuning=TuningConfig(
+        n_trials=100,
+        timeout=3600,           # seconds
+        early_stopping_rounds=20,
+        metric="roc_auc",
+        greater_is_better=True,
+        strategy=OptimizationStrategy.LAYER_BY_LAYER,
+        show_progress=True,
+    ),
+    feature_selection=FeatureSelectionConfig(
+        method="shadow",
+        n_shadows=5,
+    ),
+    verbosity=2,
+)
+```
+
+### RunConfig Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cv` | `CVConfig` | Cross-validation settings |
+| `tuning` | `TuningConfig` | Hyperparameter tuning settings |
+| `feature_selection` | `FeatureSelectionConfig` or `None` | Feature selection settings |
+| `reparameterization` | `ReparameterizationConfig` or `None` | Reparameterization settings |
+| `estimator_scaling` | `EstimatorScalingConfig` or `None` | Estimator scaling settings |
+| `verbosity` | `int` | Log output level (0=silent, 1=summary, 2=detailed) |
 
 ---
 
 ## TuningConfig
 
-Configure the optimization process:
+`TuningConfig` contains only the hyperparameter search settings:
 
 ```python
-from sklearn_meta.core.tuning.orchestrator import TuningConfig
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+from sklearn_meta.runtime.config import TuningConfig
+from sklearn_meta.engine.strategy import OptimizationStrategy
 
-tuning_config = TuningConfig(
-    strategy=OptimizationStrategy.LAYER_BY_LAYER,
+tuning = TuningConfig(
     n_trials=100,
-    timeout=3600,  # seconds
+    timeout=3600,
     early_stopping_rounds=20,
-    cv_config=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
     metric="roc_auc",
     greater_is_better=True,
-    feature_selection=None,
-    use_reparameterization=False,
-    custom_reparameterizations=None,
-    verbose=1,
-    tuning_n_estimators=100,
-    final_n_estimators=500,
-    estimator_scaling_search=False,
-    estimator_scaling_factors=None,
+    strategy=OptimizationStrategy.LAYER_BY_LAYER,
     show_progress=True,
 )
 ```
 
-### Configuration Options
+### TuningConfig Options
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `strategy` | Graph traversal strategy | `LAYER_BY_LAYER` |
 | `n_trials` | Maximum number of trials | 100 |
 | `timeout` | Time limit in seconds | None |
 | `early_stopping_rounds` | Stop if no improvement for N trials | None |
-| `cv_config` | Cross-validation configuration | None |
 | `metric` | Scoring metric name | `"neg_mean_squared_error"` |
 | `greater_is_better` | Maximize or minimize | False |
-| `feature_selection` | Feature selection configuration | None |
-| `use_reparameterization` | Enable reparameterization | False |
-| `custom_reparameterizations` | Custom reparameterization functions | None |
-| `verbose` | Verbosity level | 1 |
-| `tuning_n_estimators` | n_estimators used during tuning (faster) | None |
-| `final_n_estimators` | n_estimators used in the final CV pass after tuning | None |
-| `estimator_scaling_search` | Search for optimal n_estimators scaling | False |
-| `estimator_scaling_factors` | Custom scaling factors to try | None |
+| `strategy` | Graph traversal strategy | `LAYER_BY_LAYER` |
 | `show_progress` | Display progress bar during tuning | False |
 
 ---
@@ -127,7 +178,7 @@ A key architectural concept: **strategy** and **search backend** are separate co
 `OptimizationStrategy` controls how the graph's layers are processed during tuning:
 
 ```python
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.engine.strategy import OptimizationStrategy
 ```
 
 | Strategy | Description |
@@ -165,70 +216,69 @@ backend = OptunaBackend(
 
 ---
 
-## TuningOrchestrator
+## GraphRunner
 
-The orchestrator coordinates the entire tuning process:
+The `GraphRunner` orchestrates the entire training process:
 
 ```python
-from sklearn_meta.core.tuning.orchestrator import TuningOrchestrator
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.search.backends.optuna import OptunaBackend
 
-backend = OptunaBackend(direction="maximize", random_state=42)
-
-orchestrator = TuningOrchestrator(
-    graph=model_graph,
-    data_manager=data_manager,
-    search_backend=backend,
-    tuning_config=tuning_config,
-    executor=None,
+services = RuntimeServices(
+    search_backend=OptunaBackend(direction="maximize", random_state=42),
 )
 
-# Run optimization
-fitted_graph = orchestrator.fit(ctx)
+runner = GraphRunner(services)
+run = runner.fit(graph, data, config)
 ```
 
 ### Constructor Parameters
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `graph` | The `ModelGraph` to tune | required |
-| `data_manager` | `DataManager` instance | required |
-| `search_backend` | Search backend (e.g. `OptunaBackend`) | OptunaBackend |
-| `tuning_config` | `TuningConfig` instance | required |
-| `executor` | Optional executor for parallel node tuning | None |
+| Parameter | Description |
+|-----------|-------------|
+| `services` | `RuntimeServices` instance (search backend, executor, etc.) |
+
+### `fit()` Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `graph` | The `GraphSpec` to train |
+| `data` | `DataView` with features, targets, and optional groups |
+| `config` | `RunConfig` with CV, tuning, feature selection settings |
 
 ### Execution Flow
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant TO as TuningOrchestrator
-    participant OPT as OptunaBackend
-    participant CV as CrossValidator
+    participant GR as GraphRunner
+    participant OPT as SearchBackend
+    participant CV as CVEngine
     participant M as Model
 
-    U->>TO: fit(ctx)
-    TO->>TO: Get layers (topological order)
+    U->>GR: fit(graph, data, config)
+    GR->>GR: Get layers (topological order)
 
     loop For each layer
         loop For each node in layer
-            TO->>OPT: Create study
+            GR->>OPT: Create study
             loop For n_trials
-                OPT->>TO: Suggest params
-                TO->>CV: Evaluate with CV
+                OPT->>GR: Suggest params
+                GR->>CV: Evaluate with CV
                 loop For each fold
                     CV->>M: fit(train)
                     M->>CV: predict(val)
                 end
-                CV->>TO: Mean score
-                TO->>OPT: Report score
+                CV->>GR: Mean score
+                GR->>OPT: Report score
             end
-            OPT->>TO: Best params
-            TO->>TO: Store best params
+            OPT->>GR: Best params
+            GR->>GR: Store best params
         end
     end
 
-    TO->>U: FittedGraph
+    GR->>U: TrainingRun
 ```
 
 ---
@@ -257,8 +307,7 @@ graph TB
 3. **Layer 1:** Tune meta-learner on OOF predictions
 
 ```python
-# Automatic layer-by-layer execution
-fitted_graph = orchestrator.fit(ctx)
+run = GraphRunner(services).fit(graph, data, config)
 
 # Layers processed in order:
 # 1. rf, xgb (parallel, no dependencies)
@@ -269,17 +318,24 @@ fitted_graph = orchestrator.fit(ctx)
 
 ## Estimator Scaling
 
-For boosting models (XGBoost, LightGBM, GradientBoosting), you often want to tune with fewer estimators for speed, then use more estimators in the final CV pass. `TuningConfig` supports this directly:
+For boosting models (XGBoost, LightGBM, GradientBoosting), you often want to tune with fewer estimators for speed, then use more estimators in the final CV pass. Configure this via `EstimatorScalingConfig` within `RunConfig`:
 
 ### Fixed Scaling
 
 ```python
-tuning_config = TuningConfig(
-    n_trials=100,
-    metric="roc_auc",
-    greater_is_better=True,
-    tuning_n_estimators=100,     # use 100 trees during tuning (fast)
-    final_n_estimators=1000,     # use 1000 trees in the final CV pass
+from sklearn_meta.runtime.config import RunConfig, TuningConfig
+from sklearn_meta.engine.estimator_scaling import EstimatorScalingConfig
+
+config = RunConfig(
+    tuning=TuningConfig(
+        n_trials=100,
+        metric="roc_auc",
+        greater_is_better=True,
+    ),
+    estimator_scaling=EstimatorScalingConfig(
+        tuning_n_estimators=100,     # use 100 trees during tuning (fast)
+        final_n_estimators=1000,     # use 1000 trees in the final CV pass
+    ),
 )
 ```
 
@@ -288,34 +344,46 @@ tuning_config = TuningConfig(
 Automatically search for the best `n_estimators` value after hyperparameters are found:
 
 ```python
-tuning_config = TuningConfig(
-    n_trials=100,
-    metric="roc_auc",
-    greater_is_better=True,
-    tuning_n_estimators=100,
-    estimator_scaling_search=True,
-    # Optionally provide custom factors to try:
-    estimator_scaling_factors=[1.0, 2.0, 5.0, 10.0],
+config = RunConfig(
+    tuning=TuningConfig(
+        n_trials=100,
+        metric="roc_auc",
+        greater_is_better=True,
+    ),
+    estimator_scaling=EstimatorScalingConfig(
+        tuning_n_estimators=100,
+        scaling_search=True,
+        # Optionally provide custom factors to try:
+        scaling_factors=[2, 5, 10, 20],
+    ),
 )
 ```
 
 ### With GraphBuilder
 
 ```python
-fitted = (
+graph = (
     GraphBuilder("boosting_pipeline")
     .add_model("xgb", XGBClassifier)
-    .with_search_space(max_depth=(3, 10), learning_rate=(0.01, 0.3))
-    .with_tuning(
+        .int_param("max_depth", 3, 10)
+        .param("learning_rate", 0.01, 0.3, log=True)
+    .compile()
+)
+
+config = RunConfig(
+    tuning=TuningConfig(
         n_trials=100,
         metric="roc_auc",
         greater_is_better=True,
+    ),
+    estimator_scaling=EstimatorScalingConfig(
         tuning_n_estimators=100,
         final_n_estimators=1000,
-        estimator_scaling_search=True,
-    )
-    .fit(X_train, y_train)
+        scaling_search=True,
+    ),
 )
+
+run = GraphRunner(services).fit(graph, data, config)
 ```
 
 ---
@@ -327,34 +395,21 @@ fitted = (
 Enable a progress bar during tuning:
 
 ```python
-tuning_config = TuningConfig(
-    n_trials=100,
-    show_progress=True,
-)
-```
-
-Or with the GraphBuilder:
-
-```python
-fitted = (
-    GraphBuilder("pipeline")
-    .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 300))
-    .with_tuning(n_trials=100, show_progress=True)
-    .fit(X_train, y_train)
+config = RunConfig(
+    tuning=TuningConfig(n_trials=100, show_progress=True),
 )
 ```
 
 ### Verbosity
 
-Control log output detail with `verbose`:
+Control log output detail with the top-level `verbosity` field on `RunConfig`:
 
 ```python
-tuning_config = TuningConfig(
-    n_trials=100,
-    verbose=0,  # silent
-    # verbose=1,  # summary (default)
-    # verbose=2,  # detailed
+config = RunConfig(
+    tuning=TuningConfig(n_trials=100),
+    verbosity=0,  # silent
+    # verbosity=1,  # summary (default)
+    # verbosity=2,  # detailed
 )
 ```
 
@@ -367,9 +422,11 @@ tuning_config = TuningConfig(
 Stop tuning a node when no improvement is found for N consecutive trials:
 
 ```python
-tuning_config = TuningConfig(
-    n_trials=1000,
-    early_stopping_rounds=20,  # stop if no improvement for 20 trials
+config = RunConfig(
+    tuning=TuningConfig(
+        n_trials=1000,
+        early_stopping_rounds=20,  # stop if no improvement for 20 trials
+    ),
 )
 ```
 
@@ -378,9 +435,11 @@ tuning_config = TuningConfig(
 Stop tuning after a time limit:
 
 ```python
-tuning_config = TuningConfig(
-    n_trials=1000,
-    timeout=3600,  # stop after 1 hour
+config = RunConfig(
+    tuning=TuningConfig(
+        n_trials=1000,
+        timeout=3600,  # stop after 1 hour
+    ),
 )
 ```
 
@@ -407,10 +466,14 @@ tuning_config = TuningConfig(
 
 ```python
 # Classification
-config = TuningConfig(metric="roc_auc", greater_is_better=True)
+config = RunConfig(
+    tuning=TuningConfig(metric="roc_auc", greater_is_better=True),
+)
 
 # Regression (default)
-config = TuningConfig(metric="neg_mean_squared_error", greater_is_better=False)
+config = RunConfig(
+    tuning=TuningConfig(metric="neg_mean_squared_error", greater_is_better=False),
+)
 ```
 
 ### Custom Metrics
@@ -422,9 +485,11 @@ def custom_metric(y_true, y_pred):
     # Your metric logic
     return score
 
-config = TuningConfig(
-    metric=make_scorer(custom_metric),
-    greater_is_better=True,
+config = RunConfig(
+    tuning=TuningConfig(
+        metric=make_scorer(custom_metric),
+        greater_is_better=True,
+    ),
 )
 ```
 
@@ -432,41 +497,58 @@ config = TuningConfig(
 
 ## Working with Results
 
-### FittedGraph
+### TrainingRun
 
-After tuning, the orchestrator returns a `FittedGraph`:
+After fitting, the `GraphRunner` returns a `TrainingRun`:
 
 ```python
-fitted_graph = orchestrator.fit(ctx)
+run = GraphRunner(services).fit(graph, data, config)
 
-# Predict through the full graph (recursive)
-predictions = fitted_graph.predict(X_test)
+# Compile to an InferenceGraph for prediction
+inference = run.compile_inference()
+predictions = inference.predict(X_test)
 
 # Predict from a specific node
-rf_predictions = fitted_graph.predict(X_test, node_name="rf")
+rf_predictions = inference.predict(X_test, node_name="rf")
 
-# Access a specific fitted node
-rf_fitted = fitted_graph.get_node("rf")
+# Access per-node training results
+rf_result = run.node_results["rf"]
 
-# Get out-of-fold predictions for a node
-rf_oof = fitted_graph.get_oof_predictions("rf")
+# Save and load
+run.save("path/to/run")
+loaded = TrainingRun.load("path/to/run")
 ```
 
-### FittedNode
+### NodeRunResult
 
-Each fitted node contains detailed results:
+Each node's result contains detailed training information:
 
 ```python
-rf_fitted = fitted_graph.get_node("rf")
+rf_result = run.node_results["rf"]
 
-rf_fitted.node               # original ModelNode
-rf_fitted.best_params        # best hyperparameters dict
-rf_fitted.cv_result          # cross-validation result
-rf_fitted.optimization_result  # full optimization result
-rf_fitted.selected_features  # features selected (if feature selection enabled)
-rf_fitted.oof_predictions    # out-of-fold predictions
-rf_fitted.models             # list of fitted model objects
-rf_fitted.mean_score         # mean CV score
+rf_result.node_name          # "rf"
+rf_result.best_params        # best hyperparameters dict
+rf_result.cv_result          # CVResult with fold-level details
+rf_result.optimization_result  # full optimization result from backend
+rf_result.selected_features  # features selected (if feature selection enabled)
+rf_result.oof_predictions    # out-of-fold predictions
+rf_result.models             # list of fitted model objects (one per fold)
+rf_result.mean_score         # mean CV score
+```
+
+### InferenceGraph
+
+The `InferenceGraph` is a lightweight prediction-only artifact:
+
+```python
+inference = run.compile_inference()
+
+# Predict through the full graph
+predictions = inference.predict(X_test)
+
+# Save and load independently
+inference.save("path/to/inference")
+loaded = InferenceGraph.load("path/to/inference")
 ```
 
 ---
@@ -476,7 +558,7 @@ rf_fitted.mean_score         # mean CV score
 Connect models using `DependencyEdge` and `DependencyType`:
 
 ```python
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
 
 # Prediction dependency (class labels or regression values)
 edge = DependencyEdge(source="rf", target="meta", dep_type=DependencyType.PREDICTION)
@@ -487,18 +569,19 @@ edge = DependencyEdge(source="gb", target="meta", dep_type=DependencyType.PROBA)
 graph.add_edge(edge)
 ```
 
-With GraphBuilder, dependencies are simpler:
+With `GraphBuilder`, dependencies are simpler:
 
 ```python
-(
+graph = (
     GraphBuilder("stack")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200))
+        .int_param("n_estimators", 50, 200)
     .add_model("meta", LogisticRegression)
-    .with_search_space(C=(0.01, 100.0))
-    .stacks("rf")          # prediction dependency
-    # or
-    .stacks_proba("rf")    # probability dependency
+        .param("C", 0.01, 100.0, log=True)
+        .stacks("rf")          # prediction dependency
+        # or
+        # .stacks_proba("rf")  # probability dependency
+    .compile()
 )
 ```
 
@@ -513,22 +596,25 @@ from sklearn.datasets import make_classification
 from sklearn.metrics import accuracy_score
 import pandas as pd
 
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.node import ModelNode
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
-from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.data.view import DataView
+from sklearn_meta.runtime.config import (
+    RunConfig, CVConfig, CVStrategy, TuningConfig,
+)
+from sklearn_meta.engine.strategy import OptimizationStrategy
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.search.backends.optuna import OptunaBackend
 from sklearn_meta.search.space import SearchSpace
+from sklearn_meta.spec.builder import GraphBuilder
+from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
+from sklearn_meta.spec.graph import GraphSpec
+from sklearn_meta.spec.node import NodeSpec
 
 # === Data ===
 X, y = make_classification(n_samples=2000, n_features=20, random_state=42)
 X = pd.DataFrame(X)
 y = pd.Series(y)
-ctx = DataContext.from_Xy(X=X, y=y)
+data = DataView.from_Xy(X=X, y=y)
 
 # === Search Spaces ===
 rf_space = (
@@ -551,56 +637,53 @@ meta_space = (
 )
 
 # === Model Nodes ===
-rf_node = ModelNode(name="rf", estimator_class=RandomForestClassifier, search_space=rf_space, fixed_params={"random_state": 42})
-gb_node = ModelNode(name="gb", estimator_class=GradientBoostingClassifier, search_space=gb_space, fixed_params={"random_state": 42})
-meta_node = ModelNode(name="meta", estimator_class=LogisticRegression, search_space=meta_space, fixed_params={"random_state": 42})
+rf_node = NodeSpec(name="rf", estimator_class=RandomForestClassifier, search_space=rf_space, fixed_params={"random_state": 42})
+gb_node = NodeSpec(name="gb", estimator_class=GradientBoostingClassifier, search_space=gb_space, fixed_params={"random_state": 42})
+meta_node = NodeSpec(name="meta", estimator_class=LogisticRegression, search_space=meta_space, fixed_params={"random_state": 42})
 
 # === Graph ===
-graph = ModelGraph()
+graph = GraphSpec()
 graph.add_node(rf_node)
 graph.add_node(gb_node)
 graph.add_node(meta_node)
 graph.add_edge(DependencyEdge(source="rf", target="meta", dep_type=DependencyType.PROBA))
 graph.add_edge(DependencyEdge(source="gb", target="meta", dep_type=DependencyType.PROBA))
 
-# === Tuning Config ===
-cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED)
-
-tuning_config = TuningConfig(
-    strategy=OptimizationStrategy.LAYER_BY_LAYER,
-    n_trials=50,
-    cv_config=cv_config,
-    metric="roc_auc",
-    greater_is_better=True,
-    early_stopping_rounds=15,
-    show_progress=True,
+# === RunConfig ===
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
+    tuning=TuningConfig(
+        strategy=OptimizationStrategy.LAYER_BY_LAYER,
+        n_trials=50,
+        metric="roc_auc",
+        greater_is_better=True,
+        early_stopping_rounds=15,
+        show_progress=True,
+    ),
+    verbosity=2,
 )
 
-# === Search Backend ===
-backend = OptunaBackend(direction="maximize", random_state=42)
-
-# === Run Tuning ===
-data_manager = DataManager(cv_config)
-orchestrator = TuningOrchestrator(
-    graph=graph,
-    data_manager=data_manager,
-    search_backend=backend,
-    tuning_config=tuning_config,
+# === Services ===
+services = RuntimeServices(
+    search_backend=OptunaBackend(direction="maximize", random_state=42),
 )
 
+# === Run Training ===
 print("Starting hyperparameter optimization...")
-fitted_graph = orchestrator.fit(ctx)
+run = GraphRunner(services).fit(graph, data, config)
 
 # === Results ===
 print("\nBest parameters per node:")
 for name in ["rf", "gb", "meta"]:
-    node = fitted_graph.get_node(name)
-    print(f"  {name}: {node.best_params} (mean score: {node.mean_score:.4f})")
+    result = run.node_results[name]
+    print(f"  {name}: {result.best_params} (mean score: {result.mean_score:.4f})")
 
 # === Predict ===
 X_test, y_test = make_classification(n_samples=500, n_features=20, random_state=123)
 X_test = pd.DataFrame(X_test)
-predictions = fitted_graph.predict(X_test)
+
+inference = run.compile_inference()
+predictions = inference.predict(X_test)
 
 print(f"\nTest Accuracy: {accuracy_score(y_test, predictions):.4f}")
 ```
@@ -608,73 +691,84 @@ print(f"\nTest Accuracy: {accuracy_score(y_test, predictions):.4f}")
 ### Equivalent with GraphBuilder
 
 ```python
-from sklearn_meta.api import GraphBuilder
+from sklearn_meta.spec.builder import GraphBuilder
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.runtime.config import RunConfig, CVConfig, TuningConfig
+from sklearn_meta.runtime.services import RuntimeServices
+from sklearn_meta.data.view import DataView
 
-fitted = (
+graph = (
     GraphBuilder("stacking_pipeline")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 300), max_depth=(3, 15), min_samples_split=(0.01, 0.2))
+        .int_param("n_estimators", 50, 300)
+        .int_param("max_depth", 3, 15)
+        .param("min_samples_split", 0.01, 0.2)
     .add_model("gb", GradientBoostingClassifier)
-    .with_search_space(n_estimators=(50, 300), learning_rate=(0.01, 0.3), max_depth=(3, 10))
+        .int_param("n_estimators", 50, 300)
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .int_param("max_depth", 3, 10)
     .add_model("meta", LogisticRegression)
-    .with_search_space(C=(0.01, 100.0))
-    .stacks_proba("rf")
-    .stacks_proba("gb")
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(
+        .param("C", 0.01, 100.0, log=True)
+        .stacks_proba("rf", "gb")
+    .compile()
+)
+
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy="stratified"),
+    tuning=TuningConfig(
         n_trials=50,
         metric="roc_auc",
         greater_is_better=True,
         early_stopping_rounds=15,
         show_progress=True,
-    )
-    .fit(X_train, y_train)
+    ),
+    verbosity=2,
 )
 
-predictions = fitted.predict(X_test)
+services = RuntimeServices.default()
+data = DataView.from_Xy(X_train, y_train)
+
+run = GraphRunner(services).fit(graph, data, config)
+
+inference = run.compile_inference()
+predictions = inference.predict(X_test)
 ```
 
 ---
 
 ## Parallel Execution
 
-By default, nodes within the same graph layer are tuned sequentially. You can parallelize layer-level node tuning by passing an `Executor`:
+By default, nodes within the same graph layer are tuned sequentially. You can parallelize layer-level node tuning by passing an `Executor` via `RuntimeServices`:
 
 ```python
 from sklearn_meta.execution.local import LocalExecutor
 
-# Using GraphBuilder
-fitted = (
-    GraphBuilder("parallel_pipeline")
-    .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200))
-    .add_model("xgb", XGBClassifier)
-    .with_search_space(n_estimators=(50, 200))
-    .add_model("meta", LogisticRegression)
-    .stacks("rf", "xgb")
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train, executor=LocalExecutor(n_jobs=4))
-)
-```
-
-Or with the low-level API:
-
-```python
-from sklearn_meta.execution.local import LocalExecutor, SequentialExecutor
-
-# Parallel: tune independent nodes concurrently
-orchestrator = TuningOrchestrator(
-    graph=graph,
-    data_manager=data_manager,
-    search_backend=backend,
-    tuning_config=tuning_config,
+services = RuntimeServices(
+    search_backend=OptunaBackend(direction="maximize", random_state=42),
     executor=LocalExecutor(n_jobs=4),
 )
 
-# Sequential (default): one node at a time
-orchestrator = TuningOrchestrator(
-    ...,
+graph = (
+    GraphBuilder("parallel_pipeline")
+    .add_model("rf", RandomForestClassifier)
+        .int_param("n_estimators", 50, 200)
+    .add_model("xgb", XGBClassifier)
+        .int_param("n_estimators", 50, 200)
+    .add_model("meta", LogisticRegression)
+        .stacks("rf", "xgb")
+    .compile()
+)
+
+run = GraphRunner(services).fit(graph, data, config)
+```
+
+Or with sequential execution (the default):
+
+```python
+from sklearn_meta.execution.local import SequentialExecutor
+
+services = RuntimeServices(
+    search_backend=OptunaBackend(direction="maximize"),
     executor=SequentialExecutor(),
 )
 ```
@@ -691,46 +785,81 @@ orchestrator = TuningOrchestrator(
 
 ---
 
+## RunConfigBuilder
+
+For complex configurations, use the fluent `RunConfigBuilder`:
+
+```python
+from sklearn_meta.runtime.config import RunConfigBuilder
+
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(
+        n_trials=100,
+        metric="roc_auc",
+        greater_is_better=True,
+        early_stopping_rounds=20,
+        show_progress=True,
+    )
+    .feature_selection(method="shadow", n_shadows=5)
+    .estimator_scaling(tuning_n_estimators=100, final_n_estimators=1000)
+    .reparameterization(enabled=True, use_prebaked=True)
+    .verbosity(2)
+    .build()
+)
+```
+
+---
+
 ## Best Practices
 
 ### 1. Start with Few Trials
 
 ```python
 # Development
-config = TuningConfig(n_trials=20)
+config = RunConfig(tuning=TuningConfig(n_trials=20))
 
 # Production
-config = TuningConfig(n_trials=200)
+config = RunConfig(tuning=TuningConfig(n_trials=200))
 ```
 
 ### 2. Use Appropriate Timeouts
 
 ```python
-config = TuningConfig(
-    n_trials=1000,
-    timeout=3600,  # 1 hour max
-    early_stopping_rounds=30,
+config = RunConfig(
+    tuning=TuningConfig(
+        n_trials=1000,
+        timeout=3600,  # 1 hour max
+        early_stopping_rounds=30,
+    ),
 )
 ```
 
 ### 3. Use Estimator Scaling for Boosting Models
 
 ```python
-config = TuningConfig(
-    n_trials=100,
-    tuning_n_estimators=100,
-    final_n_estimators=1000,
-    estimator_scaling_search=True,
+from sklearn_meta.engine.estimator_scaling import EstimatorScalingConfig
+
+config = RunConfig(
+    tuning=TuningConfig(n_trials=100),
+    estimator_scaling=EstimatorScalingConfig(
+        tuning_n_estimators=100,
+        final_n_estimators=1000,
+        scaling_search=True,
+    ),
 )
 ```
 
 ### 4. Use Reparameterization for Correlated Parameters
 
 ```python
+from sklearn_meta.runtime.config import ReparameterizationConfig
+
 # See reparameterization.md for details
-config = TuningConfig(
-    n_trials=100,
-    use_reparameterization=True,
+config = RunConfig(
+    tuning=TuningConfig(n_trials=100),
+    reparameterization=ReparameterizationConfig(enabled=True, use_prebaked=True),
 )
 ```
 

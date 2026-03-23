@@ -112,16 +112,28 @@ class PluginRegistry:
                 plugins.append(self._plugins[name])
         return plugins
 
-    def apply_modify_fit_params(self, estimator_class, fit_params, ctx):
+    def apply_modify_params(self, estimator_class, params, node):
+        """Apply all matching plugins' modify_params hooks."""
+        for plugin in self.get_plugins_for(estimator_class):
+            params = plugin.modify_params(params, node)
+        return params
+
+    def apply_modify_fit_params(self, estimator_class, fit_params, batch):
         """Apply all matching plugins' modify_fit_params hooks."""
         for plugin in self.get_plugins_for(estimator_class):
-            fit_params = plugin.modify_fit_params(fit_params, ctx)
+            fit_params = plugin.modify_fit_params(fit_params, batch)
         return fit_params
 
-    def apply_post_fit(self, estimator_class, model, node, ctx):
+    def apply_pre_fit(self, estimator_class, model, node, batch):
+        """Apply all matching plugins' pre_fit hooks."""
+        for plugin in self.get_plugins_for(estimator_class):
+            model = plugin.pre_fit(model, node, batch)
+        return model
+
+    def apply_post_fit(self, estimator_class, model, node, batch):
         """Apply all matching plugins' post_fit hooks."""
         for plugin in self.get_plugins_for(estimator_class):
-            model = plugin.post_fit(model, node, ctx)
+            model = plugin.post_fit(model, node, batch)
         return model
 
     @property

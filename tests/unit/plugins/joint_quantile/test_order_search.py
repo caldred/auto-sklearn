@@ -4,17 +4,18 @@ import pytest
 import numpy as np
 import pandas as pd
 
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.joint_quantile_graph import (
+from sklearn_meta.data.view import DataView
+from sklearn_meta.runtime.config import CVConfig, CVStrategy, RunConfig, TuningConfig
+from sklearn_meta.engine.cv import CVEngine
+from sklearn_meta.spec.quantile import (
     JointQuantileConfig,
-    JointQuantileGraph,
+    JointQuantileGraphSpec,
     OrderConstraint,
 )
-from sklearn_meta.core.tuning.joint_quantile_orchestrator import JointQuantileOrchestrator
-from sklearn_meta.core.tuning.orchestrator import TuningConfig
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.engine.quantile_trainer import QuantileNodeTrainer
+from sklearn_meta.engine.strategy import OptimizationStrategy
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.plugins.joint_quantile.order_search import (
     OrderSearchConfig,
     OrderSearchPlugin,
@@ -105,19 +106,19 @@ def joint_data():
 
 @pytest.fixture
 def joint_graph():
-    """Create a JointQuantileGraph."""
+    """Create a JointQuantileGraphSpec."""
     config = JointQuantileConfig(
         property_names=["y1", "y2", "y3"],
         estimator_class=MockQuantileRegressor,
         quantile_levels=[0.25, 0.5, 0.75],
         n_inference_samples=50,
     )
-    return JointQuantileGraph(config)
+    return JointQuantileGraphSpec(config)
 
 
 @pytest.fixture
 def orchestrator(joint_graph):
-    """Create a JointQuantileOrchestrator."""
+    """Create a GraphRunner with RuntimeServices."""
     cv_config = CVConfig(
         n_splits=2,
         strategy=CVStrategy.RANDOM,
@@ -127,16 +128,20 @@ def orchestrator(joint_graph):
     tuning_config = TuningConfig(
         strategy=OptimizationStrategy.NONE,
         n_trials=1,
-        verbose=0,
-        cv_config=cv_config,
     )
-
-    return JointQuantileOrchestrator(
-        graph=joint_graph,
-        data_manager=DataManager(cv_config),
-        search_backend=MockSearchBackend(),
-        tuning_config=tuning_config,
-    )
+    config = RunConfig(cv=cv_config, tuning=tuning_config, verbosity=0)
+    services = RuntimeServices(search_backend=MockSearchBackend())
+    runner = GraphRunner(services)
+    # Expose config and runner as a simple namespace for tests
+    class _Orchestrator:
+        def __init__(self):
+            self.graph = joint_graph
+            self.runner = runner
+            self.config = config
+            self.services = services
+        def fit(self, ctx, targets=None):
+            return runner.fit(self.graph, ctx, self.config)
+    return _Orchestrator()
 
 
 # =============================================================================
@@ -231,7 +236,7 @@ class TestOrderSearchPluginSearchOrder:
     def test_search_order_returns_result(self, joint_data, joint_graph, orchestrator):
         """Verify search_order returns OrderSearchResult."""
         X, targets = joint_data
-        ctx = DataContext.from_Xy(X, targets["y1"])
+        ctx = DataView.from_Xy(X, targets["y1"])
 
         plugin = OrderSearchPlugin(config=OrderSearchConfig(
             max_iterations=2,
@@ -240,7 +245,7 @@ class TestOrderSearchPluginSearchOrder:
 
         result = plugin.search_order(
             graph=joint_graph,
-            ctx=ctx,
+            data=ctx,
             targets=targets,
             orchestrator=orchestrator,
             random_state=42,
@@ -254,7 +259,7 @@ class TestOrderSearchPluginSearchOrder:
     def test_search_order_preserves_constraints(self, joint_data, orchestrator):
         """Verify search preserves order constraints."""
         X, targets = joint_data
-        ctx = DataContext.from_Xy(X, targets["y1"])
+        ctx = DataView.from_Xy(X, targets["y1"])
 
         # Create graph with constraint: y1 must be first
         config = JointQuantileConfig(
@@ -265,7 +270,7 @@ class TestOrderSearchPluginSearchOrder:
                 fixed_positions={"y1": 0},
             ),
         )
-        graph = JointQuantileGraph(config)
+        graph = JointQuantileGraphSpec(config)
 
         # Update orchestrator's graph
         orchestrator.graph = graph
@@ -277,7 +282,7 @@ class TestOrderSearchPluginSearchOrder:
 
         result = plugin.search_order(
             graph=graph,
-            ctx=ctx,
+            data=ctx,
             targets=targets,
             orchestrator=orchestrator,
             random_state=42,
@@ -290,7 +295,7 @@ class TestOrderSearchPluginSearchOrder:
     def test_search_order_with_random_restarts(self, joint_data, joint_graph, orchestrator):
         """Verify random restarts are performed."""
         X, targets = joint_data
-        ctx = DataContext.from_Xy(X, targets["y1"])
+        ctx = DataView.from_Xy(X, targets["y1"])
 
         plugin = OrderSearchPlugin(config=OrderSearchConfig(
             max_iterations=1,
@@ -300,7 +305,7 @@ class TestOrderSearchPluginSearchOrder:
 
         result = plugin.search_order(
             graph=joint_graph,
-            ctx=ctx,
+            data=ctx,
             targets=targets,
             orchestrator=orchestrator,
             random_state=42,
@@ -356,7 +361,7 @@ class TestOrderSearchPluginRandomOrder:
                 fixed_positions={"y1": 0},
             ),
         )
-        graph = JointQuantileGraph(config)
+        graph = JointQuantileGraphSpec(config)
 
         plugin = OrderSearchPlugin()
         plugin._rng = np.random.RandomState(42)

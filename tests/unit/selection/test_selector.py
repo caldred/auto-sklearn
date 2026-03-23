@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
-from sklearn_meta.api import GraphBuilder
-from sklearn_meta.selection.selector import FeatureSelectionConfig, FeatureSelector
+from sklearn_meta.runtime.config import FeatureSelectionConfig
+from sklearn_meta.selection.selector import FeatureSelector
 
 
 class _DummyModel:
@@ -139,16 +139,3 @@ class TestFeatureSelectorGroups:
         assert feature_to_shadow["a"] in shadow_importances
 
 
-class TestGraphBuilderFeatureSelection:
-    """Tests for GraphBuilder.with_feature_selection."""
-
-    def test_with_feature_selection_passes_feature_groups(self):
-        """GraphBuilder should store feature_groups in FeatureSelectionConfig."""
-        builder = GraphBuilder("test").with_feature_selection(
-            feature_groups={"cat_one_hot": ["cat_a", "cat_b", "cat_c"]}
-        )
-
-        assert builder._feature_selection_config is not None
-        assert builder._feature_selection_config.feature_groups == {
-            "cat_one_hot": ["cat_a", "cat_b", "cat_c"]
-        }

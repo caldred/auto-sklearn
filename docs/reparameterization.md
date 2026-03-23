@@ -56,33 +56,50 @@ graph TB
 
 ## Quick Start
 
-The recommended way to use reparameterization is through the `GraphBuilder` fluent API:
+In v2, the graph structure (what to tune) is separated from runtime configuration (how to tune). You define the graph with `GraphBuilder`, then pass a `RunConfig` with reparameterization settings to `GraphRunner`.
 
 ```python
-from sklearn_meta.api import GraphBuilder
-from sklearn_meta.core.data.context import DataContext
+from sklearn_meta import GraphBuilder, GraphRunner, DataView, RunConfig
+from sklearn_meta.runtime.config import (
+    ReparameterizationConfig,
+    CVConfig,
+    TuningConfig,
+)
 import xgboost as xgb
 import pandas as pd
 
-ctx = DataContext.from_Xy(X=pd.DataFrame(X), y=pd.Series(y))
-
-result = (
+# 1. Build the graph spec (structure only, no runtime config)
+graph = (
     GraphBuilder("my_pipeline")
     .add_model("xgb", xgb.XGBClassifier)
-    .with_search_space(
-        learning_rate=(0.01, 0.3, "log"),
-        n_estimators=(50, 500),
-        max_depth=(3, 10),
-        subsample=(0.6, 1.0),
-    )
-    .with_fixed_params(random_state=42, eval_metric="logloss")
-    .with_reparameterization(use_prebaked=True)
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .with_cv(n_splits=5)
-    .fit(ctx)
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .int_param("n_estimators", 50, 500)
+        .int_param("max_depth", 3, 10)
+        .param("subsample", 0.6, 1.0)
+        .fixed_params(random_state=42, eval_metric="logloss")
+    .compile()
 )
 
-print(f"Best params: {result.get_node('xgb').best_params}")
+# 2. Prepare data
+data = DataView.from_Xy(X=pd.DataFrame(X), y=pd.Series(y))
+
+# 3. Configure the run with reparameterization
+config = RunConfig(
+    cv=CVConfig(n_splits=5),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+    reparameterization=ReparameterizationConfig(enabled=True, use_prebaked=True),
+)
+
+# 4. Run
+run = GraphRunner.from_config(config).fit(graph, data, config)
+
+# 5. Inspect results
+node_result = run.node_results["xgb"]
+print(f"Best params: {node_result.best_params}")
+
+# 6. Build inference graph for prediction
+inference = run.compile_inference()
+predictions = inference.predict(X_test)
 ```
 
 With `use_prebaked=True`, sklearn-meta automatically applies known reparameterizations for the model type (e.g., `learning_rate x n_estimators` for XGBoost).
@@ -177,33 +194,32 @@ frac2 = b / total
 
 ---
 
-## Using the Fluent API
+## Using ReparameterizationConfig
+
+Reparameterization is configured via `ReparameterizationConfig` inside `RunConfig`. This replaces the old `.with_reparameterization()` builder method.
 
 ### Prebaked Reparameterizations (recommended)
 
 The simplest approach -- let sklearn-meta apply known-good reparameterizations automatically:
 
 ```python
-(
-    GraphBuilder("pipeline")
-    .add_model("xgb", XGBClassifier)
-    .with_search_space(
-        learning_rate=(0.01, 0.3, "log"),
-        n_estimators=(50, 500),
-    )
-    .with_reparameterization(use_prebaked=True)
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .with_cv(n_splits=5)
-    .fit(ctx)
+from sklearn_meta import RunConfig
+from sklearn_meta.runtime.config import ReparameterizationConfig, TuningConfig, CVConfig
+
+config = RunConfig(
+    cv=CVConfig(n_splits=5),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+    reparameterization=ReparameterizationConfig(enabled=True, use_prebaked=True),
 )
 ```
 
 ### Custom Reparameterizations
 
-Pass your own reparameterization objects:
+Pass your own reparameterization objects via the `custom_reparameterizations` field:
 
 ```python
 from sklearn_meta.meta.reparameterization import LogProductReparameterization
+from sklearn_meta.runtime.config import ReparameterizationConfig
 
 reparam = LogProductReparameterization(
     name="learning_budget",
@@ -211,21 +227,14 @@ reparam = LogProductReparameterization(
     param2="n_estimators",
 )
 
-(
-    GraphBuilder("pipeline")
-    .add_model("xgb", XGBClassifier)
-    .with_search_space(
-        learning_rate=(0.01, 0.3, "log"),
-        n_estimators=(50, 500),
-        max_depth=(3, 10),
-    )
-    .with_reparameterization(
-        reparameterizations=[reparam],
+config = RunConfig(
+    cv=CVConfig(n_splits=5),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+    reparameterization=ReparameterizationConfig(
+        enabled=True,
         use_prebaked=False,
-    )
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .with_cv(n_splits=5)
-    .fit(ctx)
+        custom_reparameterizations=(reparam,),
+    ),
 )
 ```
 
@@ -234,9 +243,26 @@ reparam = LogProductReparameterization(
 You can provide custom reparameterizations while also enabling prebaked ones:
 
 ```python
-.with_reparameterization(
-    reparameterizations=[my_custom_reparam],
+reparameterization=ReparameterizationConfig(
+    enabled=True,
     use_prebaked=True,  # Also apply prebaked for known param pairs
+    custom_reparameterizations=(my_custom_reparam,),
+)
+```
+
+### Using RunConfigBuilder
+
+You can also use the fluent `RunConfigBuilder` to assemble `RunConfig`:
+
+```python
+from sklearn_meta.runtime.config import RunConfigBuilder
+
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .reparameterization(enabled=True, use_prebaked=True)
+    .build()
 )
 ```
 
@@ -285,7 +311,7 @@ reparam = LogProductReparameterization(
 # Forward transform (original -> transformed)
 original = {"learning_rate": 0.1, "n_estimators": 100}
 transformed = reparam.forward(original)
-# {'log_product': 2.302..., 'log_ratio': -4.605...}
+# {'learning_rate_n_estimators_budget': 2.302..., 'learning_rate_n_estimators_ratio': -4.605...}
 
 # Inverse transform (transformed -> original)
 recovered = reparam.inverse(transformed)
@@ -377,13 +403,18 @@ from sklearn.datasets import make_classification
 import pandas as pd
 import xgboost as xgb
 
-from sklearn_meta.api import GraphBuilder
-from sklearn_meta.core.data.context import DataContext
+from sklearn_meta import GraphBuilder, GraphRunner, DataView, RunConfig
+from sklearn_meta.runtime.config import (
+    ReparameterizationConfig,
+    CVConfig,
+    TuningConfig,
+    RunConfigBuilder,
+)
 from sklearn_meta.meta.reparameterization import LogProductReparameterization
 
 # Data
 X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
-ctx = DataContext.from_Xy(X=pd.DataFrame(X), y=pd.Series(y))
+data = DataView.from_Xy(X=pd.DataFrame(X), y=pd.Series(y))
 
 # Custom reparameterization
 reparam = LogProductReparameterization(
@@ -392,28 +423,40 @@ reparam = LogProductReparameterization(
     param2="n_estimators",
 )
 
-# Build and fit with reparameterization
-result = (
+# Build graph spec (structure only)
+graph = (
     GraphBuilder("reparam_demo")
     .add_model("xgb", xgb.XGBClassifier)
-    .with_search_space(
-        learning_rate=(0.01, 0.3, "log"),
-        n_estimators=(50, 500),
-        max_depth=(3, 10),
-        subsample=(0.6, 1.0),
-    )
-    .with_fixed_params(random_state=42, eval_metric="logloss")
-    .with_reparameterization(
-        reparameterizations=[reparam],
-        use_prebaked=False,
-    )
-    .with_tuning(n_trials=30, metric="roc_auc", greater_is_better=True)
-    .with_cv(n_splits=5, strategy="stratified")
-    .fit(ctx)
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .int_param("n_estimators", 50, 500)
+        .int_param("max_depth", 3, 10)
+        .param("subsample", 0.6, 1.0)
+        .fixed_params(random_state=42, eval_metric="logloss")
+    .compile()
 )
 
-fitted = result.get_node("xgb")
-print(f"Best params: {fitted.best_params}")
+# Configure the run
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy="stratified"),
+    tuning=TuningConfig(n_trials=30, metric="roc_auc", greater_is_better=True),
+    reparameterization=ReparameterizationConfig(
+        enabled=True,
+        use_prebaked=False,
+        custom_reparameterizations=(reparam,),
+    ),
+)
+
+# Execute
+run = GraphRunner.from_config(config).fit(graph, data, config)
+
+# Inspect results
+node_result = run.node_results["xgb"]
+print(f"Best params: {node_result.best_params}")
+print(f"Mean CV score: {node_result.mean_score:.4f}")
+
+# Build inference graph for prediction
+inference = run.compile_inference()
+predictions = inference.predict(pd.DataFrame(X))
 ```
 
 ---
@@ -425,7 +468,7 @@ print(f"Best params: {fitted.best_params}")
 Use prebaked configurations when available -- they encode domain knowledge about known parameter correlations:
 
 ```python
-.with_reparameterization(use_prebaked=True)
+reparameterization=ReparameterizationConfig(enabled=True, use_prebaked=True)
 ```
 
 ### 2. Use for Known Correlations
@@ -445,14 +488,20 @@ When using `LogProductReparameterization`, the underlying parameters should span
 
 ```python
 # Good: log scale makes sense
-.with_search_space(
-    learning_rate=(0.001, 0.3, "log"),
-    n_estimators=(10, 1000),
+(
+    GraphBuilder("pipeline")
+    .add_model("xgb", XGBClassifier)
+        .param("learning_rate", 0.001, 0.3, log=True)
+        .int_param("n_estimators", 10, 1000)
+    .compile()
 )
 
 # Less effective: linear scale with narrow range
-.with_search_space(
-    learning_rate=(0.1, 0.2),  # Only 2x range
+(
+    GraphBuilder("pipeline")
+    .add_model("xgb", XGBClassifier)
+        .param("learning_rate", 0.1, 0.2)  # Only 2x range
+    .compile()
 )
 ```
 
@@ -461,28 +510,32 @@ When using `LogProductReparameterization`, the underlying parameters should span
 Compare optimization with and without reparameterization:
 
 ```python
-# Without reparameterization
-result_plain = (
-    GraphBuilder("baseline")
+# Shared graph spec
+graph = (
+    GraphBuilder("compare")
     .add_model("xgb", XGBClassifier)
-    .with_search_space(...)
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .with_cv(n_splits=5)
-    .fit(ctx)
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .int_param("n_estimators", 50, 500)
+    .compile()
+)
+
+# Without reparameterization
+config_plain = RunConfig(
+    cv=CVConfig(n_splits=5),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
 )
 
 # With reparameterization
-result_reparam = (
-    GraphBuilder("with_reparam")
-    .add_model("xgb", XGBClassifier)
-    .with_search_space(...)
-    .with_reparameterization(use_prebaked=True)
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .with_cv(n_splits=5)
-    .fit(ctx)
+config_reparam = RunConfig(
+    cv=CVConfig(n_splits=5),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+    reparameterization=ReparameterizationConfig(enabled=True, use_prebaked=True),
 )
 
-# result_reparam should converge faster or find better params
+run_plain = GraphRunner.from_config(config_plain).fit(graph, data, config_plain)
+run_reparam = GraphRunner.from_config(config_reparam).fit(graph, data, config_reparam)
+
+# run_reparam should converge faster or find better params
 ```
 
 ---

@@ -6,7 +6,15 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 
-from sklearn_meta import GraphBuilder
+from sklearn_meta.data.view import DataView
+from sklearn_meta.runtime.config import CVConfig, CVStrategy, RunConfig, TuningConfig
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.engine.strategy import OptimizationStrategy
+from sklearn_meta.runtime.services import RuntimeServices
+from sklearn_meta.spec.builder import GraphBuilder
+from sklearn_meta.spec.graph import GraphSpec
+from sklearn_meta.spec.node import NodeSpec, OutputType
+from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
 from sklearn_meta.execution.local import LocalExecutor
 
 
@@ -26,67 +34,96 @@ def medium_classification_data():
     return X_df, y_series
 
 
+def _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=None):
+    """Helper to fit a graph using the new API."""
+    config = RunConfig(cv=cv_config, tuning=tuning_config, verbosity=0)
+    services = RuntimeServices(search_backend=mock_search_backend, executor=executor)
+    runner = GraphRunner(services)
+    return runner.fit(graph, ctx, config)
+
+
 @pytest.mark.integration
 class TestParallelCVFolds:
     """Integration tests for parallel CV fold fitting."""
 
-    def test_parallel_fold_fitting_produces_valid_results(self, medium_classification_data):
+    def test_parallel_fold_fitting_produces_valid_results(self, medium_classification_data, mock_search_backend):
         """Verify parallel fold fitting produces valid model and predictions."""
         X, y = medium_classification_data
+        ctx = DataView.from_Xy(X, y)
 
         executor = LocalExecutor(n_workers=2, backend="threading")
 
-        fitted = (
-            GraphBuilder("parallel_test")
-            .add_model("rf", RandomForestClassifier)
-            .with_fixed_params(n_estimators=10, random_state=42)
-            .with_cv(n_splits=5)
-            .with_tuning(n_trials=1, metric="accuracy", greater_is_better=True)
-            .fit(X, y, executor=executor)
+        node = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            fixed_params={"n_estimators": 10, "random_state": 42},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            metric="accuracy",
+            greater_is_better=True,
         )
 
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+
         # Should have 5 models (one per fold)
-        assert len(fitted.fitted_nodes["rf"].models) == 5
+        assert len(fitted.node_results["rf"].models) == 5
 
         # OOF predictions should cover all samples
-        oof = fitted.get_oof_predictions("rf")
+        oof = fitted.node_results["rf"].oof_predictions
         assert len(oof) == len(y)
 
         # Should be able to predict on new data
-        predictions = fitted.predict(X)
+        inference = fitted.compile_inference()
+        predictions = inference.predict(X)
         assert len(predictions) == len(y)
 
-    def test_sequential_and_parallel_produce_similar_results(self, medium_classification_data):
+    def test_sequential_and_parallel_produce_similar_results(self, medium_classification_data, mock_search_backend):
         """Verify sequential and parallel execution produce comparable results."""
         X, y = medium_classification_data
+        ctx = DataView.from_Xy(X, y)
+
+        cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            metric="accuracy",
+            greater_is_better=True,
+        )
+
+        node = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            fixed_params={"n_estimators": 10, "random_state": 42},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
 
         # Sequential execution
-        fitted_seq = (
-            GraphBuilder("seq_test")
-            .add_model("rf", RandomForestClassifier)
-            .with_fixed_params(n_estimators=10, random_state=42)
-            .with_cv(n_splits=5, random_state=42)
-            .with_tuning(n_trials=1, metric="accuracy", greater_is_better=True)
-            .fit(X, y)
-        )
+        fitted_seq = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend)
 
         # Parallel execution
         executor = LocalExecutor(n_workers=2, backend="threading")
-        fitted_par = (
-            GraphBuilder("par_test")
-            .add_model("rf", RandomForestClassifier)
-            .with_fixed_params(n_estimators=10, random_state=42)
-            .with_cv(n_splits=5, random_state=42)
-            .with_tuning(n_trials=1, metric="accuracy", greater_is_better=True)
-            .fit(X, y, executor=executor)
+
+        node2 = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            fixed_params={"n_estimators": 10, "random_state": 42},
         )
+        graph2 = GraphSpec()
+        graph2.add_node(node2)
+
+        fitted_par = _fit_graph(graph2, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
 
         # Both should have same number of models
-        assert len(fitted_seq.fitted_nodes["rf"].models) == len(fitted_par.fitted_nodes["rf"].models)
+        assert len(fitted_seq.node_results["rf"].models) == len(fitted_par.node_results["rf"].models)
 
         # OOF predictions should be same shape
-        oof_seq = fitted_seq.get_oof_predictions("rf")
-        oof_par = fitted_par.get_oof_predictions("rf")
+        oof_seq = fitted_seq.node_results["rf"].oof_predictions
+        oof_par = fitted_par.node_results["rf"].oof_predictions
         assert oof_seq.shape == oof_par.shape
 
 
@@ -94,100 +131,139 @@ class TestParallelCVFolds:
 class TestParallelNodeFitting:
     """Integration tests for parallel node fitting within layers."""
 
-    def test_parallel_fitting_of_multiple_models(self, medium_classification_data):
+    def test_parallel_fitting_of_multiple_models(self, medium_classification_data, mock_search_backend):
         """Verify multiple independent models can be fitted in parallel."""
         X, y = medium_classification_data
+        ctx = DataView.from_Xy(X, y)
 
         executor = LocalExecutor(n_workers=2, backend="threading")
 
-        fitted = (
-            GraphBuilder("multi_model_parallel")
-            .add_model("rf", RandomForestClassifier)
-            .with_fixed_params(n_estimators=10, random_state=42)
-            .add_model("lr", LogisticRegression)
-            .with_fixed_params(max_iter=1000, random_state=42)
-            .with_cv(n_splits=3)
-            .with_tuning(n_trials=1, metric="accuracy", greater_is_better=True)
-            .fit(X, y, executor=executor)
+        rf_node = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            fixed_params={"n_estimators": 10, "random_state": 42},
         )
+        lr_node = NodeSpec(
+            name="lr",
+            estimator_class=LogisticRegression,
+            fixed_params={"max_iter": 1000, "random_state": 42},
+        )
+
+        graph = GraphSpec()
+        graph.add_node(rf_node)
+        graph.add_node(lr_node)
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            metric="accuracy",
+            greater_is_better=True,
+        )
+
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
 
         # Both models should be fitted
-        assert "rf" in fitted.fitted_nodes
-        assert "lr" in fitted.fitted_nodes
+        assert "rf" in fitted.node_results
+        assert "lr" in fitted.node_results
 
         # Both should have valid predictions
-        assert len(fitted.fitted_nodes["rf"].oof_predictions) == len(y)
-        assert len(fitted.fitted_nodes["lr"].oof_predictions) == len(y)
+        assert len(fitted.node_results["rf"].oof_predictions) == len(y)
+        assert len(fitted.node_results["lr"].oof_predictions) == len(y)
 
-    def test_stacking_with_parallel_execution(self, medium_classification_data):
+    def test_stacking_with_parallel_execution(self, medium_classification_data, mock_search_backend):
         """Verify stacking ensemble works correctly with parallel execution."""
         X, y = medium_classification_data
+        ctx = DataView.from_Xy(X, y)
 
         executor = LocalExecutor(n_workers=2, backend="threading")
 
-        fitted = (
-            GraphBuilder("stacking_parallel")
-            .add_model("rf", RandomForestClassifier)
-            .with_fixed_params(n_estimators=10, random_state=42)
-            .with_output_type("proba")
-            .add_model("lr", LogisticRegression)
-            .with_fixed_params(max_iter=1000, random_state=42)
-            .with_output_type("proba")
-            .add_model("meta", LogisticRegression)
-            .with_fixed_params(max_iter=1000, random_state=42)
-            .stacks_proba("rf", "lr")
-            .with_cv(n_splits=3)
-            .with_tuning(n_trials=1, metric="accuracy", greater_is_better=True)
-            .fit(X, y, executor=executor)
+        rf_node = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            output_type=OutputType.PROBA,
+            fixed_params={"n_estimators": 10, "random_state": 42},
+        )
+        lr_node = NodeSpec(
+            name="lr",
+            estimator_class=LogisticRegression,
+            output_type=OutputType.PROBA,
+            fixed_params={"max_iter": 1000, "random_state": 42},
+        )
+        meta_node = NodeSpec(
+            name="meta",
+            estimator_class=LogisticRegression,
+            fixed_params={"max_iter": 1000, "random_state": 42},
         )
 
+        graph = GraphSpec()
+        graph.add_node(rf_node)
+        graph.add_node(lr_node)
+        graph.add_node(meta_node)
+        graph.add_edge(DependencyEdge(source="rf", target="meta", dep_type=DependencyType.PROBA))
+        graph.add_edge(DependencyEdge(source="lr", target="meta", dep_type=DependencyType.PROBA))
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.LAYER_BY_LAYER,
+            metric="accuracy",
+            greater_is_better=True,
+        )
+
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+
         # All models should be fitted
-        assert "rf" in fitted.fitted_nodes
-        assert "lr" in fitted.fitted_nodes
-        assert "meta" in fitted.fitted_nodes
+        assert "rf" in fitted.node_results
+        assert "lr" in fitted.node_results
+        assert "meta" in fitted.node_results
 
         # All models should have valid OOF predictions
-        assert len(fitted.fitted_nodes["rf"].oof_predictions) == len(y)
-        assert len(fitted.fitted_nodes["lr"].oof_predictions) == len(y)
-        assert len(fitted.fitted_nodes["meta"].oof_predictions) == len(y)
+        assert len(fitted.node_results["rf"].oof_predictions) == len(y)
+        assert len(fitted.node_results["lr"].oof_predictions) == len(y)
+        assert len(fitted.node_results["meta"].oof_predictions) == len(y)
 
         # Meta model should have been trained on OOF predictions from base models
-        assert fitted.fitted_nodes["meta"].models is not None
-        assert len(fitted.fitted_nodes["meta"].models) == 3  # 3 folds
+        assert fitted.node_results["meta"].models is not None
+        assert len(fitted.node_results["meta"].models) == 3  # 3 folds
 
 
 @pytest.mark.integration
 class TestOptunaParallelTrials:
     """Integration tests for parallel Optuna trials."""
 
-    def test_parallel_trials_parameter(self, medium_classification_data):
+    def test_parallel_trials_parameter(self, medium_classification_data, mock_search_backend):
         """Verify n_parallel_trials parameter is properly wired."""
         X, y = medium_classification_data
+        ctx = DataView.from_Xy(X, y)
 
         from sklearn_meta.search.space import SearchSpace
 
         space = SearchSpace()
         space.add_int("n_estimators", 10, 50)
 
-        fitted = (
-            GraphBuilder("parallel_trials_test")
-            .add_model("rf", RandomForestClassifier)
-            .with_search_space(space)
-            .with_fixed_params(random_state=42)
-            .with_cv(n_splits=3)
-            .with_tuning(
-                n_trials=5,
-                metric="accuracy",
-                greater_is_better=True,
-                n_parallel_trials=2,
-            )
-            .fit(X, y)
+        node = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            search_space=space,
+            fixed_params={"random_state": 42},
         )
 
-        # Should complete successfully with parallel trials
-        assert "rf" in fitted.fitted_nodes
-        assert fitted.fitted_nodes["rf"].optimization_result is not None
-        assert fitted.fitted_nodes["rf"].optimization_result.n_trials == 5
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.LAYER_BY_LAYER,
+            n_trials=5,
+            metric="accuracy",
+            greater_is_better=True,
+        )
+
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend)
+
+        # Should complete successfully
+        assert "rf" in fitted.node_results
+        assert fitted.node_results["rf"].optimization_result is not None
+        assert fitted.node_results["rf"].optimization_result.n_trials == 5
 
     def test_optuna_backend_n_jobs_parameter(self):
         """Verify OptunaBackend accepts n_jobs parameter."""
@@ -204,46 +280,63 @@ class TestOptunaParallelTrials:
 class TestLocalExecutorConfigurations:
     """Integration tests for different LocalExecutor configurations."""
 
-    def test_threading_backend(self, medium_classification_data):
+    def test_threading_backend(self, medium_classification_data, mock_search_backend):
         """Verify threading backend works correctly."""
         X, y = medium_classification_data
+        ctx = DataView.from_Xy(X, y)
 
         executor = LocalExecutor(n_workers=2, backend="threading")
 
-        fitted = (
-            GraphBuilder("threading_test")
-            .add_model("rf", RandomForestClassifier)
-            .with_fixed_params(n_estimators=10, random_state=42)
-            .with_cv(n_splits=3)
-            .with_tuning(n_trials=1, metric="accuracy", greater_is_better=True)
-            .fit(X, y, executor=executor)
+        node = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            fixed_params={"n_estimators": 10, "random_state": 42},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            metric="accuracy",
+            greater_is_better=True,
         )
 
-        assert len(fitted.fitted_nodes["rf"].models) == 3
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+        assert len(fitted.node_results["rf"].models) == 3
 
     @pytest.mark.slow
-    def test_loky_backend(self, medium_classification_data):
+    def test_loky_backend(self, medium_classification_data, mock_search_backend):
         """Verify loky (process-based) backend works correctly."""
         X, y = medium_classification_data
+        ctx = DataView.from_Xy(X, y)
 
         executor = LocalExecutor(n_workers=2, backend="loky")
 
-        fitted = (
-            GraphBuilder("loky_test")
-            .add_model("rf", RandomForestClassifier)
-            .with_fixed_params(n_estimators=10, random_state=42)
-            .with_cv(n_splits=3)
-            .with_tuning(n_trials=1, metric="accuracy", greater_is_better=True)
-            .fit(X, y, executor=executor)
+        node = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            fixed_params={"n_estimators": 10, "random_state": 42},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            metric="accuracy",
+            greater_is_better=True,
         )
 
-        assert len(fitted.fitted_nodes["rf"].models) == 3
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+        assert len(fitted.node_results["rf"].models) == 3
 
-    def test_executor_auto_cpu_count(self, medium_classification_data):
+    def test_executor_auto_cpu_count(self, medium_classification_data, mock_search_backend):
         """Verify executor with n_workers=-1 uses all CPUs."""
         import os
 
         X, y = medium_classification_data
+        ctx = DataView.from_Xy(X, y)
 
         executor = LocalExecutor(n_workers=-1, backend="threading")
 
@@ -252,13 +345,20 @@ class TestLocalExecutorConfigurations:
         assert executor.n_workers == expected_workers
 
         # Should still work correctly
-        fitted = (
-            GraphBuilder("auto_cpu_test")
-            .add_model("rf", RandomForestClassifier)
-            .with_fixed_params(n_estimators=10, random_state=42)
-            .with_cv(n_splits=3)
-            .with_tuning(n_trials=1, metric="accuracy", greater_is_better=True)
-            .fit(X, y, executor=executor)
+        node = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            fixed_params={"n_estimators": 10, "random_state": 42},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            metric="accuracy",
+            greater_is_better=True,
         )
 
-        assert len(fitted.fitted_nodes["rf"].models) == 3
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+        assert len(fitted.node_results["rf"].models) == 3

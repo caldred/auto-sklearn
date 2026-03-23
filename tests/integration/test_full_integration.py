@@ -13,18 +13,23 @@ from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 
-from sklearn_meta.api import GraphBuilder
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.model.node import ModelNode
-from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.spec.builder import GraphBuilder
+from sklearn_meta.data.view import DataView
+from sklearn_meta.runtime.config import (
+    CVConfig, CVStrategy, FeatureSelectionConfig, ReparameterizationConfig,
+    RunConfig, TuningConfig,
+)
+from sklearn_meta.engine.cv import CVEngine
+from sklearn_meta.spec.graph import GraphSpec
+from sklearn_meta.spec.node import NodeSpec, OutputType
+from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.engine.strategy import OptimizationStrategy
+from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.search.space import SearchSpace
 from sklearn_meta.meta.reparameterization import ReparameterizedSpace, LogProductReparameterization
 from sklearn_meta.meta.prebaked import get_prebaked_reparameterization
-from sklearn_meta.selection.selector import FeatureSelector, FeatureSelectionConfig
+from sklearn_meta.selection.selector import FeatureSelector
 from sklearn_meta.persistence.cache import FitCache
 
 
@@ -61,6 +66,21 @@ def classification_data_with_noise():
         X_df[f"noise_{i}"] = np.random.randn(200)
 
     return X_df, pd.Series(y)
+
+
+def _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend,
+               feature_selection=None, reparameterization=None, fit_cache=None, verbosity=0):
+    """Helper to fit a graph using the new API."""
+    config = RunConfig(
+        cv=cv_config,
+        tuning=tuning_config,
+        feature_selection=feature_selection,
+        reparameterization=reparameterization,
+        verbosity=verbosity,
+    )
+    services = RuntimeServices(search_backend=mock_search_backend, fit_cache=fit_cache)
+    runner = GraphRunner(services)
+    return runner.fit(graph, ctx, config)
 
 
 class TestReparameterizationIntegration:
@@ -127,24 +147,43 @@ class TestReparameterizationIntegration:
         # Should get the rf_complexity reparameterization
         assert len(reparams) > 0
 
-    def test_reparameterization_via_graphbuilder(self, classification_data, mock_search_backend):
-        """Verify reparameterization works through GraphBuilder API."""
+    def test_reparameterization_via_run_config(self, classification_data, mock_search_backend):
+        """Verify reparameterization works through RunConfig."""
         X, y = classification_data
+        ctx = DataView.from_Xy(X, y)
 
-        fitted = (
-            GraphBuilder("test")
-            .add_model("rf", RandomForestClassifier)
-            .with_search_space(max_depth=(3, 10), min_samples_split=(2, 20))
-            .with_fixed_params(random_state=42, n_estimators=10)
-            .with_cv(n_splits=3, random_state=42)
-            .with_tuning(n_trials=3, metric="accuracy", greater_is_better=True)
-            .with_reparameterization(use_prebaked=True)
-            .fit(X, y, search_backend=mock_search_backend)
+        space = SearchSpace()
+        space.add_int("max_depth", 3, 10)
+        space.add_int("min_samples_split", 2, 20)
+
+        node = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            search_space=space,
+            fixed_params={"random_state": 42, "n_estimators": 10},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.LAYER_BY_LAYER,
+            n_trials=3,
+            metric="accuracy",
+            greater_is_better=True,
+        )
+        reparam_config = ReparameterizationConfig(enabled=True, use_prebaked=True)
+
+        fitted = _fit_graph(
+            graph, ctx, cv_config, tuning_config, mock_search_backend,
+            reparameterization=reparam_config,
         )
 
         # Should have fitted successfully
-        assert "rf" in fitted.fitted_nodes
-        assert fitted.tuning_config.use_reparameterization is True
+        assert "rf" in fitted.node_results
+        # Verify reparameterization was configured
+        assert fitted.config.reparameterization is not None
+        assert fitted.config.reparameterization.use_prebaked is True
 
 
 class TestFeatureSelectionIntegration:
@@ -178,24 +217,43 @@ class TestFeatureSelectionIntegration:
         # More real features should be selected than noise features
         assert len(real_features) >= len(noise_features)
 
-    def test_feature_selection_via_graphbuilder(self, classification_data_with_noise, mock_search_backend):
-        """Verify feature selection works through GraphBuilder API."""
+    def test_feature_selection_via_run_config(self, classification_data_with_noise, mock_search_backend):
+        """Verify feature selection works through RunConfig."""
         X, y = classification_data_with_noise
+        ctx = DataView.from_Xy(X, y)
 
-        fitted = (
-            GraphBuilder("test")
-            .add_model("rf", RandomForestClassifier)
-            .with_fixed_params(random_state=42, n_estimators=20)
-            .with_cv(n_splits=3, random_state=42)
-            .with_tuning(n_trials=2, metric="accuracy", greater_is_better=True)
-            .with_feature_selection(method="shadow", n_shadows=3, min_features=3)
-            .fit(X, y, search_backend=mock_search_backend)
+        node = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            fixed_params={"random_state": 42, "n_estimators": 20},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.NONE,
+            n_trials=2,
+            metric="accuracy",
+            greater_is_better=True,
+        )
+        fs_config = FeatureSelectionConfig(
+            enabled=True,
+            method="shadow",
+            n_shadows=3,
+            min_features=3,
+        )
+
+        fitted = _fit_graph(
+            graph, ctx, cv_config, tuning_config, mock_search_backend,
+            feature_selection=fs_config,
         )
 
         # Should have fitted successfully
-        assert "rf" in fitted.fitted_nodes
-        assert fitted.tuning_config.feature_selection is not None
-        assert fitted.tuning_config.feature_selection.enabled is True
+        assert "rf" in fitted.node_results
+        # Verify feature selection was configured
+        assert fitted.config.feature_selection is not None
+        assert fitted.config.feature_selection.enabled is True
 
 
 class TestFitCacheIntegration:
@@ -204,11 +262,11 @@ class TestFitCacheIntegration:
     def test_fit_cache_caches_models(self, classification_data, tmp_path):
         """Verify FitCache actually caches fitted models."""
         X, y = classification_data
-        ctx = DataContext.from_Xy(X, y)
+        ctx = DataView.from_Xy(X, y)
 
         cache = FitCache(cache_dir=str(tmp_path / "cache"))
 
-        node = ModelNode(
+        node = NodeSpec(
             name="rf",
             estimator_class=RandomForestClassifier,
             fixed_params={"n_estimators": 10, "random_state": 42},
@@ -221,8 +279,9 @@ class TestFitCacheIntegration:
         assert cache.get(cache_key) is None
 
         # Fit and store in cache
+        data = ctx.materialize()
         model = node.create_estimator(params)
-        model.fit(ctx.X, ctx.y)
+        model.fit(data.X, data.y)
         cache.put(cache_key, model)
 
         # Second cache lookup should hit
@@ -230,17 +289,17 @@ class TestFitCacheIntegration:
         assert cached_model is not None
 
         # Cached model should work
-        predictions = cached_model.predict(ctx.X)
-        assert len(predictions) == len(ctx.X)
+        predictions = cached_model.predict(data.X)
+        assert len(predictions) == len(data.X)
 
     def test_fit_cache_stats(self, classification_data, tmp_path):
         """Verify FitCache statistics work."""
         X, y = classification_data
-        ctx = DataContext.from_Xy(X, y)
+        ctx = DataView.from_Xy(X, y)
 
         cache = FitCache(cache_dir=str(tmp_path / "cache"))
 
-        node = ModelNode(
+        node = NodeSpec(
             name="rf",
             estimator_class=RandomForestClassifier,
             fixed_params={"n_estimators": 10, "random_state": 42},
@@ -249,8 +308,9 @@ class TestFitCacheIntegration:
         params = {"n_estimators": 10, "random_state": 42}
         cache_key = cache.cache_key(node, params, ctx)
 
+        data = ctx.materialize()
         model = node.create_estimator(params)
-        model.fit(ctx.X, ctx.y)
+        model.fit(data.X, data.y)
         cache.put(cache_key, model)
 
         stats = cache.stats()
@@ -258,53 +318,40 @@ class TestFitCacheIntegration:
         assert stats["memory_entries"] == 1
 
     def test_orchestrator_with_cache(self, classification_data, mock_search_backend, tmp_path):
-        """Verify TuningOrchestrator uses cache correctly."""
+        """Verify GraphRunner uses cache correctly."""
         X, y = classification_data
-        ctx = DataContext.from_Xy(X, y)
+        ctx = DataView.from_Xy(X, y)
 
         cache = FitCache(cache_dir=str(tmp_path / "cache"))
 
-        node = ModelNode(
+        node = NodeSpec(
             name="rf",
             estimator_class=RandomForestClassifier,
             fixed_params={"n_estimators": 10, "random_state": 42},
         )
 
-        graph = ModelGraph()
+        graph = GraphSpec()
         graph.add_node(node)
 
         cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
         tuning_config = TuningConfig(
             strategy=OptimizationStrategy.NONE,
-            cv_config=cv_config,
             metric="accuracy",
             greater_is_better=True,
-            verbose=0,
         )
 
-        data_manager = DataManager(cv_config)
-        orchestrator = TuningOrchestrator(
-            graph=graph,
-            data_manager=data_manager,
-            search_backend=mock_search_backend,
-            tuning_config=tuning_config,
-            fit_cache=cache,
-        )
+        config = RunConfig(cv=cv_config, tuning=tuning_config, verbosity=0)
+        services = RuntimeServices(search_backend=mock_search_backend, fit_cache=cache)
+        runner = GraphRunner(services)
 
         # First fit
-        fitted1 = orchestrator.fit(ctx)
-        assert "rf" in fitted1.fitted_nodes
+        fitted1 = runner.fit(graph, ctx, config)
+        assert "rf" in fitted1.node_results
 
         # Second fit should use cache (faster)
-        orchestrator2 = TuningOrchestrator(
-            graph=graph,
-            data_manager=data_manager,
-            search_backend=mock_search_backend,
-            tuning_config=tuning_config,
-            fit_cache=cache,
-        )
-        fitted2 = orchestrator2.fit(ctx)
-        assert "rf" in fitted2.fitted_nodes
+        runner2 = GraphRunner(services)
+        fitted2 = runner2.fit(graph, ctx, config)
+        assert "rf" in fitted2.node_results
 
 
 class TestFullIntegration:
@@ -313,61 +360,95 @@ class TestFullIntegration:
     def test_all_features_together(self, classification_data_with_noise, mock_search_backend, tmp_path):
         """Verify reparameterization, feature selection, and cache work together."""
         X, y = classification_data_with_noise
+        ctx = DataView.from_Xy(X, y)
 
         cache = FitCache(cache_dir=str(tmp_path / "cache"))
 
-        fitted = (
-            GraphBuilder("full_test")
-            .add_model("rf", RandomForestClassifier)
-            .with_search_space(max_depth=(3, 10), min_samples_split=(2, 20))
-            .with_fixed_params(random_state=42, n_estimators=20)
-            .with_cv(n_splits=3, random_state=42)
-            .with_tuning(n_trials=2, metric="accuracy", greater_is_better=True)
-            .with_reparameterization(use_prebaked=True)
-            .with_feature_selection(method="shadow", n_shadows=3, min_features=3)
-            .fit(X, y, search_backend=mock_search_backend)
+        space = SearchSpace()
+        space.add_int("max_depth", 3, 10)
+        space.add_int("min_samples_split", 2, 20)
+
+        node = NodeSpec(
+            name="rf",
+            estimator_class=RandomForestClassifier,
+            search_space=space,
+            fixed_params={"random_state": 42, "n_estimators": 20},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.LAYER_BY_LAYER,
+            n_trials=2,
+            metric="accuracy",
+            greater_is_better=True,
+        )
+        reparam_config = ReparameterizationConfig(enabled=True, use_prebaked=True)
+        fs_config = FeatureSelectionConfig(
+            enabled=True,
+            method="shadow",
+            n_shadows=3,
+            min_features=3,
         )
 
+        config = RunConfig(
+            cv=cv_config,
+            tuning=tuning_config,
+            reparameterization=reparam_config,
+            feature_selection=fs_config,
+            verbosity=0,
+        )
+        services = RuntimeServices(search_backend=mock_search_backend, fit_cache=cache)
+        runner = GraphRunner(services)
+        fitted = runner.fit(graph, ctx, config)
+
         # All features should be configured
-        assert fitted.tuning_config.use_reparameterization is True
-        assert fitted.tuning_config.feature_selection is not None
-        assert fitted.tuning_config.feature_selection.enabled is True
+        assert fitted.config.reparameterization is not None
+        assert fitted.config.reparameterization.use_prebaked is True
+        assert fitted.config.feature_selection is not None
+        assert fitted.config.feature_selection.enabled is True
 
         # Model should be fitted
-        assert "rf" in fitted.fitted_nodes
-        assert fitted.fitted_nodes["rf"].best_params is not None
+        assert "rf" in fitted.node_results
+        assert fitted.node_results["rf"].best_params is not None
 
-        # Feature selection should have selected features
-        selected_features = fitted.fitted_nodes["rf"].selected_features
-        if selected_features:
-            # Predictions should work with selected features
-            predictions = fitted.predict(X[selected_features])
-            assert len(predictions) == len(X)
-        else:
-            # If no feature selection was applied, use all features
-            predictions = fitted.predict(X)
-            assert len(predictions) == len(X)
+        # Predictions should work
+        inference = fitted.compile_inference()
+        predictions = inference.predict(X)
+        assert len(predictions) == len(X)
 
     def test_graphbuilder_fluent_api_complete(self, classification_data, mock_search_backend):
         """Verify the complete fluent API works end-to-end."""
         X, y = classification_data
+        ctx = DataView.from_Xy(X, y)
 
-        fitted = (
+        graph = (
             GraphBuilder("pipeline")
             .add_model("rf", RandomForestClassifier)
-            .with_search_space(n_estimators=(10, 50), max_depth=(2, 10))
-            .with_fixed_params(random_state=42)
-            .with_description("Base RF model")
+                .int_param("n_estimators", 10, 50)
+                .int_param("max_depth", 2, 10)
+                .fixed_params(random_state=42)
+                .description("Base RF model")
             .add_model("lr", LogisticRegression)
-            .with_fixed_params(random_state=42, max_iter=1000)
-            .stacks("rf")
-            .with_cv(n_splits=3, strategy="stratified", random_state=42)
-            .with_tuning(n_trials=3, metric="accuracy", greater_is_better=True)
-            .fit(X, y, search_backend=mock_search_backend)
+                .fixed_params(random_state=42, max_iter=1000)
+                .stacks("rf")
+            .compile()
         )
 
-        assert "rf" in fitted.fitted_nodes
-        assert "lr" in fitted.fitted_nodes
+        cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+        tuning_config = TuningConfig(
+            strategy=OptimizationStrategy.LAYER_BY_LAYER,
+            n_trials=3,
+            metric="accuracy",
+            greater_is_better=True,
+        )
 
-        predictions = fitted.predict(X)
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend)
+
+        assert "rf" in fitted.node_results
+        assert "lr" in fitted.node_results
+
+        inference = fitted.compile_inference()
+        predictions = inference.predict(X)
         assert len(predictions) == len(X)

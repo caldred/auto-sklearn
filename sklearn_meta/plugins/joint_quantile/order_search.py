@@ -8,16 +8,21 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from sklearn_meta.core.tuning._metrics import pinball_loss
+from sklearn_meta.engine._metrics import pinball_loss
 from sklearn_meta.plugins.base import ModelPlugin
 
 if TYPE_CHECKING:
-    from sklearn_meta.core.data.context import DataContext
-    from sklearn_meta.core.model.joint_quantile_graph import JointQuantileGraph
-    from sklearn_meta.core.tuning.joint_quantile_orchestrator import (
-        JointQuantileOrchestrator,
-        JointQuantileFitResult,
-    )
+    from sklearn_meta.data.view import DataView
+    from sklearn_meta.spec.quantile import JointQuantileGraphSpec as JointQuantileGraph
+    from sklearn_meta.artifacts.training import TrainingRun as JointQuantileFitResult
+
+    # OrderSearchPlugin.search_order accepts an orchestrator-like object
+    # that has a .fit(data, targets) method. This is kept as a loose protocol
+    # rather than importing a concrete class.
+    from typing import Protocol
+
+    class _Orchestrator(Protocol):
+        def fit(self, data: DataView, targets: dict) -> JointQuantileFitResult: ...
 
 
 @dataclass
@@ -85,7 +90,7 @@ class OrderSearchPlugin(ModelPlugin):
 
         result = search_plugin.search_order(
             graph=joint_quantile_graph,
-            ctx=data_context,
+            data=data_view,
             targets={"price": y_price, "volume": y_volume},
             orchestrator=orchestrator,
         )
@@ -115,9 +120,9 @@ class OrderSearchPlugin(ModelPlugin):
     def search_order(
         self,
         graph: JointQuantileGraph,
-        ctx: DataContext,
+        data: DataView,
         targets: Dict[str, pd.Series],
-        orchestrator: JointQuantileOrchestrator,
+        orchestrator: _Orchestrator,
         random_state: Optional[int] = None,
     ) -> OrderSearchResult:
         """
@@ -125,7 +130,7 @@ class OrderSearchPlugin(ModelPlugin):
 
         Args:
             graph: JointQuantileGraph to optimize.
-            ctx: Data context with input features.
+            data: Data view with input features.
             targets: Target values for each property.
             orchestrator: Orchestrator for fitting.
             random_state: Random seed for reproducibility.
@@ -137,7 +142,7 @@ class OrderSearchPlugin(ModelPlugin):
             self._rng = np.random.RandomState(random_state)
 
         # Run initial search from current order
-        best_result = self._local_search(graph, ctx, targets, orchestrator)
+        best_result = self._local_search(graph, data, targets, orchestrator)
 
         # Random restarts
         for restart_idx in range(self.config.n_random_restarts):
@@ -148,7 +153,7 @@ class OrderSearchPlugin(ModelPlugin):
             random_order = self._generate_random_order(graph)
             graph.set_order(random_order)
 
-            restart_result = self._local_search(graph, ctx, targets, orchestrator)
+            restart_result = self._local_search(graph, data, targets, orchestrator)
 
             # Keep best result
             if restart_result.best_score < best_result.best_score:
@@ -164,16 +169,16 @@ class OrderSearchPlugin(ModelPlugin):
     def _local_search(
         self,
         graph: JointQuantileGraph,
-        ctx: DataContext,
+        data: DataView,
         targets: Dict[str, pd.Series],
-        orchestrator: JointQuantileOrchestrator,
+        orchestrator: _Orchestrator,
     ) -> OrderSearchResult:
         """
         Run local search from current ordering.
 
         Args:
             graph: Graph with initial ordering.
-            ctx: Data context.
+            data: Data view.
             targets: Target values.
             orchestrator: Orchestrator for fitting.
 
@@ -184,7 +189,7 @@ class OrderSearchPlugin(ModelPlugin):
         search_history = []
 
         # Evaluate initial order
-        fit_result = orchestrator.fit(ctx, targets)
+        fit_result = orchestrator.fit(data, targets)
         current_score = self._score_fit_result(fit_result, targets)
         search_history.append((list(current_order), current_score))
 
@@ -219,7 +224,7 @@ class OrderSearchPlugin(ModelPlugin):
 
                 # Fit with swapped order
                 graph.set_order(swapped_order)
-                swap_fit = orchestrator.fit(ctx, targets)
+                swap_fit = orchestrator.fit(data, targets)
                 swap_score = self._score_fit_result(swap_fit, targets)
 
                 swap_results.append((swap, swapped_order, swap_score, swap_fit))
@@ -296,11 +301,25 @@ class OrderSearchPlugin(ModelPlugin):
         total_loss = 0.0
         n_scores = 0
 
-        for prop_name, fitted_node in fit_result.fitted_nodes.items():
-            y_true = targets[prop_name].values
-            oof_preds = fitted_node.oof_quantile_predictions
+        for node_name, node_result in fit_result.node_results.items():
+            from sklearn_meta.artifacts.training import QuantileNodeRunResult
 
-            for q_idx, tau in enumerate(fitted_node.quantile_levels):
+            if not isinstance(node_result, QuantileNodeRunResult):
+                continue
+
+            # Get the property name from the graph's node spec
+            node_spec = fit_result.graph.get_node(node_name)
+            prop_name = getattr(node_spec, "property_name", None)
+            if prop_name is None or prop_name not in targets:
+                continue
+
+            y_true = targets[prop_name].values
+            oof_preds = node_result.oof_quantile_predictions
+            if oof_preds is None:
+                continue
+
+            quantile_levels = getattr(node_spec, "quantile_levels", [])
+            for q_idx, tau in enumerate(quantile_levels):
                 y_pred = oof_preds[:, q_idx]
                 loss = self._pinball_loss(y_true, y_pred, tau)
                 total_loss += loss

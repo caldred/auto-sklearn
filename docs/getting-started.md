@@ -41,7 +41,7 @@ Let's build a simple hyperparameter-tuned classifier.
 
 ### Using the Fluent API (Recommended)
 
-The `GraphBuilder` fluent API is the easiest way to use sklearn-meta. You only need three steps: add models, configure tuning, and fit.
+The fluent API splits the workflow into three phases: **define** the model graph, **configure** the training run, and **fit**. This separation keeps your model topology independent of runtime settings like CV and tuning.
 
 #### Step 1: Prepare Your Data
 
@@ -62,42 +62,69 @@ X, y = make_classification(
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42
 )
+
+# Convert to DataFrames (required by DataView)
+X_train = pd.DataFrame(X_train)
+X_test = pd.DataFrame(X_test)
 ```
 
-#### Step 2: Build and Configure the Pipeline
+#### Step 2: Build the Model Graph
+
+Use `GraphBuilder` to define models and their search spaces, then call `.compile()` to produce an immutable `GraphSpec`.
 
 ```python
 from sklearn.ensemble import RandomForestClassifier
-from sklearn_meta.api import GraphBuilder
+from sklearn_meta import GraphBuilder
 
-builder = (
+graph = (
     GraphBuilder("my_classifier")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(
-        n_estimators=(50, 300),
-        max_depth=(3, 15),
-        min_samples_split=(0.01, 0.2),
-    )
-    .with_fixed_params(random_state=42, n_jobs=-1)
-    .with_cv(n_splits=5, strategy="stratified", random_state=42)
-    .with_tuning(
-        n_trials=50,
-        metric="roc_auc",
-        greater_is_better=True,
-    )
+    .int_param("n_estimators", 50, 300)
+    .int_param("max_depth", 3, 15)
+    .param("min_samples_split", 0.01, 0.2)
+    .fixed_params(random_state=42, n_jobs=-1)
+    .compile()
 )
 ```
 
-#### Step 3: Fit and Predict
+#### Step 3: Configure the Training Run
+
+Runtime concerns -- cross-validation, tuning, and verbosity -- live in a `RunConfig`, separate from the graph definition.
+
+```python
+from sklearn_meta import RunConfig, CVConfig, CVStrategy, TuningConfig
+
+config = RunConfig(
+    cv=CVConfig(
+        n_splits=5,
+        strategy=CVStrategy.STRATIFIED,
+        random_state=42,
+    ),
+    tuning=TuningConfig(
+        n_trials=50,
+        metric="roc_auc",
+        greater_is_better=True,
+    ),
+)
+```
+
+#### Step 4: Fit, Predict, and Evaluate
+
+Pass the graph, data, and config to `GraphRunner` to produce a `TrainingRun`. Then compile a lightweight `InferenceGraph` for predictions.
 
 ```python
 from sklearn.metrics import accuracy_score
+from sklearn_meta import GraphRunner, RuntimeServices, DataView
 
-# Fit the pipeline (builds graph, runs tuning, trains fold models)
-fitted = builder.fit(X_train, y_train)
+# Wrap training data in a DataView
+data = DataView.from_Xy(X_train, y_train)
 
-# Predict on test data
-predictions = fitted.predict(X_test)
+# Fit the pipeline (runs tuning + CV training)
+run = GraphRunner(RuntimeServices.default()).fit(graph, data, config)
+
+# Compile an inference graph and predict on test data
+inference = run.compile_inference()
+predictions = inference.predict(X_test)
 
 # Evaluate
 print(f"Accuracy: {accuracy_score(y_test, predictions):.4f}")
@@ -114,153 +141,118 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 
-from sklearn_meta.api import GraphBuilder
+from sklearn_meta import (
+    GraphBuilder,
+    RunConfig, CVConfig, CVStrategy, TuningConfig,
+    GraphRunner, RuntimeServices, DataView,
+)
 
 # Data
 X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+X_train, X_test = pd.DataFrame(X_train), pd.DataFrame(X_test)
 
-# Build, tune, and fit
-fitted = (
+# 1. Define model graph
+graph = (
     GraphBuilder("my_classifier")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(
-        n_estimators=(50, 300),
-        max_depth=(3, 15),
-    )
-    .with_fixed_params(random_state=42, n_jobs=-1)
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+    .int_param("n_estimators", 50, 300)
+    .int_param("max_depth", 3, 15)
+    .fixed_params(random_state=42, n_jobs=-1)
+    .compile()
 )
 
-# Evaluate
-predictions = fitted.predict(X_test)
+# 2. Configure runtime
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+)
+
+# 3. Fit and predict
+run = GraphRunner(RuntimeServices.default()).fit(graph, DataView.from_Xy(X_train, y_train), config)
+inference = run.compile_inference()
+predictions = inference.predict(X_test)
 print(f"Accuracy: {accuracy_score(y_test, predictions):.4f}")
 ```
 
 ---
 
-### Using the Low-Level API
+### Inspecting Results
 
-For more control over individual components, you can use the core classes directly.
-
-#### Step 1: Prepare Your Data
+A `TrainingRun` stores per-node results, including best hyperparameters and out-of-fold predictions.
 
 ```python
-import pandas as pd
-from sklearn.datasets import make_classification
-from sklearn.model_selection import train_test_split
+# Best hyperparameters found for the "rf" node
+print(run.node_results["rf"].best_params)
 
-# Generate sample data
-X, y = make_classification(
-    n_samples=1000,
-    n_features=20,
-    n_informative=10,
-    random_state=42
-)
+# Out-of-fold predictions (useful for stacking diagnostics)
+oof = run.node_results["rf"].oof_predictions
 
-# Split into train/test
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
-)
-
-# Convert to DataFrames (recommended for the low-level API)
-X_train = pd.DataFrame(X_train)
-X_test = pd.DataFrame(X_test)
-y_train = pd.Series(y_train)
-y_test = pd.Series(y_test)
+# Mean CV score
+print(f"Mean CV score: {run.node_results['rf'].mean_score:.4f}")
 ```
 
-#### Step 2: Define a Search Space
+---
+
+### Saving and Loading
+
+#### Save/Load a Full Training Run
+
+A `TrainingRun` can be saved and restored, preserving fold models, OOF predictions, and configuration.
 
 ```python
-from sklearn_meta.search.space import SearchSpace
+# Save
+run.save("./my_run")
 
-space = SearchSpace()
-space.add_int("n_estimators", 50, 300)
-space.add_int("max_depth", 3, 15)
-space.add_float("min_samples_split", 0.01, 0.2)
-space.add_categorical("criterion", ["gini", "entropy"])
+# Load
+from sklearn_meta import TrainingRun
+restored_run = TrainingRun.load("./my_run")
 ```
 
-#### Step 3: Create a Model Node
+#### Save/Load an Inference-Only Graph
+
+For deployment, save just the lightweight `InferenceGraph` (fold models and graph topology, no training artifacts).
 
 ```python
-from sklearn.ensemble import RandomForestClassifier
-from sklearn_meta.core.model.node import ModelNode
+# Save
+inference = run.compile_inference()
+inference.save("./my_model")
 
-node = ModelNode(
-    name="rf",
-    estimator_class=RandomForestClassifier,
-    search_space=space,
-    fixed_params={"random_state": 42, "n_jobs": -1},
+# Load
+from sklearn_meta import InferenceGraph
+loaded = InferenceGraph.load("./my_model")
+predictions = loaded.predict(X_test)
+```
+
+---
+
+### Using the RunConfigBuilder
+
+For a fluent alternative to constructing `RunConfig` by hand, use `RunConfigBuilder`:
+
+```python
+from sklearn_meta import RunConfigBuilder
+
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified", random_state=42)
+    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .feature_selection(method="shadow")
+    .verbosity(2)
+    .build()
 )
 ```
 
-#### Step 4: Build the Model Graph
+---
+
+### Using the Convenience Function
+
+For the most concise workflow, use the top-level `sklearn_meta.fit()` helper:
 
 ```python
-from sklearn_meta.core.model.graph import ModelGraph
+import sklearn_meta
 
-graph = ModelGraph()
-graph.add_node(node)
-```
-
-#### Step 5: Configure and Run Tuning
-
-```python
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
-from sklearn_meta.search.backends.optuna import OptunaBackend
-
-# Create data context
-ctx = DataContext.from_Xy(X=X_train, y=y_train)
-
-# Configure cross-validation
-cv_config = CVConfig(
-    n_splits=5,
-    strategy=CVStrategy.STRATIFIED,
-    random_state=42
-)
-
-# Configure tuning
-tuning_config = TuningConfig(
-    strategy=OptimizationStrategy.LAYER_BY_LAYER,
-    n_trials=50,
-    cv_config=cv_config,
-    metric="roc_auc",
-    greater_is_better=True,
-)
-
-# Create required components
-data_manager = DataManager(cv_config)
-backend = OptunaBackend()
-
-# Build and run orchestrator
-orchestrator = TuningOrchestrator(
-    graph=graph,
-    data_manager=data_manager,
-    search_backend=backend,
-    tuning_config=tuning_config,
-)
-
-fitted_graph = orchestrator.fit(ctx)
-```
-
-#### Step 6: Make Predictions
-
-```python
-from sklearn.metrics import accuracy_score
-
-# Predict classes
-predictions = fitted_graph.predict(X_test)
-
-# Evaluate
-print(f"Accuracy: {accuracy_score(y_test, predictions):.4f}")
+run = sklearn_meta.fit(graph, DataView.from_Xy(X_train, y_train), config)
 ```
 
 ---
@@ -270,37 +262,57 @@ print(f"Accuracy: {accuracy_score(y_test, predictions):.4f}")
 Build a multi-layer stacking pipeline with the fluent API:
 
 ```python
+import pandas as pd
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn_meta.api import GraphBuilder
 
-fitted = (
+from sklearn_meta import (
+    GraphBuilder,
+    RunConfig, CVConfig, CVStrategy, TuningConfig,
+    GraphRunner, RuntimeServices, DataView,
+)
+
+X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+X_train, X_test = pd.DataFrame(X_train), pd.DataFrame(X_test)
+
+# Define a two-layer stacking graph
+graph = (
     GraphBuilder("stacking_pipeline")
     # Layer 1: Base models
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 500), max_depth=(3, 20))
-    .with_fixed_params(random_state=42, n_jobs=-1)
+    .int_param("n_estimators", 50, 500)
+    .int_param("max_depth", 3, 20)
+    .fixed_params(random_state=42, n_jobs=-1)
     .add_model("gbm", GradientBoostingClassifier)
-    .with_search_space(
-        learning_rate=(0.01, 0.3, "log"),
-        max_depth=(3, 10),
-        n_estimators=(50, 300),
-    )
+    .param("learning_rate", 0.01, 0.3, log=True)
+    .int_param("max_depth", 3, 10)
+    .int_param("n_estimators", 50, 300)
     # Layer 2: Meta-learner that stacks base model predictions
     .add_model("meta", LogisticRegression)
     .stacks("rf", "gbm")
-    # Tuning configuration
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(
+    .compile()
+)
+
+# Configure and fit
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
+    tuning=TuningConfig(
         n_trials=100,
         metric="roc_auc",
         greater_is_better=True,
-        strategy="layer_by_layer",
-    )
-    .fit(X_train, y_train)
+    ),
 )
 
-predictions = fitted.predict(X_test)
+run = GraphRunner(RuntimeServices.default()).fit(
+    graph, DataView.from_Xy(X_train, y_train), config
+)
+
+# Predict with the full stacking graph
+inference = run.compile_inference()
+predictions = inference.predict(X_test)
 ```
 
 ---

@@ -6,8 +6,15 @@ import pytest
 from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
 
-from sklearn_meta.api import GraphBuilder
-from sklearn_meta.core.model.node import OutputType
+from sklearn_meta.data.view import DataView
+from sklearn_meta.runtime.config import CVConfig, CVStrategy, RunConfig, TuningConfig
+from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.engine.strategy import OptimizationStrategy
+from sklearn_meta.runtime.services import RuntimeServices
+from sklearn_meta.spec.builder import GraphBuilder
+from sklearn_meta.spec.graph import GraphSpec
+from sklearn_meta.spec.node import NodeSpec, OutputType
+from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
 
 
 # =============================================================================
@@ -75,82 +82,96 @@ def binary_data():
     return pd.DataFrame(X, columns=[f"f{i}" for i in range(10)]), pd.Series(y, name="target")
 
 
+def _fit_distillation_graph(graph, X, y, mock_search_backend, strategy=OptimizationStrategy.NONE):
+    """Helper to fit a distillation graph."""
+    ctx = DataView.from_Xy(X, y)
+    cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)
+    tuning_config = TuningConfig(
+        strategy=strategy,
+        n_trials=1,
+        metric="accuracy",
+        greater_is_better=True,
+    )
+    config = RunConfig(cv=cv_config, tuning=tuning_config, verbosity=0)
+    services = RuntimeServices(search_backend=mock_search_backend)
+    runner = GraphRunner(services)
+    return runner.fit(graph, ctx, config)
+
+
 class TestDistillationEndToEnd:
     """End-to-end tests for knowledge distillation pipeline."""
 
-    def test_teacher_student_pipeline(self, binary_data):
+    def test_teacher_student_pipeline(self, binary_data, mock_search_backend):
         """Verify teacher-student distillation pipeline runs end-to-end."""
         X, y = binary_data
 
-        fitted = (
+        graph = (
             GraphBuilder("distill_test")
             .add_model("teacher", RandomForestClassifier)
-            .with_output_type(OutputType.PROBA)
-            .with_fixed_params(n_estimators=10, random_state=42)
+                .output_type(OutputType.PROBA)
+                .fixed_params(n_estimators=10, random_state=42)
             .add_model("student", MockXGBClassifier)
-            .distills("teacher", temperature=3.0, alpha=0.5)
-            .with_fixed_params(n_estimators=5, random_state=42)
-            .with_tuning(n_trials=1, strategy="none", metric="accuracy",
-                         greater_is_better=True)
-            .with_cv(n_splits=3, random_state=42)
-            .fit(X, y)
+                .distill_from("teacher", temperature=3.0, alpha=0.5)
+                .fixed_params(n_estimators=5, random_state=42)
+            .compile()
         )
 
+        fitted = _fit_distillation_graph(graph, X, y, mock_search_backend)
+
         # Both nodes should be fitted
-        assert "teacher" in fitted.fitted_nodes
-        assert "student" in fitted.fitted_nodes
+        assert "teacher" in fitted.node_results
+        assert "student" in fitted.node_results
 
         # Student should have received a custom objective during training
-        student_fitted = fitted.get_node("student")
+        student_result = fitted.node_results["student"]
         # Each fold model should have had objective set
-        for model in student_fitted.models:
+        for model in student_result.models:
             assert model.objective is not None
 
-    def test_teacher_oof_not_added_as_features(self, binary_data):
+    def test_teacher_oof_not_added_as_features(self, binary_data, mock_search_backend):
         """Verify teacher OOF predictions are not added as input features to student."""
         X, y = binary_data
 
-        fitted = (
+        graph = (
             GraphBuilder("distill_test")
             .add_model("teacher", RandomForestClassifier)
-            .with_output_type(OutputType.PROBA)
-            .with_fixed_params(n_estimators=10, random_state=42)
+                .output_type(OutputType.PROBA)
+                .fixed_params(n_estimators=10, random_state=42)
             .add_model("student", MockXGBClassifier)
-            .distills("teacher")
-            .with_fixed_params(n_estimators=5, random_state=42)
-            .with_tuning(n_trials=1, strategy="none", metric="accuracy",
-                         greater_is_better=True)
-            .with_cv(n_splits=3, random_state=42)
-            .fit(X, y)
+                .distill_from("teacher")
+                .fixed_params(n_estimators=5, random_state=42)
+            .compile()
         )
+
+        fitted = _fit_distillation_graph(graph, X, y, mock_search_backend)
 
         # The student's CV result should show the original feature count
         # (no distill_ prefix features added)
-        student_node = fitted.get_node("student")
+        student_result = fitted.node_results["student"]
         # The OOF predictions exist for the student
-        assert student_node.oof_predictions is not None
-        assert len(student_node.oof_predictions) == len(X)
+        assert student_result.oof_predictions is not None
+        assert len(student_result.oof_predictions) == len(X)
 
-    def test_predict_works_without_teacher(self, binary_data):
+    def test_predict_works_without_teacher(self, binary_data, mock_search_backend):
         """Verify prediction works without teacher at inference time."""
         X, y = binary_data
 
-        fitted = (
+        graph = (
             GraphBuilder("distill_test")
             .add_model("teacher", RandomForestClassifier)
-            .with_output_type(OutputType.PROBA)
-            .with_fixed_params(n_estimators=10, random_state=42)
+                .output_type(OutputType.PROBA)
+                .fixed_params(n_estimators=10, random_state=42)
             .add_model("student", MockXGBClassifier)
-            .distills("teacher")
-            .with_fixed_params(n_estimators=5, random_state=42)
-            .with_tuning(n_trials=1, strategy="none", metric="accuracy",
-                         greater_is_better=True)
-            .with_cv(n_splits=3, random_state=42)
-            .fit(X, y)
+                .distill_from("teacher")
+                .fixed_params(n_estimators=5, random_state=42)
+            .compile()
         )
 
+        fitted = _fit_distillation_graph(graph, X, y, mock_search_backend)
+
         # Predict from student node (teacher not needed at inference)
-        predictions = fitted.predict(X, node_name="student")
+        inference = fitted.compile_inference()
+        predictions = inference.predict(X, node_name="student")
 
         assert predictions is not None
         assert len(predictions) == len(X)
@@ -161,37 +182,39 @@ class TestDistillationEndToEnd:
         student = (
             builder
             .add_model("teacher1", RandomForestClassifier)
-            .with_output_type(OutputType.PROBA)
+                .output_type(OutputType.PROBA)
             .add_model("teacher2", RandomForestClassifier)
-            .with_output_type(OutputType.PROBA)
+                .output_type(OutputType.PROBA)
             .add_model("student", MockXGBClassifier)
-            .distills("teacher1")
+                .distill_from("teacher1")
         )
 
         with pytest.raises(ValueError, match="already has a distillation teacher"):
-            student.distills("teacher2")
+            student.distill_from("teacher2")
 
-    def test_distillation_with_layer_by_layer(self, binary_data):
+    def test_distillation_with_layer_by_layer(self, binary_data, mock_search_backend):
         """Verify distillation works with layer-by-layer strategy."""
         X, y = binary_data
 
-        fitted = (
+        graph = (
             GraphBuilder("distill_test")
             .add_model("teacher", RandomForestClassifier)
-            .with_output_type(OutputType.PROBA)
-            .with_fixed_params(n_estimators=10, random_state=42)
+                .output_type(OutputType.PROBA)
+                .fixed_params(n_estimators=10, random_state=42)
             .add_model("student", MockXGBClassifier)
-            .distills("teacher", temperature=2.0, alpha=0.8)
-            .with_fixed_params(n_estimators=5, random_state=42)
-            .with_tuning(n_trials=1, strategy="layer_by_layer", metric="accuracy",
-                         greater_is_better=True)
-            .with_cv(n_splits=3, random_state=42)
-            .fit(X, y)
+                .distill_from("teacher", temperature=2.0, alpha=0.8)
+                .fixed_params(n_estimators=5, random_state=42)
+            .compile()
         )
 
-        assert "teacher" in fitted.fitted_nodes
-        assert "student" in fitted.fitted_nodes
+        fitted = _fit_distillation_graph(
+            graph, X, y, mock_search_backend,
+            strategy=OptimizationStrategy.LAYER_BY_LAYER,
+        )
+
+        assert "teacher" in fitted.node_results
+        assert "student" in fitted.node_results
 
         # Verify the objective was injected
-        for model in fitted.get_node("student").models:
+        for model in fitted.node_results["student"].models:
             assert model.objective is not None

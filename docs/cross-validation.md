@@ -21,7 +21,7 @@ graph TB
 Preserves class distribution in each fold. **Recommended for classification.**
 
 ```python
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+from sklearn_meta import CVConfig, CVStrategy
 
 cv_config = CVConfig(
     n_splits=5,
@@ -57,8 +57,8 @@ cv_config = CVConfig(
     random_state=42,
 )
 
-# Pass groups to DataContext
-ctx = DataContext.from_Xy(X=X, y=y, groups=group_labels)
+# Pass groups to DataView
+data = DataView.from_Xy(X=X, y=y, groups=group_labels)
 ```
 
 **When to use:** When samples are not independent (e.g., multiple samples per patient, user, or session).
@@ -180,7 +180,7 @@ Nested CV is configured using the `inner_cv` field on `CVConfig` or the `.with_i
 **Using `.with_inner_cv()` (recommended):**
 
 ```python
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+from sklearn_meta import CVConfig, CVStrategy
 
 # Outer CV for evaluation, with nested inner CV for tuning
 cv_config = CVConfig(
@@ -206,18 +206,18 @@ outer = CVConfig(
 )
 ```
 
-**Using GraphBuilder:**
+**Using RunConfig:**
 
 ```python
-from sklearn_meta.api import GraphBuilder
+from sklearn_meta import RunConfig, CVConfig, CVStrategy, TuningConfig
 
-pipeline = (
-    GraphBuilder("nested_cv_pipeline")
-    .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200))
-    .with_cv(n_splits=5, strategy="stratified", nested=True, inner_splits=3)
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+config = RunConfig(
+    cv=CVConfig(
+        n_splits=5,
+        strategy=CVStrategy.STRATIFIED,
+        random_state=42,
+    ).with_inner_cv(n_splits=3),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
 )
 ```
 
@@ -261,81 +261,85 @@ graph TB
 **Using GraphBuilder (recommended):**
 
 ```python
-pipeline = (
+from sklearn_meta import GraphBuilder, RunConfig, CVConfig, CVStrategy, TuningConfig
+
+graph = (
     GraphBuilder("stacking")
     .add_model("base", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200))
+    .int_param("n_estimators", 50, 200)
     .add_model("meta", LogisticRegression)
     .stacks("base")
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+    .compile()
 )
-# DataManager routes OOF predictions automatically
+
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+)
+# CVEngine routes OOF predictions automatically during fit
 ```
 
 **Using low-level API:**
 
 ```python
-from sklearn_meta.core.model.dependency import DependencyEdge, DependencyType
+from sklearn_meta import DependencyEdge, DependencyType
 
 # Base model produces OOF predictions
 # Meta-learner trains on OOF predictions (no leakage!)
 graph.add_edge(
     DependencyEdge(source="base", target="meta", dep_type=DependencyType.PREDICTION)
 )
-# DataManager routes OOF predictions automatically
+# CVEngine routes OOF predictions automatically during fit
 ```
 
 ### Accessing OOF Predictions
 
 ```python
-from sklearn_meta.core.data.manager import DataManager
+from sklearn_meta.engine.cv import CVEngine
 
-data_manager = DataManager(cv_config)
-folds = data_manager.create_folds(ctx)
+cv_engine = CVEngine(cv_config)
+folds = cv_engine.create_folds(data)
 
 # After fitting all folds, route OOF predictions
-oof_predictions = data_manager.route_oof_predictions(ctx, fold_results)
+oof_predictions = cv_engine.route_oof_predictions(data, fold_results)
 ```
 
 ---
 
-## DataManager
+## CVEngine
 
-The `DataManager` coordinates CV operations:
+The `CVEngine` coordinates CV operations:
 
 ```python
-from sklearn_meta.core.data.manager import DataManager
+from sklearn_meta.engine.cv import CVEngine
 
-data_manager = DataManager(cv_config)
+cv_engine = CVEngine(cv_config)
 
 # Create CV folds
-folds = data_manager.create_folds(ctx)
+folds = cv_engine.create_folds(data)
 
 # Each fold contains train/validation indices
 for fold in folds:
     train_idx = fold.train_indices
     val_idx = fold.val_indices
 
-    # Get data for this fold
-    X_train = X.iloc[train_idx]
-    y_train = y.iloc[train_idx]
+    # Get train/val DataView slices for this fold
+    train_view, val_view = cv_engine.split_for_fold(data, fold)
 ```
 
-### Aligning Data to Folds
+### Splitting Data for Folds
 
-`align_to_fold` returns a tuple of `(train_ctx, val_ctx)`:
+`split_for_fold` returns a tuple of `(train_view, val_view)`:
 
 ```python
-# Get both train and validation DataContexts for a specific fold
-train_ctx, val_ctx = data_manager.align_to_fold(ctx, fold)
+# Get both train and validation DataViews for a specific fold
+train_view, val_view = cv_engine.split_for_fold(data, fold)
 ```
 
 ### Aggregating CV Results
 
 ```python
-result = data_manager.aggregate_cv_result(node_name="rf", fold_results=fold_results, ctx=ctx)
+result = cv_engine.aggregate_cv_result(node_name="rf", fold_results=fold_results, data=data)
 ```
 
 ---
@@ -444,23 +448,32 @@ from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 
-from sklearn_meta.api import GraphBuilder
-from sklearn_meta.core.data.context import DataContext
+from sklearn_meta import (
+    GraphBuilder, RunConfig, CVConfig, CVStrategy, TuningConfig, DataView, fit,
+)
 
 # Generate data
 X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
 X = pd.DataFrame(X)
 y = pd.Series(y)
 
-# Build, configure, and fit in one fluent chain
-pipeline = (
+# Build the graph spec
+graph = (
     GraphBuilder("quick_start")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200))
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=20, metric="roc_auc", greater_is_better=True)
-    .fit(X, y)
+    .int_param("n_estimators", 50, 200)
+    .compile()
 )
+
+# Configure the run
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED, random_state=42),
+    tuning=TuningConfig(n_trials=20, metric="roc_auc", greater_is_better=True),
+)
+
+# Fit
+data = DataView.from_Xy(X, y)
+result = fit(graph, data, config)
 ```
 
 ### Using Low-Level API
@@ -470,13 +483,10 @@ from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.node import ModelNode
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from sklearn_meta.search.backends.optuna import OptunaBackend
+from sklearn_meta import (
+    NodeSpec, GraphSpec, DataView, RunConfig, CVConfig, CVStrategy, TuningConfig,
+    GraphRunner, RuntimeServices,
+)
 from sklearn_meta.search.space import SearchSpace
 
 # Generate data
@@ -492,30 +502,32 @@ cv_config = CVConfig(
 )
 
 # Create model
-space = SearchSpace().add_int("n_estimators", 50, 200)
-node = ModelNode(
+space = SearchSpace()
+space.add_int("n_estimators", 50, 200)
+node = NodeSpec(
     name="rf",
     estimator_class=RandomForestClassifier,
     search_space=space,
     fixed_params={"random_state": 42},
 )
-graph = ModelGraph()
+graph = GraphSpec()
 graph.add_node(node)
 
-# Configure tuning with CV
-tuning_config = TuningConfig(
-    n_trials=20,
-    cv_config=cv_config,
-    metric="roc_auc",
-    greater_is_better=True,
+# Configure run
+config = RunConfig(
+    cv=cv_config,
+    tuning=TuningConfig(
+        n_trials=20,
+        metric="roc_auc",
+        greater_is_better=True,
+    ),
 )
 
 # Run
-ctx = DataContext.from_Xy(X=X, y=y)
-data_manager = DataManager(cv_config)
-backend = OptunaBackend()
-orchestrator = TuningOrchestrator(graph, data_manager, backend, tuning_config)
-fitted = orchestrator.fit(ctx)
+data = DataView.from_Xy(X=X, y=y)
+services = RuntimeServices.default()
+runner = GraphRunner(services)
+result = runner.fit(graph, data, config)
 ```
 
 ---

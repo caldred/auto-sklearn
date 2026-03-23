@@ -50,41 +50,59 @@ class MyPlugin(ModelPlugin):
 
 ### Plugin Hooks
 
-| Hook | When Called | Purpose |
-|------|-------------|---------|
-| `applies_to` | Registration | Check if plugin applies to model |
-| `modify_search_space` | Before tuning | Add/modify search parameters |
-| `modify_params` | Each trial | Transform sampled parameters |
-| `modify_fit_params` | Before fit | Add fit-specific parameters |
-| `on_fold_start` | Before each fold | Setup before fold execution |
-| `pre_fit` | Before fit | Setup before fitting |
-| `post_fit` | After fit | Cleanup after fitting |
-| `on_fold_end` | After each fold | Cleanup after fold execution |
-| `post_tune` | After all trials | Final parameter selection |
+Fit-time hooks (`modify_fit_params`, `pre_fit`, `post_fit`) receive a `MaterializedBatch` -- the concrete, resolved data for the current fold. Tuning-time and fold-level hooks (`post_tune`, `on_fold_start`) receive a `DataView` -- the lazy, declarative view over the full dataset.
+
+| Hook | Signature | When Called | Purpose |
+|------|-----------|-------------|---------|
+| `applies_to` | `(estimator_class)` | Registration | Check if plugin applies to model |
+| `modify_search_space` | `(space, node)` | Before tuning | Add/modify search parameters |
+| `modify_params` | `(params, node)` | Each trial | Transform sampled parameters |
+| `modify_fit_params` | `(params, batch)` | Before fit | Add fit-specific parameters (`batch` is `MaterializedBatch`) |
+| `on_fold_start` | `(fold_idx, node, data)` | Before each fold | Setup before fold execution (`data` is `DataView`) |
+| `pre_fit` | `(model, node, batch)` | Before fit | Setup before fitting (`batch` is `MaterializedBatch`) |
+| `post_fit` | `(model, node, batch)` | After fit | Cleanup after fitting (`batch` is `MaterializedBatch`) |
+| `on_fold_end` | `(fold_idx, model, score, node)` | After each fold | Cleanup after fold execution |
+| `post_tune` | `(best_params, node, data)` | After all trials | Final parameter selection (`data` is `DataView`) |
 
 ---
 
 ## Using Plugins with GraphBuilder
 
-Plugins are referenced by their string name via the GraphBuilder fluent API. The `plugins` field on `ModelNode` is `list[str]`, not a list of `ModelPlugin` instances. Plugin instances are resolved from the registry at runtime.
+Plugins are referenced by their string name via the GraphBuilder fluent API. The `plugins` field on `NodeSpec` is `list[str]`, not a list of `ModelPlugin` instances. Plugin instances are resolved from the `PluginRegistry` at runtime via `RuntimeServices`.
 
 ```python
-from sklearn_meta import GraphBuilder
+from sklearn_meta import (
+    GraphBuilder, RunConfigBuilder, RuntimeServices, GraphRunner, DataView, OptunaBackend,
+)
+from sklearn_meta.plugins.registry import get_default_registry
 from xgboost import XGBClassifier
 
-fitted = (
+# Build the graph spec
+graph = (
     GraphBuilder("my_pipeline")
     .add_model("xgb", XGBClassifier)
-    .with_plugins("xgboost")
-    .with_search_space(
-        learning_rate=(0.01, 0.3, "log"),
-        max_depth=(3, 10),
-        n_estimators=(50, 300),
-    )
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+        .plugins("xgboost")
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .int_param("max_depth", 3, 10)
+        .int_param("n_estimators", 50, 300)
+    .compile()
 )
+
+# Configure and run
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .build()
+)
+
+data = DataView.from_Xy(X=X_train, y=y_train)
+registry = get_default_registry()
+services = RuntimeServices(
+    search_backend=OptunaBackend(direction="maximize"),
+    plugin_registry=registry,
+)
+training_run = GraphRunner(services).fit(graph, data, config)
 ```
 
 ---
@@ -159,9 +177,9 @@ search_config = OrderSearchConfig(
 plugin = OrderSearchPlugin(config=search_config)
 result = plugin.search_order(
     graph=joint_quantile_graph,
-    ctx=ctx,
+    data=data,
     targets=targets,
-    orchestrator=orchestrator,
+    runner=runner,
 )
 
 print(f"Best order: {result.best_order}")
@@ -212,6 +230,19 @@ registry.register(MyPlugin())
 
 Note: When `xgboost` is installed, `XGBMultiplierPlugin` and `XGBImportancePlugin` are automatically registered in the global registry. Calling `register()` with the same plugin name again will raise a `ValueError`. Use `registry.unregister("xgb_multiplier")` first if you need to replace the default instance.
 
+### Wiring the Registry into RuntimeServices
+
+The plugin registry is passed to `RuntimeServices`, which makes it available during the training run:
+
+```python
+from sklearn_meta import RuntimeServices, OptunaBackend
+
+services = RuntimeServices(
+    search_backend=OptunaBackend(direction="maximize"),
+    plugin_registry=registry,
+)
+```
+
 ---
 
 ## Composite Plugins
@@ -237,6 +268,7 @@ composite.modify_params(params, node)
 
 ```python
 from sklearn_meta.plugins.base import ModelPlugin
+from sklearn_meta.data.batch import MaterializedBatch
 import numpy as np
 
 class EarlyStoppingPlugin(ModelPlugin):
@@ -255,25 +287,25 @@ class EarlyStoppingPlugin(ModelPlugin):
         supported = ["XGBClassifier", "XGBRegressor", "LGBMClassifier", "LGBMRegressor"]
         return estimator_class.__name__ in supported
 
-    def modify_fit_params(self, params: dict, context) -> dict:
+    def modify_fit_params(self, params: dict, batch: MaterializedBatch) -> dict:
         """Add early stopping parameters to fit kwargs."""
         modified = params.copy()
 
-        # Create validation set from the context
-        n_samples = context.n_samples
+        # Create validation set from the materialized batch
+        n_samples = batch.n_samples
         n_val = int(n_samples * self.validation_fraction)
         indices = np.random.permutation(n_samples)
 
         val_indices = indices[:n_val]
 
-        modified["eval_set"] = [(context.X.iloc[val_indices], context.y.iloc[val_indices])]
+        modified["eval_set"] = [(batch.X.iloc[val_indices], batch.y[val_indices])]
         modified["early_stopping_rounds"] = self.patience
         modified["verbose"] = False
 
         return modified
 ```
 
-Note: `DataContext` is immutable. Plugin hooks that receive a context should not attempt to mutate its attributes directly. Instead, return modified parameters or use the `with_*` methods on DataContext to create new instances when needed.
+Note: `MaterializedBatch` contains the resolved data for the current fold. Access features via `batch.X`, the default target via `batch.y`, and auxiliary channels via `batch.aux`. `DataView` is immutable -- plugin hooks that receive a `DataView` should not attempt to mutate its attributes directly.
 
 ---
 
@@ -325,6 +357,9 @@ registry.register(plugin)
 ```python
 import logging
 from datetime import datetime
+from sklearn_meta.plugins.base import ModelPlugin
+from sklearn_meta.data.view import DataView
+from sklearn_meta.data.batch import MaterializedBatch
 
 class LoggingPlugin(ModelPlugin):
     """Logs model training events."""
@@ -339,16 +374,16 @@ class LoggingPlugin(ModelPlugin):
     def applies_to(self, estimator_class) -> bool:
         return True
 
-    def on_fold_start(self, fold_idx, node, ctx) -> None:
+    def on_fold_start(self, fold_idx, node, data: DataView) -> None:
         self.logger.info(f"Starting fold {fold_idx} for {node.name}")
 
-    def pre_fit(self, model, node, ctx) -> Any:
+    def pre_fit(self, model, node, batch: MaterializedBatch):
         self.start_time = datetime.now()
         self.logger.info(f"Starting fit: {model.__class__.__name__}")
-        self.logger.info(f"Data shape: {ctx.X.shape}")
+        self.logger.info(f"Data shape: {batch.X.shape}")
         return model
 
-    def post_fit(self, model, node, ctx) -> Any:
+    def post_fit(self, model, node, batch: MaterializedBatch):
         duration = datetime.now() - self.start_time
         self.logger.info(f"Fit completed in {duration.total_seconds():.2f}s")
         return model
@@ -356,7 +391,7 @@ class LoggingPlugin(ModelPlugin):
     def on_fold_end(self, fold_idx, model, score, node) -> None:
         self.logger.info(f"Finished fold {fold_idx} for {node.name} (score: {score:.4f})")
 
-    def post_tune(self, best_params, node, ctx) -> dict:
+    def post_tune(self, best_params, node, data: DataView) -> dict:
         self.logger.info(f"Best params for {node.name}: {best_params}")
         return best_params
 ```
@@ -370,15 +405,10 @@ from sklearn.datasets import make_classification
 import pandas as pd
 import xgboost as xgb
 
-from sklearn_meta import GraphBuilder
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
-from sklearn_meta.search.space import SearchSpace
-from sklearn_meta.search.backends.optuna import OptunaBackend
+from sklearn_meta import (
+    GraphBuilder, RunConfigBuilder, RuntimeServices, GraphRunner,
+    DataView, OptunaBackend,
+)
 from sklearn_meta.plugins.xgboost.multiplier import XGBMultiplierPlugin
 from sklearn_meta.plugins.registry import get_default_registry
 
@@ -396,31 +426,40 @@ X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
 X_df = pd.DataFrame(X, columns=[f"f{i}" for i in range(20)])
 y_s = pd.Series(y)
 
-fitted = (
+graph = (
     GraphBuilder("xgb_pipeline")
     .add_model("xgb", xgb.XGBClassifier)
-    .with_plugins("xgboost")
-    .with_search_space(
-        learning_rate=(0.01, 0.3, "log"),
-        n_estimators=(50, 300),
-        max_depth=(3, 10),
-    )
-    .with_fixed_params(random_state=42, eval_metric="logloss")
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(
-        n_trials=20,
-        metric="roc_auc",
-        greater_is_better=True,
-    )
-    .fit(X_df, y_s)
+        .plugins("xgboost")
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .int_param("n_estimators", 50, 300)
+        .int_param("max_depth", 3, 10)
+        .fixed_params(random_state=42, eval_metric="logloss")
+    .compile()
 )
 
-print(f"Best params: {fitted.get_node('xgb').best_params}")
-print(f"Mean score: {fitted.get_node('xgb').mean_score}")
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=20, metric="roc_auc", greater_is_better=True)
+    .build()
+)
+
+data = DataView.from_Xy(X=X_df, y=y_s)
+services = RuntimeServices(
+    search_backend=OptunaBackend(direction="maximize"),
+    plugin_registry=registry,
+)
+
+training_run = GraphRunner(services).fit(graph, data, config)
+
+xgb_result = training_run.node_results["xgb"]
+print(f"Best params: {xgb_result.best_params}")
+print(f"Mean score: {xgb_result.mean_score}")
 
 # --- Using low-level API ---
 
-ctx = DataContext.from_Xy(X=X_df, y=y_s)
+from sklearn_meta import NodeSpec, GraphSpec, RunConfig, CVConfig, CVStrategy, TuningConfig
+from sklearn_meta.search.space import SearchSpace
 
 space = (
     SearchSpace()
@@ -429,8 +468,7 @@ space = (
     .add_int("max_depth", 3, 10)
 )
 
-from sklearn_meta.core.model.node import ModelNode
-node = ModelNode(
+node = NodeSpec(
     name="xgb",
     estimator_class=xgb.XGBClassifier,
     search_space=space,
@@ -438,27 +476,30 @@ node = ModelNode(
     plugins=["xgboost"],  # Plugin names as strings
 )
 
-graph = ModelGraph()
+graph = GraphSpec()
 graph.add_node(node)
 
-cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED)
-tuning_config = TuningConfig(
-    strategy=OptimizationStrategy.LAYER_BY_LAYER,
-    n_trials=20,
-    cv_config=cv_config,
-    metric="roc_auc",
-    greater_is_better=True,  # Note: must be set explicitly for maximization
+config = RunConfig(
+    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
+    tuning=TuningConfig(
+        n_trials=20,
+        metric="roc_auc",
+        greater_is_better=True,
+    ),
 )
 
-search_backend = OptunaBackend(direction="maximize", random_state=42)
-data_manager = DataManager(cv_config)
-orchestrator = TuningOrchestrator(graph, data_manager, search_backend, tuning_config)
+data = DataView.from_Xy(X=X_df, y=y_s)
+services = RuntimeServices(
+    search_backend=OptunaBackend(direction="maximize"),
+    plugin_registry=registry,
+)
 
 print("Tuning with XGBMultiplierPlugin...")
-fitted = orchestrator.fit(ctx)
+training_run = GraphRunner(services).fit(graph, data, config)
 
-print(f"Best params: {fitted.get_node('xgb').best_params}")
-print(f"Mean score: {fitted.get_node('xgb').mean_score}")
+xgb_result = training_run.node_results["xgb"]
+print(f"Best params: {xgb_result.best_params}")
+print(f"Mean score: {xgb_result.mean_score}")
 ```
 
 ---
@@ -478,7 +519,7 @@ class DoEverythingPlugin(ModelPlugin): ...
 
 ### 2. Don't Mutate Inputs
 
-DataContext is immutable. Never attempt to set attributes on it directly.
+`DataView` is immutable (frozen dataclass). `MaterializedBatch` contains the resolved data for the current fold. Never attempt to set attributes on a `DataView` directly.
 
 ```python
 def modify_params(self, params, node):
@@ -491,14 +532,11 @@ def modify_params(self, params, node):
     params["new_param"] = value  # Don't do this!
     return params
 
-def modify_fit_params(self, params, ctx):
-    # Good: Read from context, return modified params dict
+def modify_fit_params(self, params, batch: MaterializedBatch):
+    # Good: Read from batch, return modified params dict
     modified = params.copy()
-    modified["eval_set"] = [(ctx.X.iloc[:10], ctx.y.iloc[:10])]
+    modified["eval_set"] = [(batch.X.iloc[:10], batch.y[:10])]
     return modified
-
-    # Bad: Try to mutate context
-    ctx.X = ctx.X.iloc[10:]  # DataContext is frozen!
 ```
 
 ### 3. Use Priority Wisely

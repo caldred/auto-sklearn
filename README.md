@@ -37,172 +37,142 @@ pip install lightgbm        # LightGBM support
 
 ## Quick Start
 
-The simplest way to use sklearn-meta is through the `GraphBuilder` fluent API. Define your models, configure tuning, and call `.fit()`:
+sklearn-meta separates graph definition from execution. First, define a model graph with `GraphBuilder`, then configure a `RunConfig`, and finally execute with `GraphRunner` (or the convenience `sklearn_meta.fit()` function):
 
 ```python
 from sklearn.ensemble import RandomForestClassifier
-from sklearn_meta import GraphBuilder
+from sklearn_meta import GraphBuilder, RunConfigBuilder, DataView, fit
 
-fitted = (
+# 1. Define the model graph
+graph = (
     GraphBuilder("my_pipeline")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(
-        n_estimators=(50, 500),
-        max_depth=(3, 20),
-    )
-    .with_fixed_params(random_state=42)
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+    .param("n_estimators", 50, 500)
+    .param("max_depth", 3, 20)
+    .fixed_params(random_state=42)
+    .compile()
 )
 
-predictions = fitted.predict(X_test)
+# 2. Configure the run
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .build()
+)
+
+# 3. Create data and fit
+data = DataView.from_Xy(X_train, y_train)
+training_run = fit(graph, data, config)
+
+# 4. Compile for inference and predict
+inference = training_run.compile_inference()
+predictions = inference.predict(X_test)
 ```
 
 This tunes a random forest over 50 Optuna trials using 5-fold stratified CV. At inference time, predictions from all fold models are averaged to produce the final output.
 
 ## Data Management
 
-sklearn-meta uses `DataContext` as an immutable container for datasets. It wraps a single pandas DataFrame and declares column roles (features, target, groups) rather than storing separate arrays.
+sklearn-meta uses `DataView` as a lazy, immutable view over datasets. It wraps a `DatasetRecord` and declares column roles (features, target, groups) rather than copying data. No data is materialized until `.materialize()` is called.
 
-### Creating a DataContext
-
-The fluent API handles this for you when you call `.fit(X, y)`, but you can also create one directly:
+### Creating a DataView
 
 ```python
-from sklearn.ensemble import RandomForestClassifier
-from sklearn_meta import GraphBuilder
-from sklearn_meta.core.data.context import DataContext
+from sklearn_meta import DataView
 
 # From separate X, y, groups
-ctx = DataContext.from_Xy(
+data = DataView.from_Xy(
     X=X_train,                         # pd.DataFrame of features
-    y=y_train,                         # pd.Series target
-    groups=group_labels,               # Optional pd.Series for group CV
-    base_margin=margin_array,          # Optional np.ndarray for XGBoost base margins
+    y=y_train,                         # pd.Series or array-like target
+    groups=group_labels,               # Optional array-like for group CV
+    base_margin=margin_array,          # Optional aux channel for XGBoost base margins
 )
 ```
 
-Or construct from a single DataFrame with column roles declared explicitly:
+Or construct from a `DatasetRecord` with column roles declared explicitly:
 
 ```python
-ctx = DataContext(
-    df=full_dataframe,
-    feature_cols=("feat_1", "feat_2", "feat_3"),
-    target_col="target",
-    group_col="patient_id",            # Optional
-)
+from sklearn_meta.data.record import DatasetRecord
 
-# Then fit through the fluent API without promoting every df column to a feature
-fitted = (
-    GraphBuilder("my_pipeline")
-    .add_model("rf", RandomForestClassifier)
-    .fit_context(ctx)
-)
+record = DatasetRecord.from_frame(full_dataframe)
+data = DataView(
+    dataset=record,
+    feature_cols=("feat_1", "feat_2", "feat_3"),
+).bind_target(full_dataframe["target"].values).bind_groups(full_dataframe["patient_id"].values)
 ```
 
 ### Accessing Data
 
-DataContext provides backward-compatible properties for accessing the underlying data:
+DataView provides properties for inspecting the view without materializing:
 
 ```python
-ctx.X              # Feature DataFrame (only feature_cols)
-ctx.y              # Target Series
-ctx.groups         # Group labels Series (or None)
-ctx.n_samples      # Number of rows
-ctx.n_features     # Number of feature columns
-ctx.feature_names  # List of feature column names
+data.n_rows         # Number of rows (respecting any row selection)
+data.n_features     # Number of feature columns + overlays
+data.feature_cols   # Tuple of feature column names
+data.target         # Default target channel reference (or None)
+data.groups         # Group labels reference (or None)
+```
+
+To get concrete arrays, call `.materialize()`:
+
+```python
+batch = data.materialize()
+batch.X              # Feature DataFrame (features + overlay columns)
+batch.targets        # Dict of resolved target arrays
+batch.row_ids        # Row identifiers
+batch.feature_names  # List of feature column names
 ```
 
 ### Immutable Transformations
 
-DataContext is frozen -- every transformation returns a new instance, leaving the original unchanged. This prevents subtle bugs from shared mutable state during cross-validation and stacking.
+DataView is frozen -- every transformation returns a new instance, leaving the original unchanged. This prevents subtle bugs from shared mutable state during cross-validation and stacking.
 
 ```python
-# Swap out the feature columns
-ctx2 = ctx.with_feature_cols(["feat_1", "feat_3"])
-
-# Point at a different target column already in the DataFrame
-ctx3 = ctx.with_target_col("alt_target")
-
-# Add new columns (optionally registering them as features)
-ctx4 = ctx.with_columns(
-    as_features=True,
-    new_feat=some_array,
-    another_feat=another_array,
-)
+# Restrict to specific feature columns
+data2 = data.select_features(["feat_1", "feat_3"])
 
 # Subset to specific row indices
-ctx5 = ctx.with_indices(train_indices)
+data3 = data.select_rows(train_indices)
 
-# Attach an XGBoost base margin for stacking
-ctx6 = ctx.with_base_margin(margin_array)
+# Add an overlay column (e.g., upstream OOF predictions for stacking)
+data4 = data.with_overlay("pred_rf", rf_oof_predictions)
 
-# Attach soft targets for knowledge distillation
-ctx7 = ctx.with_soft_targets(teacher_probabilities)
+# Add multiple overlays at once
+data5 = data.with_overlays({"pred_rf": rf_preds, "pred_xgb": xgb_preds})
 
-# Store arbitrary metadata
-ctx8 = ctx.with_metadata("source", "experiment_3")
+# Bind a target channel
+data6 = data.bind_target(new_target_array)
 
-# Replace the target series
-ctx9 = ctx.with_y(new_target_series)
+# Bind groups for CV splitting
+data7 = data.bind_groups(group_labels)
+
+# Add an auxiliary channel (e.g., soft targets for distillation)
+data8 = data.with_aux("soft_targets", teacher_probabilities)
 ```
 
-### Augmenting with Predictions (Stacking)
+### CVEngine
 
-During stacking, upstream model predictions are added as features for downstream models. This is handled automatically by the orchestrator, but you can also do it manually:
-
-```python
-ctx_stacked = ctx.augment_with_predictions(
-    predictions={
-        "rf": rf_oof_predictions,       # np.ndarray, shape (n_samples,)
-        "xgb": xgb_oof_predictions,
-    },
-    prefix="pred_",                     # Column names become "pred_rf", "pred_xgb"
-)
-# ctx_stacked.feature_cols now includes "pred_rf" and "pred_xgb"
-```
-
-For multi-class probability predictions (2D arrays), each class gets its own column (e.g., `pred_rf_0`, `pred_rf_1`).
-
-### DataManager
-
-`DataManager` handles all cross-validation splitting logic. It is created automatically by the fluent API, but can be used directly:
+`CVEngine` handles all cross-validation splitting logic. It is created automatically by `GraphRunner`, but can be used directly:
 
 ```python
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
+from sklearn_meta import CVConfig, CVStrategy
+from sklearn_meta.engine.cv import CVEngine
 
 cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED, random_state=42)
-manager = DataManager(cv_config)
+engine = CVEngine(cv_config)
 
 # Create CV folds
-folds = manager.create_folds(ctx)
+folds = engine.create_folds(data)
 for fold in folds:
     print(f"Fold {fold.fold_idx}: {fold.n_train} train, {fold.n_val} val")
 
-# Split a context into train/val for a specific fold
-train_ctx, val_ctx = manager.align_to_fold(ctx, folds[0])
-
 # Create nested folds (requires inner_cv in config)
 nested_config = cv_config.with_inner_cv(n_splits=3)
-nested_manager = DataManager(nested_config)
-nested_folds = nested_manager.create_nested_folds(ctx)
+nested_engine = CVEngine(nested_config)
+nested_folds = nested_engine.create_nested_folds(data)
 for nf in nested_folds:
     print(f"Outer fold {nf.fold_idx}, {nf.n_inner_folds} inner folds")
-```
-
-### Out-of-Fold Predictions
-
-The DataManager routes per-fold validation predictions into a single out-of-fold (OOF) array where each sample's prediction comes from a model that never saw it during training:
-
-```python
-oof_predictions = manager.route_oof_predictions(ctx, fold_results)
-
-# Or aggregate into a full CVResult
-cv_result = manager.aggregate_cv_result("rf", fold_results, ctx)
-print(cv_result.mean_score, cv_result.std_score)
-print(cv_result.oof_predictions.shape)
 ```
 
 ## Defining Models
@@ -213,12 +183,13 @@ Add models to the graph with `add_model(name, estimator_class)`. Each model retu
 builder = (
     GraphBuilder("classifier")
     .add_model("xgb", XGBClassifier)
-    .with_search_space(learning_rate=(0.01, 0.3, "log"), max_depth=(3, 10))
-    .with_fixed_params(random_state=42, use_label_encoder=False)
-    .with_fit_params(verbose=False)
-    .with_output_type("proba")           # "prediction", "proba", "transform", or "quantiles"
-    .with_description("Base XGBoost model")
-    .with_plugins("xgboost")             # Model-specific plugin hooks
+    .param("learning_rate", 0.01, 0.3, log=True)
+    .int_param("max_depth", 3, 10)
+    .fixed_params(random_state=42, use_label_encoder=False)
+    .fit_params(verbose=False)
+    .output_type("proba")                  # "prediction", "proba", or "transform"
+    .description("Base XGBoost model")
+    .plugins("xgboost")                    # Model-specific plugin hooks
 )
 ```
 
@@ -228,7 +199,7 @@ Models can be conditionally included based on the data:
 
 ```python
 .add_model("binary_only", LogisticRegression)
-.with_condition(lambda ctx: ctx.y.nunique() == 2)
+.condition(lambda data: len(set(data.targets.get("__default__", []))) == 2)
 ```
 
 ### Feature Subsets
@@ -237,30 +208,28 @@ Restrict a model to specific input features:
 
 ```python
 .add_model("text_model", SGDClassifier)
-.with_features("tfidf_1", "tfidf_2", "tfidf_3")
+.feature_cols(["tfidf_1", "tfidf_2", "tfidf_3"])
 ```
 
 ## Search Spaces
 
-Hyperparameter search spaces are defined with a shorthand syntax:
+Hyperparameter search spaces are defined using typed builder methods on `NodeBuilder`:
 
 ```python
-.with_search_space(
-    n_estimators=(50, 500),              # Integer range [50, 500]
-    max_depth=(3, 15),                   # Integer range [3, 15]
-    learning_rate=(0.001, 0.3, "log"),   # Float range, log-uniform
-    subsample=(0.5, 1.0),               # Float range [0.5, 1.0]
-    booster=["gbtree", "dart"],          # Categorical choice
-)
+.add_model("xgb", XGBClassifier)
+.int_param("n_estimators", 50, 500)              # Integer range [50, 500]
+.int_param("max_depth", 3, 15)                   # Integer range [3, 15]
+.param("learning_rate", 0.001, 0.3, log=True)    # Float range, log-uniform
+.param("subsample", 0.5, 1.0)                    # Float range [0.5, 1.0]
+.cat_param("booster", ["gbtree", "dart"])         # Categorical choice
 ```
 
-The shorthand rules:
-- `(low, high)` with integers creates an integer range
-- `(low, high)` with floats creates a float range
-- `(low, high, "log")` uses log-uniform sampling
-- `[a, b, c]` creates a categorical parameter
+The builder methods:
+- `.param(name, low, high)` creates a float range; add `log=True` for log-uniform sampling, `step=` for discrete steps
+- `.int_param(name, low, high)` creates an integer range; add `step=` for step size
+- `.cat_param(name, choices)` creates a categorical parameter
 
-For full control, build a `SearchSpace` manually:
+For full control, build a `SearchSpace` manually and pass it with `.search_space()`:
 
 ```python
 from sklearn_meta.search.space import SearchSpace
@@ -275,15 +244,16 @@ space.add_categorical("booster", ["gbtree", "dart"])
 space.add_conditional("dart_rate", parent_name="booster", parent_value="dart",
                       parameter=SearchParameter("dart_rate", 0.01, 0.5))
 
-.add_model("xgb", XGBClassifier).with_search_space(space)
+.add_model("xgb", XGBClassifier).search_space(space)
 ```
 
 ## Cross-Validation
 
-Configure cross-validation with `.with_cv()`:
+Configure cross-validation with `RunConfigBuilder.cv()`:
 
 ```python
-.with_cv(
+RunConfigBuilder()
+.cv(
     n_splits=5,
     n_repeats=1,
     strategy="stratified",
@@ -298,15 +268,20 @@ Configure cross-validation with `.with_cv()`:
 |----------|----------|
 | `"stratified"` | Classification with imbalanced classes |
 | `"random"` | General-purpose random splitting |
-| `"group"` | Grouped data (pass `groups=` to `.fit()`) |
+| `"group"` | Grouped data (bind `groups` on `DataView`) |
 | `"time_series"` | Temporal data (no shuffling, expanding window) |
 
 ### Nested CV
 
-For unbiased performance estimates during hyperparameter tuning:
+For unbiased performance estimates during hyperparameter tuning, use `CVConfig.with_inner_cv()`:
 
 ```python
-.with_cv(n_splits=5, nested=True, inner_splits=3)
+from sklearn_meta import CVConfig, CVStrategy
+
+cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED)
+nested_config = cv_config.with_inner_cv(n_splits=3)
+
+config = RunConfig(cv=nested_config, tuning=TuningConfig(...))
 ```
 
 This creates an outer 5-fold loop for evaluation and an inner 3-fold loop for tuning within each outer fold.
@@ -316,29 +291,39 @@ This creates an outer 5-fold loop for evaluation and an inner 3-fold loop for tu
 When observations are grouped (e.g., multiple samples per patient):
 
 ```python
-(
+from sklearn_meta import GraphBuilder, RunConfigBuilder, DataView, fit
+
+graph = (
     GraphBuilder("grouped")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 200))
-    .with_cv(n_splits=5, strategy="group")
-    .with_tuning(n_trials=30, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train, groups=patient_ids)
+    .param("n_estimators", 50, 200)
+    .compile()
 )
+
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="group")
+    .tuning(n_trials=30, metric="roc_auc", greater_is_better=True)
+    .build()
+)
+
+data = DataView.from_Xy(X_train, y_train, groups=patient_ids)
+training_run = fit(graph, data, config)
 ```
 
 ## Hyperparameter Tuning
 
-Configure tuning with `.with_tuning()`:
+Configure tuning with `RunConfigBuilder.tuning()`:
 
 ```python
-.with_tuning(
+RunConfigBuilder()
+.tuning(
     n_trials=100,                  # Number of Optuna trials
     timeout=3600,                  # Optional timeout in seconds
     strategy="layer_by_layer",     # Optimization strategy
     metric="neg_mean_squared_error",
     greater_is_better=False,
     early_stopping_rounds=20,      # Stop if no improvement for 20 trials
-    n_parallel_trials=4,           # Parallel Optuna workers
     show_progress=True,            # Display Optuna progress bar
 )
 ```
@@ -367,31 +352,43 @@ Build multi-layer stacking ensembles by declaring dependencies between models. U
 ```python
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn_meta import GraphBuilder
+from sklearn_meta import GraphBuilder, RunConfigBuilder, DataView, fit
 
-fitted = (
+# 1. Define the stacking graph
+graph = (
     GraphBuilder("stacking_ensemble")
 
     # Layer 0: base models
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 300), max_depth=(3, 15))
+    .param("n_estimators", 50, 300)
+    .param("max_depth", 3, 15)
 
     .add_model("gb", GradientBoostingClassifier)
-    .with_search_space(
-        learning_rate=(0.01, 0.3, "log"),
-        n_estimators=(50, 300),
-        max_depth=(3, 8),
-    )
+    .param("learning_rate", 0.01, 0.3, log=True)
+    .param("n_estimators", 50, 300)
+    .int_param("max_depth", 3, 8)
 
     # Layer 1: meta-learner stacks base predictions
     .add_model("meta", LogisticRegression)
-    .with_fixed_params(C=1.0)
+    .fixed_params(C=1.0)
     .stacks("rf", "gb")               # Use predictions as features
 
-    .with_cv(n_splits=5, strategy="stratified")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+    .compile()
 )
+
+# 2. Configure and run
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .build()
+)
+
+data = DataView.from_Xy(X_train, y_train)
+training_run = fit(graph, data, config)
+
+inference = training_run.compile_inference()
+predictions = inference.predict(X_test)
 ```
 
 ### Stacking Modes
@@ -407,17 +404,17 @@ With `layer_by_layer` strategy, layer 0 models (`rf`, `gb`) are tuned first. The
 You can stack any number of layers:
 
 ```python
-(
+graph = (
     GraphBuilder("deep_stack")
     # Layer 0
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(n_estimators=(50, 300))
+    .param("n_estimators", 50, 300)
 
     .add_model("xgb", XGBClassifier)
-    .with_search_space(learning_rate=(0.01, 0.3, "log"))
+    .param("learning_rate", 0.01, 0.3, log=True)
 
     .add_model("lgb", LGBMClassifier)
-    .with_search_space(learning_rate=(0.01, 0.3, "log"))
+    .param("learning_rate", 0.01, 0.3, log=True)
 
     # Layer 1: intermediate meta-learners
     .add_model("meta_tree", GradientBoostingClassifier)
@@ -430,15 +427,23 @@ You can stack any number of layers:
     .add_model("blender", LogisticRegression)
     .stacks("meta_tree", "meta_linear")
 
-    .with_cv(n_splits=5)
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .fit(X_train, y_train)
+    .compile()
 )
+
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .build()
+)
+
+data = DataView.from_Xy(X_train, y_train)
+training_run = fit(graph, data, config)
 ```
 
 ## Feature Selection
 
-Automatically drop uninformative features before final training. Three methods are available:
+Automatically drop uninformative features before final training. Three methods are available. Configure feature selection on the `RunConfigBuilder`:
 
 ### Shadow Feature Selection (Recommended)
 
@@ -448,17 +453,23 @@ its paired shadow importance. Features that cannot beat their calibrated
 shadow baseline are dropped.
 
 ```python
-.with_feature_selection(
-    method="shadow",
-    n_shadows=5,                   # Number of shadow rounds
-    threshold_mult=1.414,          # Multiplier on shadow importance threshold
-    retune_after_pruning=True,     # Re-tune hyperparameters with selected features
-    min_features=1,                # Never drop below this many features
-    max_features=None,             # Optional upper bound
-    feature_groups={               # Optional: select/drop grouped features together
-        "gender_ohe": ["gender_f", "gender_m"],
-        "state_ohe": ["state_ca", "state_ny", "state_tx"],
-    },
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .feature_selection(
+        method="shadow",
+        n_shadows=5,                   # Number of shadow rounds
+        threshold_mult=1.414,          # Multiplier on shadow importance threshold
+        retune_after_pruning=True,     # Re-tune hyperparameters with selected features
+        min_features=1,                # Never drop below this many features
+        max_features=None,             # Optional upper bound
+        feature_groups={               # Optional: select/drop grouped features together
+            "gender_ohe": ["gender_f", "gender_m"],
+            "state_ohe": ["state_ca", "state_ny", "state_tx"],
+        },
+    )
+    .build()
 )
 ```
 
@@ -469,7 +480,7 @@ Grouped features are scored by averaging member importances. Any group that pass
 Measures importance by shuffling each feature and observing the drop in validation performance:
 
 ```python
-.with_feature_selection(method="permutation", retune_after_pruning=True)
+.feature_selection(method="permutation", retune_after_pruning=True)
 ```
 
 ### Threshold
@@ -477,7 +488,7 @@ Measures importance by shuffling each feature and observing the drop in validati
 Simple threshold on raw feature importances:
 
 ```python
-.with_feature_selection(method="threshold", retune_after_pruning=True)
+.feature_selection(method="threshold", retune_after_pruning=True)
 ```
 
 ### Retune After Pruning
@@ -489,7 +500,13 @@ When `retune_after_pruning=True` (the default), after features are selected the 
 Many hyperparameters are correlated (e.g., `learning_rate` and `n_estimators` have an inverse relationship). Reparameterization transforms them into orthogonal dimensions so the optimizer explores the space more efficiently.
 
 ```python
-.with_reparameterization(use_prebaked=True)
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=100, metric="roc_auc", greater_is_better=True)
+    .reparameterization(use_prebaked=True)
+    .build()
+)
 ```
 
 With `use_prebaked=True`, sklearn-meta automatically applies known reparameterizations for common model/parameter pairs (e.g., the learning-rate/n-estimators product for boosting models).
@@ -497,13 +514,17 @@ With `use_prebaked=True`, sklearn-meta automatically applies known reparameteriz
 ### Custom Reparameterizations
 
 ```python
-from sklearn_meta.meta.reparameterization import LogProductReparameterization
+from sklearn_meta import LogProductReparameterization
 
-.with_reparameterization(
-    reparameterizations=[
-        LogProductReparameterization("budget", "learning_rate", "n_estimators"),
-    ],
-    use_prebaked=False,
+config = (
+    RunConfigBuilder()
+    .reparameterization(
+        custom_reparameterizations=[
+            LogProductReparameterization("budget", "learning_rate", "n_estimators"),
+        ],
+        use_prebaked=False,
+    )
+    .build()
 )
 ```
 
@@ -519,33 +540,38 @@ Train a smaller student model using soft targets from a larger teacher model. Th
 ```python
 from xgboost import XGBClassifier
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn_meta import GraphBuilder
+from sklearn_meta import GraphBuilder, RunConfigBuilder, DataView, fit
 
-fitted = (
+# Define the distillation graph
+graph = (
     GraphBuilder("distillation")
 
     # Teacher: large model
     .add_model("teacher", GradientBoostingClassifier)
-    .with_search_space(
-        n_estimators=(200, 1000),
-        learning_rate=(0.01, 0.3, "log"),
-        max_depth=(4, 12),
-    )
-    .with_output_type("proba")
+    .param("n_estimators", 200, 1000)
+    .param("learning_rate", 0.01, 0.3, log=True)
+    .int_param("max_depth", 4, 12)
+    .output_type("proba")
 
     # Student: smaller model learns from teacher's soft targets
     .add_model("student", XGBClassifier)
-    .with_search_space(
-        n_estimators=(10, 100),
-        learning_rate=(0.01, 0.3, "log"),
-        max_depth=(2, 6),
-    )
-    .distills("teacher", temperature=3.0, alpha=0.5)
+    .param("n_estimators", 10, 100)
+    .param("learning_rate", 0.01, 0.3, log=True)
+    .int_param("max_depth", 2, 6)
+    .distill_from("teacher", temperature=3.0, alpha=0.5)
 
-    .with_cv(n_splits=5)
-    .with_tuning(n_trials=50, metric="neg_log_loss", greater_is_better=False)
-    .fit(X_train, y_train)
+    .compile()
 )
+
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="neg_log_loss", greater_is_better=False)
+    .build()
+)
+
+data = DataView.from_Xy(X_train, y_train)
+training_run = fit(graph, data, config)
 ```
 
 Parameters:
@@ -559,15 +585,12 @@ The teacher must be fitted before the student in the graph's topological order. 
 Model multiple correlated targets with uncertainty quantification using sequential quantile regression via chain rule decomposition. Each conditional distribution is modeled with quantile regression (e.g., 10-20 quantile levels) using XGBoost:
 
 ```
-P(Y₁, Y₂, ..., Yₙ | X) = P(Y₁|X) × P(Y₂|X,Y₁) × P(Y₃|X,Y₁,Y₂) × ...
+P(Y1, Y2, ..., Yn | X) = P(Y1|X) x P(Y2|X,Y1) x P(Y3|X,Y1,Y2) x ...
 ```
 
 ```python
-from sklearn_meta.core.model.joint_quantile_graph import (
-    JointQuantileGraph, JointQuantileConfig,
-)
-from sklearn_meta.core.model.joint_quantile_fitted import JointQuantileFittedGraph
-from sklearn_meta.core.tuning.joint_quantile_orchestrator import JointQuantileOrchestrator
+from sklearn_meta.spec.quantile import JointQuantileGraphSpec, JointQuantileConfig
+from sklearn_meta.artifacts.inference import JointQuantileInferenceGraph
 from xgboost import XGBRegressor
 
 config = JointQuantileConfig(
@@ -577,25 +600,15 @@ config = JointQuantileConfig(
     n_inference_samples=1000,
 )
 
-graph = JointQuantileGraph(config)
-orchestrator = JointQuantileOrchestrator(
-    graph=graph, data_manager=data_manager,
-    search_backend=optuna_backend, tuning_config=tuning_config,
-)
-
-fit_result = orchestrator.fit(ctx, targets={
-    "price": y_price, "volume": y_volume, "volatility": y_volatility,
-})
-
-fitted = JointQuantileFittedGraph.from_fit_result(fit_result)
+# ... build graph, runner, and fit ...
 
 # Sample from the joint distribution
-samples = fitted.sample_joint(X_test, n_samples=1000)  # (n_test, 1000, 3)
+samples = jq_inference.sample_joint(X_test, n_samples=1000)
 
 # Point predictions and prediction intervals
-medians = fitted.predict_median(X_test)
-q10 = fitted.predict_quantile(X_test, q=0.1)
-q90 = fitted.predict_quantile(X_test, q=0.9)
+medians = jq_inference.predict_median(X_test)
+q10 = jq_inference.predict_quantile(X_test, q=0.1)
+q90 = jq_inference.predict_quantile(X_test, q=0.9)
 ```
 
 For full details including order search, quantile scaling, sampling strategies, and save/load, see [Joint Quantile Regression](docs/joint-quantile-regression.md).
@@ -607,12 +620,15 @@ For boosting models, you can tune with a small number of estimators for speed, t
 ### Fixed Scaling
 
 ```python
-.with_tuning(
-    n_trials=100,
-    metric="neg_log_loss",
-    greater_is_better=False,
-    tuning_n_estimators=100,     # Use 100 trees during tuning (fast)
-    final_n_estimators=500,      # Use 500 trees in the final CV pass
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=100, metric="neg_log_loss", greater_is_better=False)
+    .estimator_scaling(
+        tuning_n_estimators=100,     # Use 100 trees during tuning (fast)
+        final_n_estimators=500,      # Use 500 trees in the final CV pass
+    )
+    .build()
 )
 ```
 
@@ -623,12 +639,15 @@ The learning rate is automatically scaled by `tuning_n_estimators / final_n_esti
 Search for the best scaling factor automatically:
 
 ```python
-.with_tuning(
-    n_trials=100,
-    metric="neg_log_loss",
-    greater_is_better=False,
-    estimator_scaling_search=True,              # Search optimal multiplier
-    estimator_scaling_factors=[2, 5, 10, 20],   # Factors to test (default)
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=100, metric="neg_log_loss", greater_is_better=False)
+    .estimator_scaling(
+        scaling_search=True,                        # Search optimal multiplier
+        scaling_factors=[2, 5, 10, 20],             # Factors to test (default)
+    )
+    .build()
 )
 ```
 
@@ -636,65 +655,67 @@ This tunes hyperparameters first, then tests each scaling factor with early stop
 
 ## Working with Results
 
-`.fit()` returns a `FittedGraph` containing all trained models and metadata.
+`GraphRunner.fit()` returns a `TrainingRun` containing all trained models and metadata. To make predictions, compile an `InferenceGraph` from the training run.
 
 ### Predictions
 
 ```python
-fitted = builder.fit(X_train, y_train)
+training_run = fit(graph, data, config)
+
+# Compile to an InferenceGraph for prediction
+inference = training_run.compile_inference()
 
 # Predict using the final (leaf) node
-predictions = fitted.predict(X_test)
+predictions = inference.predict(X_test)
 
 # Predict from a specific node
-rf_predictions = fitted.predict(X_test, node_name="rf")
+rf_predictions = inference.predict(X_test, node_name="rf")
 ```
 
 For stacking graphs, `.predict()` automatically chains predictions through the graph: base model predictions are computed first and fed as features to downstream models.
 
 ### Probability Predictions
 
-`FittedGraph.predict()` returns class labels for classifiers. To get probability outputs, access the individual fold models directly:
-
-```python
-import numpy as np
-
-node = fitted.get_node("rf")
-# Average predict_proba across fold models
-probas = np.mean(
-    [model.predict_proba(X_test) for model in node.models],
-    axis=0,
-)
-```
-
 For stacking graphs where a base model's output type is set to `"proba"`, the probabilities are automatically passed as features to downstream meta-learners during training and inference. Set this on the base model:
 
 ```python
 .add_model("rf", RandomForestClassifier)
-.with_output_type("proba")
+.output_type("proba")
+```
+
+To get probability outputs from an `InferenceGraph`, access the individual fold models:
+
+```python
+import numpy as np
+
+models = training_run.node_results["rf"].models
+probas = np.mean(
+    [model.predict_proba(X_test) for model in models],
+    axis=0,
+)
 ```
 
 ### Inspecting Results
 
 ```python
-# Access a fitted node
-node = fitted.get_node("rf")
+# Access a node's run result
+result = training_run.node_results["rf"]
 
 # Best hyperparameters found
-print(node.best_params)
+print(result.best_params)
 
 # Out-of-fold predictions (useful for analysis and diagnostics)
-oof = fitted.get_oof_predictions("rf")
+oof = result.oof_predictions
 
 # CV performance
-print(node.cv_result.mean_score)
-print(node.cv_result.std_score)
+print(result.cv_result.mean_score)
+print(result.cv_result.std_score)
 
 # Features kept after selection
-print(node.selected_features)
+print(result.selected_features)
 
 # Total training time
-print(f"Completed in {fitted.total_time:.1f}s")
+print(f"Completed in {training_run.total_time:.1f}s")
 ```
 
 ### Extracting Feature Importance
@@ -702,51 +723,63 @@ print(f"Completed in {fitted.total_time:.1f}s")
 ```python
 from sklearn_meta.selection.importance import importance_registry
 
-model = fitted.get_node("rf").cv_result  # or access individual fold models
-importance = importance_registry.extract_importance(model, feature_names)
+models = training_run.node_results["rf"].models
+importance = importance_registry.extract_importance(models[0], feature_names)
 ```
 
 ### Saving and Loading
 
+#### TrainingRun (full training artifacts)
+
 ```python
-import joblib
+# Save -- creates a directory with fold models + JSON manifest
+training_run.save("./models/my_pipeline/")
 
-# Save
-joblib.dump(fitted, "my_pipeline.joblib")
-
-# Load
-fitted = joblib.load("my_pipeline.joblib")
-predictions = fitted.predict(X_test)
+# Load -- restores the full TrainingRun with all fold results
+loaded_run = TrainingRun.load("./models/my_pipeline/")
+inference = loaded_run.compile_inference()
+predictions = inference.predict(X_test)
 ```
 
-For joint quantile models, each property's model is saved as an independent artifact with a JSON manifest capturing the graph structure. See [Joint Quantile Regression — Saving and Loading Models](docs/joint-quantile-regression.md#saving-and-loading-models):
+#### InferenceGraph (lightweight, prediction-only)
 
 ```python
-from sklearn_meta.core.model.joint_quantile_fitted import JointQuantileFittedGraph
+# Save -- only the models and graph structure needed for prediction
+inference = training_run.compile_inference()
+inference.save("./models/my_pipeline_inference/")
 
-# Save — creates one .joblib per property + manifest.json
-fitted.save("./models/joint_quantile/")
+# Load -- ready for inference
+loaded_inference = InferenceGraph.load("./models/my_pipeline_inference/")
+predictions = loaded_inference.predict(X_test)
+```
 
-# Load — ready for inference
-loaded = JointQuantileFittedGraph.load("./models/joint_quantile/")
+For joint quantile models, each property's model is saved as an independent artifact with a JSON manifest capturing the graph structure. See [Joint Quantile Regression -- Saving and Loading Models](docs/joint-quantile-regression.md#saving-and-loading-models):
+
+```python
+from sklearn_meta.artifacts.inference import JointQuantileInferenceGraph
+
+# Save -- creates one .joblib per quantile/fold + manifest.json
+jq_inference.save("./models/joint_quantile/")
+
+# Load -- ready for inference
+loaded = JointQuantileInferenceGraph.load("./models/joint_quantile/")
 ```
 
 ## Advanced Usage
 
 ### Low-Level API
 
-For full control, you can bypass the fluent builder and work with the core components directly:
+For full control, you can bypass the fluent builders and work with the spec/runtime/engine components directly:
 
 ```python
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVStrategy
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.node import ModelNode
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.tuning.orchestrator import TuningConfig, TuningOrchestrator
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
-from sklearn_meta.search.space import SearchSpace
-from sklearn_meta.search.backends.optuna import OptunaBackend
+from sklearn_meta import (
+    DataView, GraphRunner, RuntimeServices,
+    RunConfig, TuningConfig, CVConfig, CVStrategy,
+    SearchSpace, OptunaBackend,
+)
+from sklearn_meta.spec.node import NodeSpec
+from sklearn_meta.spec.graph import GraphSpec
+from sklearn_meta.engine.strategy import OptimizationStrategy
 
 # Build search space
 space = SearchSpace()
@@ -754,7 +787,7 @@ space.add_int("n_estimators", 50, 200)
 space.add_int("max_depth", 3, 10)
 
 # Create model node
-node = ModelNode(
+node = NodeSpec(
     name="rf",
     estimator_class=RandomForestClassifier,
     search_space=space,
@@ -762,29 +795,25 @@ node = ModelNode(
 )
 
 # Build graph
-graph = ModelGraph()
+graph = GraphSpec()
 graph.add_node(node)
+graph.validate()
 
 # Configure
 cv_config = CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED, random_state=42)
 tuning_config = TuningConfig(
-    strategy=OptimizationStrategy.LAYER_BY_LAYER,
     n_trials=20,
-    cv_config=cv_config,
     metric="accuracy",
     greater_is_better=True,
+    strategy=OptimizationStrategy.LAYER_BY_LAYER,
 )
+run_config = RunConfig(cv=cv_config, tuning=tuning_config)
 
-# Create data context and run
-ctx = DataContext.from_Xy(X=X_train, y=y_train)
-data_manager = DataManager(cv_config)
-orchestrator = TuningOrchestrator(
-    graph=graph,
-    data_manager=data_manager,
-    search_backend=OptunaBackend(),
-    tuning_config=tuning_config,
-)
-fitted = orchestrator.fit(ctx)
+# Create data and run
+data = DataView.from_Xy(X=X_train, y=y_train)
+services = RuntimeServices.default()
+runner = GraphRunner(services)
+training_run = runner.fit(graph, data, run_config)
 ```
 
 ### Custom Search Backend
@@ -792,7 +821,7 @@ fitted = orchestrator.fit(ctx)
 The search backend is pluggable. The default is `OptunaBackend`, but you can configure it:
 
 ```python
-from sklearn_meta.search.backends.optuna import OptunaBackend
+from sklearn_meta import OptunaBackend, RuntimeServices
 import optuna
 
 backend = OptunaBackend(
@@ -805,7 +834,9 @@ backend = OptunaBackend(
     verbosity=optuna.logging.INFO,
 )
 
-fitted = builder.create_orchestrator(search_backend=backend).fit(ctx)
+services = RuntimeServices(search_backend=backend)
+runner = GraphRunner(services)
+training_run = runner.fit(graph, data, config)
 ```
 
 ### Fit Caching
@@ -813,10 +844,11 @@ fitted = builder.create_orchestrator(search_backend=backend).fit(ctx)
 Cache fitted models to avoid redundant computation during optimization:
 
 ```python
-from sklearn_meta.persistence.cache import FitCache
+from sklearn_meta import FitCache, RuntimeServices
 
 cache = FitCache(cache_dir="./cache", max_size_mb=1000.0)
-orchestrator = TuningOrchestrator(..., fit_cache=cache)
+services = RuntimeServices(search_backend=OptunaBackend(), fit_cache=cache)
+runner = GraphRunner(services)
 ```
 
 ### Plugins
@@ -824,24 +856,41 @@ orchestrator = TuningOrchestrator(..., fit_cache=cache)
 Plugins hook into the model lifecycle (pre-fit, post-fit, search space modification, etc.). The built-in XGBoost plugin is applied with:
 
 ```python
-.add_model("xgb", XGBClassifier).with_plugins("xgboost")
+.add_model("xgb", XGBClassifier).plugins("xgboost")
 ```
 
 ## Project Structure
 
 ```
 sklearn_meta/
-├── api.py                 # GraphBuilder fluent API
-├── core/
-│   ├── data/              # DataContext, CVConfig, DataManager
-│   ├── model/             # ModelNode, ModelGraph, Dependencies, Distillation
-│   │   ├── joint_quantile_graph.py    # Joint quantile graph structure
-│   │   ├── joint_quantile_fitted.py   # Inference & save/load for joint quantile
-│   │   ├── quantile_node.py           # Quantile model nodes & scaling
-│   │   └── quantile_sampler.py        # Sampling strategies (linear, parametric, auto)
-│   └── tuning/            # TuningOrchestrator, Strategies
-│       ├── joint_quantile_orchestrator.py  # Orchestrator for joint quantile training
-│       └── metrics.py                      # Metric resolution
+├── __init__.py            # Public API re-exports and fit() convenience function
+├── spec/                  # Graph & node specifications (pure data, no runtime)
+│   ├── builder.py         # GraphBuilder & NodeBuilder fluent API
+│   ├── graph.py           # GraphSpec (DAG of NodeSpec + DependencyEdge)
+│   ├── node.py            # NodeSpec, OutputType
+│   ├── dependency.py      # DependencyEdge, DependencyType
+│   ├── distillation.py    # DistillationConfig
+│   └── quantile.py        # JointQuantileGraphSpec, JointQuantileConfig
+├── data/                  # DatasetRecord, DataView
+│   ├── record.py          # DatasetRecord (immutable storage)
+│   ├── view.py            # DataView (lazy, declarative view)
+│   └── batch.py           # MaterializedBatch (concrete arrays)
+├── runtime/               # RunConfig, RuntimeServices
+│   ├── config.py          # RunConfig, TuningConfig, CVConfig, FeatureSelectionConfig
+│   └── services.py        # RuntimeServices (search backend, cache, logger)
+├── engine/                # Execution: GraphRunner, CVEngine, trainers
+│   ├── runner.py          # GraphRunner (orchestrates training)
+│   ├── cv.py              # CVEngine (fold splitting)
+│   ├── trainer.py         # StandardNodeTrainer
+│   ├── quantile_trainer.py # QuantileNodeTrainer
+│   ├── search.py          # SearchService
+│   ├── selection.py       # FeatureSelectionService
+│   ├── strategy.py        # OptimizationStrategy enum
+│   └── estimator_scaling.py # EstimatorScalingConfig, EstimatorScaler
+├── artifacts/             # Training & inference outputs
+│   ├── training.py        # TrainingRun, NodeRunResult, RunMetadata
+│   ├── inference.py       # InferenceGraph, JointQuantileInferenceGraph
+│   └── compiler.py        # InferenceCompiler (TrainingRun -> InferenceGraph)
 ├── search/                # SearchSpace, SearchParameter, Backends
 ├── meta/                  # Reparameterization transforms, CorrelationAnalyzer
 ├── selection/             # Feature selection (shadow, permutation, threshold)
@@ -850,7 +899,7 @@ sklearn_meta/
 │   ├── xgboost/           # XGBoost multiplier & importance plugins
 │   └── joint_quantile/    # OrderSearchPlugin for property ordering
 ├── execution/             # Parallel execution backends
-├── persistence/           # Fit caching, ArtifactStore
+├── persistence/           # Fit caching, manifest I/O
 └── audit/                 # Logging
 ```
 

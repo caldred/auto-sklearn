@@ -6,26 +6,31 @@ sklearn-meta provides automated feature selection using shadow features, permuta
 
 ## Quick Start
 
-The recommended way to use feature selection is through the `GraphBuilder` fluent API:
+In v2, the graph structure is defined separately from the runtime configuration. Feature selection is configured via `FeatureSelectionConfig` inside `RunConfig`, rather than a `.with_feature_selection()` builder method.
 
 ```python
-from sklearn_meta.api import GraphBuilder
-from sklearn_meta.core.data.context import DataContext
+from sklearn_meta import GraphBuilder, GraphRunner, DataView, RunConfig, FeatureSelectionConfig
+from sklearn_meta.runtime.config import CVConfig, TuningConfig
 from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 
-# Prepare data
-ctx = DataContext.from_Xy(X=pd.DataFrame(X), y=pd.Series(y))
+# 1. Prepare data
+data = DataView.from_Xy(X=pd.DataFrame(X), y=pd.Series(y))
 
-# Build pipeline with feature selection
-result = (
+# 2. Build graph spec (structure only)
+graph = (
     GraphBuilder("my_pipeline")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(
-        n_estimators=(50, 500),
-        max_depth=(3, 20),
-    )
-    .with_feature_selection(
+        .int_param("n_estimators", 50, 500)
+        .int_param("max_depth", 3, 20)
+    .compile()
+)
+
+# 3. Configure the run with feature selection
+config = RunConfig(
+    cv=CVConfig(n_splits=5),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+    feature_selection=FeatureSelectionConfig(
         method="shadow",
         n_shadows=5,
         threshold_mult=1.414,
@@ -34,15 +39,15 @@ result = (
             "gender_ohe": ["gender_f", "gender_m"],
             "state_ohe": ["state_ca", "state_ny", "state_tx"],
         },
-    )
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .with_cv(n_splits=5)
-    .fit(ctx)
+    ),
 )
 
-# Access selected features from FittedNode
-fitted_node = result.get_node("rf")
-print(f"Selected features: {fitted_node.selected_features}")
+# 4. Run
+run = GraphRunner.from_config(config).fit(graph, data, config)
+
+# 5. Access selected features from NodeRunResult
+node_result = run.node_results["rf"]
+print(f"Selected features: {node_result.selected_features}")
 ```
 
 ---
@@ -57,7 +62,7 @@ paired shadow baseline. If the real signal cannot beat its paired shadow, it is
 unlikely to generalize.
 
 ```python
-.with_feature_selection(
+FeatureSelectionConfig(
     method="shadow",
     n_shadows=5,            # Number of shadow rounds
     threshold_mult=1.414,   # Feature must beat threshold_mult * its shadow's importance
@@ -92,7 +97,7 @@ graph TB
 Measures feature importance by shuffling each feature and observing the drop in model performance. Features whose permutation has little effect on score are dropped.
 
 ```python
-.with_feature_selection(
+FeatureSelectionConfig(
     method="permutation",
     threshold_mult=1.414,
 )
@@ -105,7 +110,7 @@ Features below `threshold_percentile` (default 10th percentile) of the permutati
 A simpler method that fits the model once and drops features below a percentile threshold of the model's native feature importances (e.g., `feature_importances_` for tree models).
 
 ```python
-.with_feature_selection(
+FeatureSelectionConfig(
     method="threshold",
     threshold_mult=1.414,
 )
@@ -118,7 +123,7 @@ A simpler method that fits the model once and drops features below a percentile 
 Use `feature_groups` when multiple columns should be treated as one logical feature (for example, one-hot encoded categories, target-encoded variants, or related interaction bundles).
 
 ```python
-.with_feature_selection(
+FeatureSelectionConfig(
     method="threshold",
     threshold_percentile=20,
     feature_groups={
@@ -216,10 +221,13 @@ This approach recognizes that the optimal hyperparameters may shift after featur
 
 ## FeatureSelectionConfig
 
-For advanced usage, you can create a `FeatureSelectionConfig` directly:
+`FeatureSelectionConfig` lives in `sklearn_meta.runtime.config` and is also re-exported from the top-level `sklearn_meta` package:
 
 ```python
-from sklearn_meta.selection.selector import FeatureSelectionConfig
+from sklearn_meta import FeatureSelectionConfig
+
+# Or equivalently:
+from sklearn_meta.runtime.config import FeatureSelectionConfig
 
 config = FeatureSelectionConfig(
     enabled=True,
@@ -250,6 +258,39 @@ config = FeatureSelectionConfig(
 | `feature_groups` | Optional `{group_name: [feature, ...]}` map for atomic grouped selection | `None` |
 | `random_state` | Random seed for reproducibility | `42` |
 
+Feature selection is passed to `RunConfig` as an optional field:
+
+```python
+from sklearn_meta import RunConfig, FeatureSelectionConfig
+from sklearn_meta.runtime.config import CVConfig, TuningConfig
+
+run_config = RunConfig(
+    cv=CVConfig(n_splits=5),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+    feature_selection=FeatureSelectionConfig(
+        method="shadow",
+        n_shadows=5,
+        threshold_mult=1.414,
+    ),
+)
+```
+
+### Using RunConfigBuilder
+
+You can also use the fluent `RunConfigBuilder`:
+
+```python
+from sklearn_meta.runtime.config import RunConfigBuilder
+
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .feature_selection(method="shadow", n_shadows=5, threshold_mult=1.414)
+    .build()
+)
+```
+
 ### Tuning the Threshold Multiplier
 
 ```mermaid
@@ -265,22 +306,28 @@ graph LR
 
 ## Accessing Results
 
-After fitting, the `FittedNode` object contains the selected features:
+After fitting, the `NodeRunResult` object contains the selected features:
 
 ```python
-result = (
+graph = (
     GraphBuilder("pipeline")
     .add_model("xgb", XGBClassifier)
-    .with_search_space(...)
-    .with_feature_selection(method="shadow")
-    .with_tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
-    .with_cv(n_splits=5)
-    .fit(ctx)
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .int_param("max_depth", 3, 10)
+    .compile()
 )
 
+config = RunConfig(
+    cv=CVConfig(n_splits=5),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+    feature_selection=FeatureSelectionConfig(method="shadow"),
+)
+
+run = GraphRunner.from_config(config).fit(graph, data, config)
+
 # Access selected features
-fitted_node = result.get_node("xgb")
-selected = fitted_node.selected_features  # List[str] or None
+node_result = run.node_results["xgb"]
+selected = node_result.selected_features  # List[str] or None
 print(f"Selected {len(selected)} features: {selected}")
 ```
 
@@ -288,11 +335,12 @@ print(f"Selected {len(selected)} features: {selected}")
 
 ## Advanced: Using FeatureSelector Directly
 
-For programmatic control outside the `GraphBuilder`, you can use the `FeatureSelector` class directly:
+For programmatic control outside the `GraphBuilder`/`GraphRunner` workflow, you can use the `FeatureSelector` class directly:
 
 ```python
-from sklearn_meta.selection.selector import FeatureSelector, FeatureSelectionConfig
-from sklearn_meta.core.data.context import DataContext
+from sklearn_meta.runtime.config import FeatureSelectionConfig
+from sklearn_meta.selection.selector import FeatureSelector
+from sklearn_meta import DataView
 
 config = FeatureSelectionConfig(
     method="shadow",
@@ -303,19 +351,7 @@ config = FeatureSelectionConfig(
 
 selector = FeatureSelector(config)
 
-# Select features for a model node
-result = selector.select_for_node(node, ctx, best_params)
-
-# result is a FeatureSelectionResult:
-print(result.selected_features)   # List[str] - features to keep
-print(result.dropped_features)    # List[str] - features removed
-print(result.importances)         # Dict[str, float] - importance scores
-print(result.method_used)         # str - which method was used
-```
-
-You can also call `select()` directly with raw data:
-
-```python
+# Select features using raw data
 from sklearn.ensemble import RandomForestClassifier
 
 result = selector.select(
@@ -324,6 +360,21 @@ result = selector.select(
     y=y_train,
     feature_cols=list(X_train.columns),
 )
+
+# result is a FeatureSelectionResult:
+print(result.selected_features)   # List[str] - features to keep
+print(result.dropped_features)    # List[str] - features removed
+print(result.importances)         # Dict[str, float] - importance scores
+print(result.method_used)         # str - which method was used
+```
+
+You can also use the engine-level `FeatureSelectionService` which works with `DataView` and `NodeSpec`:
+
+```python
+from sklearn_meta.engine.selection import FeatureSelectionService
+
+service = FeatureSelectionService(config)
+result, updated_view = service.apply(node_spec, data_view, best_params)
 ```
 
 ---
@@ -336,8 +387,10 @@ from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 import numpy as np
 
-from sklearn_meta.api import GraphBuilder
-from sklearn_meta.core.data.context import DataContext
+from sklearn_meta import (
+    GraphBuilder, GraphRunner, DataView, RunConfig, FeatureSelectionConfig,
+)
+from sklearn_meta.runtime.config import CVConfig, TuningConfig
 
 # Generate data with known informative/noise structure
 X, y = make_classification(
@@ -358,33 +411,38 @@ feature_names = (
 X = pd.DataFrame(X, columns=feature_names)
 y = pd.Series(y)
 
-# Create data context
-ctx = DataContext.from_Xy(X=X, y=y)
+# Create data view
+data = DataView.from_Xy(X=X, y=y)
 
-# Build and fit with feature selection
-result = (
+# Build graph spec
+graph = (
     GraphBuilder("feature_selection_demo")
     .add_model("rf", RandomForestClassifier)
-    .with_search_space(
-        n_estimators=(50, 500),
-        max_depth=(3, 20),
-        min_samples_split=(2, 20),
-    )
-    .with_feature_selection(
+        .int_param("n_estimators", 50, 500)
+        .int_param("max_depth", 3, 20)
+        .int_param("min_samples_split", 2, 20)
+    .compile()
+)
+
+# Configure the run with feature selection
+config = RunConfig(
+    cv=CVConfig(n_splits=5),
+    tuning=TuningConfig(n_trials=30, metric="roc_auc", greater_is_better=True),
+    feature_selection=FeatureSelectionConfig(
         method="shadow",
         n_shadows=5,
         threshold_mult=1.414,
         retune_after_pruning=True,
         min_features=5,
-    )
-    .with_tuning(n_trials=30, metric="roc_auc", greater_is_better=True)
-    .with_cv(n_splits=5)
-    .fit(ctx)
+    ),
 )
 
+# Execute
+run = GraphRunner.from_config(config).fit(graph, data, config)
+
 # Inspect results
-fitted = result.get_node("rf")
-selected = fitted.selected_features
+node_result = run.node_results["rf"]
+selected = node_result.selected_features
 
 print(f"Selected {len(selected)} of {len(feature_names)} features:")
 
@@ -395,7 +453,12 @@ noise_kept = sum(1 for f in selected if "noise" in f)
 print(f"  Informative features kept: {informative_kept}/10")
 print(f"  Redundant features kept: {redundant_kept}/10")
 print(f"  Noise features kept: {noise_kept}/30")
-print(f"  Best params: {fitted.best_params}")
+print(f"  Best params: {node_result.best_params}")
+print(f"  Mean CV score: {node_result.mean_score:.4f}")
+
+# Build inference graph for prediction
+inference = run.compile_inference()
+predictions = inference.predict(X)
 ```
 
 ---
@@ -407,7 +470,7 @@ print(f"  Best params: {fitted.best_params}")
 The shadow method is the most statistically principled. It controls for chance importance automatically:
 
 ```python
-.with_feature_selection(method="shadow", n_shadows=5)
+FeatureSelectionConfig(method="shadow", n_shadows=5)
 ```
 
 ### 2. Enable Retune After Pruning
@@ -415,7 +478,7 @@ The shadow method is the most statistically principled. It controls for chance i
 Hyperparameters tuned on all features may not be optimal for the selected subset. Retuning compensates:
 
 ```python
-.with_feature_selection(retune_after_pruning=True)  # default
+FeatureSelectionConfig(retune_after_pruning=True)  # default
 ```
 
 ### 3. Set Feature Constraints for Safety
@@ -423,7 +486,7 @@ Hyperparameters tuned on all features may not be optimal for the selected subset
 Prevent over-pruning or under-pruning with min/max bounds:
 
 ```python
-.with_feature_selection(
+FeatureSelectionConfig(
     min_features=5,       # Never drop below 5 features
     max_features=30,      # Cap at 30 even if more pass threshold
 )
@@ -434,7 +497,7 @@ Prevent over-pruning or under-pruning with min/max bounds:
 For encoded categoricals or engineered bundles, configure `feature_groups` so related columns move together:
 
 ```python
-.with_feature_selection(
+FeatureSelectionConfig(
     method="shadow",
     feature_groups={
         "state_ohe": ["state_ca", "state_ny", "state_tx"],
@@ -455,12 +518,24 @@ Always compare model performance with and without selection to confirm the pruni
 
 ```python
 # Without selection
-result_all = builder.fit(ctx)
+config_all = RunConfig(
+    cv=CVConfig(n_splits=5),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+)
 
 # With selection
-result_selected = builder.with_feature_selection(method="shadow").fit(ctx)
+config_selected = RunConfig(
+    cv=CVConfig(n_splits=5),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+    feature_selection=FeatureSelectionConfig(method="shadow"),
+)
+
+run_all = GraphRunner.from_config(config_all).fit(graph, data, config_all)
+run_selected = GraphRunner.from_config(config_selected).fit(graph, data, config_selected)
 
 # Compare CV scores
+print(f"Without selection: {run_all.node_results['rf'].mean_score:.4f}")
+print(f"With selection:    {run_selected.node_results['rf'].mean_score:.4f}")
 ```
 
 ---

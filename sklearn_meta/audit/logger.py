@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, TextIO, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sklearn_meta.core.data.cv import CVFold
+    from sklearn_meta.runtime.config import CVFold
 
 
 @dataclass

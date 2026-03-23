@@ -5,30 +5,38 @@ A flexible meta-learning library for tuning and training sklearn-compatible ML m
 with arbitrary dependencies (stacking, feature chains, conditional execution).
 """
 
-from sklearn_meta.api import GraphBuilder
-from sklearn_meta.core.data.context import DataContext
-from sklearn_meta.core.data.cv import CVConfig, CVFold, NestedCVFold
-from sklearn_meta.core.data.manager import DataManager
-from sklearn_meta.core.model.node import ModelNode, OutputType
-from sklearn_meta.core.model.graph import ModelGraph
-from sklearn_meta.core.model.dependency import DependencyType, DependencyEdge
-from sklearn_meta.core.model.distillation import DistillationConfig
-from sklearn_meta.core.tuning.orchestrator import (
-    FittedGraph,
-    FittedNode,
-    RunMetadata,
-    TuningOrchestrator,
+# Spec
+from sklearn_meta.spec.graph import GraphSpec
+from sklearn_meta.spec.node import NodeSpec, OutputType
+from sklearn_meta.spec.dependency import DependencyType, DependencyEdge
+from sklearn_meta.spec.distillation import DistillationConfig
+from sklearn_meta.spec.builder import GraphBuilder
+
+# Data
+from sklearn_meta.data.record import DatasetRecord
+from sklearn_meta.data.view import DataView
+
+# Runtime
+from sklearn_meta.runtime.config import (
+    RunConfig,
     TuningConfig,
+    CVConfig,
+    CVStrategy,
+    FeatureSelectionConfig,
+    RunConfigBuilder,
 )
-from sklearn_meta.core.tuning.strategy import OptimizationStrategy
+from sklearn_meta.runtime.services import RuntimeServices
+
+# Engine
+from sklearn_meta.engine.runner import GraphRunner
+
+# Artifacts
+from sklearn_meta.artifacts.training import TrainingRun, NodeRunResult
+from sklearn_meta.artifacts.inference import InferenceGraph
+
+# Reusable (unchanged)
 from sklearn_meta.search.space import SearchSpace
 from sklearn_meta.search.backends.optuna import OptunaBackend
-from sklearn_meta.selection.selector import FeatureSelector, FeatureSelectionConfig
-from sklearn_meta.persistence.cache import FitCache
-from sklearn_meta.audit.logger import AuditLogger
-
-# Meta-learning components
-from sklearn_meta.meta.correlation import CorrelationAnalyzer, HyperparameterCorrelation
 from sklearn_meta.meta.reparameterization import (
     Reparameterization,
     LogProductReparameterization,
@@ -37,42 +45,54 @@ from sklearn_meta.meta.reparameterization import (
     ReparameterizedSpace,
 )
 from sklearn_meta.meta.prebaked import get_prebaked_reparameterization
+from sklearn_meta.meta.correlation import CorrelationAnalyzer, HyperparameterCorrelation
+from sklearn_meta.audit.logger import AuditLogger
+from sklearn_meta.persistence.cache import FitCache
+
 
 __version__ = "0.1.0"
 
+
+def fit(
+    graph: GraphSpec,
+    data: DataView,
+    config: RunConfig,
+    services: RuntimeServices | None = None,
+) -> TrainingRun:
+    """Convenience function: fit a graph with config and optional services."""
+    services = services or RuntimeServices.default()
+    return GraphRunner(services).fit(graph, data, config)
+
+
 __all__ = [
-    # API
-    "GraphBuilder",
-    # Data
-    "DataContext",
-    "CVConfig",
-    "CVFold",
-    "NestedCVFold",
-    "DataManager",
-    # Model
-    "ModelNode",
-    "ModelGraph",
+    # Spec
+    "GraphSpec",
+    "NodeSpec",
     "OutputType",
     "DependencyType",
     "DependencyEdge",
     "DistillationConfig",
-    # Tuning
-    "FittedGraph",
-    "FittedNode",
-    "RunMetadata",
-    "TuningOrchestrator",
+    "GraphBuilder",
+    # Data
+    "DatasetRecord",
+    "DataView",
+    # Runtime
+    "RunConfig",
     "TuningConfig",
-    "OptimizationStrategy",
+    "CVConfig",
+    "CVStrategy",
+    "FeatureSelectionConfig",
+    "RunConfigBuilder",
+    "RuntimeServices",
+    # Engine
+    "GraphRunner",
+    # Artifacts
+    "TrainingRun",
+    "NodeRunResult",
+    "InferenceGraph",
     # Search
     "SearchSpace",
     "OptunaBackend",
-    # Selection
-    "FeatureSelector",
-    "FeatureSelectionConfig",
-    # Persistence
-    "FitCache",
-    # Audit
-    "AuditLogger",
     # Meta-learning
     "CorrelationAnalyzer",
     "HyperparameterCorrelation",
@@ -82,4 +102,10 @@ __all__ = [
     "RatioReparameterization",
     "ReparameterizedSpace",
     "get_prebaked_reparameterization",
+    # Persistence
+    "FitCache",
+    # Audit
+    "AuditLogger",
+    # Convenience
+    "fit",
 ]
