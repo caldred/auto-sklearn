@@ -1,7 +1,6 @@
 """Tests for Executor abstract base class."""
 
 import pytest
-from abc import ABC
 from concurrent.futures import Future
 
 from sklearn_meta.execution.base import Executor

@@ -8,7 +8,6 @@ from sklearn_meta.search.parameter import (
     ConditionalParameter,
     FloatParameter,
     IntParameter,
-    SearchParameter,
     parse_shorthand,
 )
 

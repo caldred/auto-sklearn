@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from sklearn_meta.engine.estimator_scaling import EstimatorScalingConfig
 from sklearn_meta.engine.strategy import OptimizationStrategy
 
 
@@ -235,13 +236,6 @@ class ReparameterizationConfig:
     enabled: bool = True
     use_prebaked: bool = True
     custom_reparameterizations: tuple = ()
-
-
-# ---------------------------------------------------------------------------
-# Estimator scaling config (re-exported from engine)
-# ---------------------------------------------------------------------------
-
-from sklearn_meta.engine.estimator_scaling import EstimatorScalingConfig
 
 
 # ---------------------------------------------------------------------------

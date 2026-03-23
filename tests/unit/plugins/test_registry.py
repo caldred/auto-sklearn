@@ -167,7 +167,6 @@ class TestPluginRegistry:
 
         result = registry.get_plugins_for(EstimatorA)
 
-        names = [p.name for p in result]
         # All are DummyPluginAll but registered with different names
         # The registry stores them in order
         assert len(result) == 3

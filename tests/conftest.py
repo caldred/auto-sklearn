@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 import pytest
 from sklearn.datasets import make_classification, make_regression
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
 

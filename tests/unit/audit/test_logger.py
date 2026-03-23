@@ -3,8 +3,6 @@
 import pytest
 import json
 import logging
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock
 
 from sklearn_meta.audit.logger import AuditLogger, FoldLog, TrialLog
@@ -105,7 +103,7 @@ class TestAuditLoggerInit:
     def test_creates_log_directory(self, tmp_path):
         """Verify log directory is created."""
         log_file = tmp_path / "subdir" / "test.log"
-        logger = AuditLogger(log_file=str(log_file))
+        AuditLogger(log_file=str(log_file))
 
         assert log_file.parent.exists()
 

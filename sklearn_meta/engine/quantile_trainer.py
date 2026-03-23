@@ -13,7 +13,7 @@ from sklearn_meta.data.view import DataView
 from sklearn_meta.engine._metrics import pinball_loss, log_feature_selection
 from sklearn_meta.engine.cv import CVEngine
 from sklearn_meta.engine.selection import FeatureSelectionService
-from sklearn_meta.runtime.config import CVResult, FoldResult, RunConfig
+from sklearn_meta.runtime.config import FoldResult, RunConfig
 from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.spec.quantile import QuantileNodeSpec
 

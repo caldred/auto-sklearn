@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Protocol, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    import pandas as pd
+    pass
 
 logger = logging.getLogger(__name__)
 

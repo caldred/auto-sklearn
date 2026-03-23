@@ -1,6 +1,5 @@
 """Tests for pre-baked reparameterizations."""
 
-import pytest
 
 from sklearn_meta.meta.prebaked import (
     PREBAKED_REGISTRY,
@@ -195,7 +194,6 @@ class TestSuggestReparameterizations:
         suggestions = suggest_reparameterizations(XGBClassifier, param_names)
 
         # Should have non-applicable suggestion with missing info
-        not_applicable = [s for s in suggestions if not s.get("applies")]
         # Some might have missing params indicated
         assert isinstance(suggestions, list)
 

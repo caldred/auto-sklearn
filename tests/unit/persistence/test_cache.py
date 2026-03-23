@@ -1,15 +1,8 @@
 """Tests for FitCache."""
 
-import pytest
-import json
-import pickle
-import tempfile
-import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
-import pandas as pd
 
 from sklearn_meta.persistence.cache import FitCache, CacheEntry
 
@@ -65,7 +58,7 @@ class TestFitCacheInit:
     def test_creates_directory(self, tmp_path):
         """Verify cache directory is created."""
         cache_dir = tmp_path / "new_cache"
-        cache = FitCache(cache_dir=str(cache_dir))
+        FitCache(cache_dir=str(cache_dir))
 
         assert cache_dir.exists()
 
@@ -395,7 +388,6 @@ class TestFitCacheSizeLimit:
             cache.put(f"key_{i}", model)
 
         # Some should have been evicted
-        disk_files = list(tmp_path.glob("*.pkl"))
         # Note: exact count depends on model size and eviction strategy
 
 

@@ -1,7 +1,6 @@
 """Integration tests for parallel execution."""
 
 import pytest
-import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -11,7 +10,6 @@ from sklearn_meta.runtime.config import CVConfig, CVStrategy, RunConfig, TuningC
 from sklearn_meta.engine.runner import GraphRunner
 from sklearn_meta.engine.strategy import OptimizationStrategy
 from sklearn_meta.runtime.services import RuntimeServices
-from sklearn_meta.spec.builder import GraphBuilder
 from sklearn_meta.spec.graph import GraphSpec
 from sklearn_meta.spec.node import NodeSpec, OutputType
 from sklearn_meta.spec.dependency import DependencyEdge, DependencyType

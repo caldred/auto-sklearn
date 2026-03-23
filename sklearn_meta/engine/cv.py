@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from sklearn.model_selection import (
@@ -23,7 +23,6 @@ from sklearn_meta.runtime.config import (
     CVResult,
     CVStrategy,
     FoldResult,
-    NestedCVFold,
 )
 
 logger = logging.getLogger(__name__)

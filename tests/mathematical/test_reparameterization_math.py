@@ -2,7 +2,6 @@
 
 import pytest
 import numpy as np
-from scipy import stats
 
 from sklearn_meta.meta.reparameterization import (
     LinearReparameterization,

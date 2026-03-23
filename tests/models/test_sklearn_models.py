@@ -22,7 +22,6 @@ from sklearn.tree import DecisionTreeClassifier
 
 from sklearn_meta.data.view import DataView
 from sklearn_meta.runtime.config import CVConfig, CVStrategy, RunConfig, TuningConfig
-from sklearn_meta.engine.cv import CVEngine
 from sklearn_meta.spec.node import NodeSpec, OutputType
 from sklearn_meta.spec.graph import GraphSpec
 from sklearn_meta.engine.runner import GraphRunner

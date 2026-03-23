@@ -6,7 +6,6 @@ import pandas as pd
 
 from sklearn_meta.data.view import DataView
 from sklearn_meta.runtime.config import CVConfig, CVStrategy, RunConfig, TuningConfig, FeatureSelectionConfig
-from sklearn_meta.engine.cv import CVEngine
 from sklearn_meta.spec.quantile import (
     JointQuantileConfig,
     JointQuantileGraphSpec,
@@ -15,7 +14,7 @@ from sklearn_meta.spec.quantile import (
 )
 from sklearn_meta.artifacts.inference import JointQuantileInferenceGraph, QuantileFittedNode
 from sklearn_meta.artifacts.training import QuantileNodeRunResult
-from sklearn_meta.spec.quantile_sampler import QuantileSampler, SamplingStrategy
+from sklearn_meta.spec.quantile_sampler import QuantileSampler
 from sklearn_meta.engine.runner import GraphRunner
 from sklearn_meta.engine.strategy import OptimizationStrategy
 from sklearn_meta.runtime.services import RuntimeServices

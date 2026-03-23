@@ -12,9 +12,7 @@ from sklearn_meta.engine.runner import GraphRunner
 from sklearn_meta.engine.strategy import OptimizationStrategy
 from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.spec.builder import GraphBuilder
-from sklearn_meta.spec.graph import GraphSpec
-from sklearn_meta.spec.node import NodeSpec, OutputType
-from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
+from sklearn_meta.spec.node import OutputType
 
 
 # =============================================================================

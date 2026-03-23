@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, Iterator, List, Optional, Set
+from typing import Dict, Iterator, List, Set
 
 from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
 from sklearn_meta.spec.node import NodeSpec

@@ -1,12 +1,9 @@
 """Tests for SearchSpace."""
 
-import pytest
-import numpy as np
 
 from sklearn_meta.search.space import SearchSpace
 from sklearn_meta.search.parameter import (
     CategoricalParameter,
-    ConditionalParameter,
     FloatParameter,
     IntParameter,
 )

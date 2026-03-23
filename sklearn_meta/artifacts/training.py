@@ -67,6 +67,34 @@ class TrainingRun:
         from sklearn_meta.artifacts.compiler import InferenceCompiler
         return InferenceCompiler.compile(self)
 
+    def get_node(self, node_name: str) -> NodeRunResult:
+        """Return a fitted node result by node name."""
+        try:
+            return self.node_results[node_name]
+        except KeyError as exc:
+            raise KeyError(f"Node '{node_name}' not found in training run") from exc
+
+    def get_oof_predictions(self, node_name: str) -> np.ndarray:
+        """Return cached OOF predictions for a fitted node."""
+        return self.get_node(node_name).oof_predictions
+
+    @property
+    def fitted_nodes(self) -> Dict[str, NodeRunResult]:
+        """Convenience mapping of fitted nodes.
+
+        For joint quantile graphs, keys are property names to match downstream
+        usage. For all other graphs, this is equivalent to ``node_results``.
+        """
+        from sklearn_meta.spec.quantile import JointQuantileGraphSpec
+
+        if not isinstance(self.graph, JointQuantileGraphSpec):
+            return self.node_results
+
+        return {
+            prop_name: self.node_results[f"quantile_{prop_name}"]
+            for prop_name in self.graph.property_order
+        }
+
     def save(self, path, include_training_artifacts=True) -> None:
         # Use joblib for models, JSON manifest for metadata
         import joblib
@@ -236,7 +264,6 @@ class TrainingRun:
 
         # Load node results
         node_results: Dict[str, NodeRunResult] = {}
-        training_artifacts_available = bool(manifest.get("training_artifacts_included", False))
 
         for node_name, node_meta in manifest["fitted_nodes"].items():
             n_folds = node_meta["n_folds"]

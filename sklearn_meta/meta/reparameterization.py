@@ -19,14 +19,13 @@ We get a more orthogonal search space that's easier to optimize.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 
 if TYPE_CHECKING:
     from sklearn_meta.search.space import SearchSpace
-    from sklearn_meta.search.parameter import SearchParameter
 
 
 @dataclass

@@ -8,7 +8,6 @@ from sklearn_meta.spec.quantile_sampler import (
     LinearInterpolationSampler,
     ParametricSampler,
     QuantileSampler,
-    QuantileSamplerBase,
     SamplingStrategy,
 )
 

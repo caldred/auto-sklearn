@@ -2,13 +2,11 @@
 
 import pytest
 import numpy as np
-import pandas as pd
-from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 
 from sklearn_meta.data.view import DataView
-from sklearn_meta.runtime.config import CVConfig, CVFold, CVStrategy, FoldResult
+from sklearn_meta.runtime.config import CVConfig, CVStrategy, FoldResult
 from sklearn_meta.engine.cv import CVEngine
 
 
@@ -123,7 +121,7 @@ class TestOOFFromValOnly:
             # Train indices should NOT have this fold's predictions
             # (they should have predictions from other folds)
             assert not np.all(train_oof_values == fold_value), (
-                f"Train indices have predictions from same fold (data leakage)"
+                "Train indices have predictions from same fold (data leakage)"
             )
 
 

@@ -11,6 +11,13 @@ from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 import optuna
 from optuna.samplers import TPESampler
 
+from sklearn_meta.search.backends.base import (
+    OptimizationResult,
+    SearchBackend,
+    TrialResult,
+    TrialState,
+)
+
 
 class _FloatPrecisionFormatter(logging.Formatter):
     """Formatter that truncates floats in Optuna log messages.
@@ -55,13 +62,6 @@ class _FloatPrecisionFormatter(logging.Formatter):
                 + self._truncate(rest, self.param_precision)
             )
         return self._truncate(formatted, self.score_precision)
-
-from sklearn_meta.search.backends.base import (
-    OptimizationResult,
-    SearchBackend,
-    TrialResult,
-    TrialState,
-)
 
 if TYPE_CHECKING:
     from sklearn_meta.search.space import SearchSpace

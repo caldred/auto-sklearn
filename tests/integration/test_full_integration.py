@@ -19,10 +19,8 @@ from sklearn_meta.runtime.config import (
     CVConfig, CVStrategy, FeatureSelectionConfig, ReparameterizationConfig,
     RunConfig, TuningConfig,
 )
-from sklearn_meta.engine.cv import CVEngine
 from sklearn_meta.spec.graph import GraphSpec
-from sklearn_meta.spec.node import NodeSpec, OutputType
-from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
+from sklearn_meta.spec.node import NodeSpec
 from sklearn_meta.engine.runner import GraphRunner
 from sklearn_meta.engine.strategy import OptimizationStrategy
 from sklearn_meta.runtime.services import RuntimeServices

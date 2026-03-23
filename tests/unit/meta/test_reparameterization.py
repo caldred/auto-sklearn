@@ -7,7 +7,6 @@ from sklearn_meta.meta.reparameterization import (
     LinearReparameterization,
     LogProductReparameterization,
     RatioReparameterization,
-    ReparameterizationResult,
     ReparameterizedSpace,
 )
 from sklearn_meta.search.space import SearchSpace

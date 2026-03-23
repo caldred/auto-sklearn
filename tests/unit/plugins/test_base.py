@@ -1,7 +1,7 @@
 """Tests for ModelPlugin and CompositePlugin base classes."""
 
 import pytest
-from typing import Any, Dict, Type
+from typing import Type
 
 from sklearn_meta.plugins.base import ModelPlugin, CompositePlugin
 

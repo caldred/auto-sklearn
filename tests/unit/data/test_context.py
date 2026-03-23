@@ -183,7 +183,7 @@ class TestDataViewOverlays:
         X, y = classification_data
         view = DataView.from_Xy(X, y)
 
-        new_view = view.with_overlay("extra", np.zeros(len(X)))
+        view.with_overlay("extra", np.zeros(len(X)))
 
         assert "extra" not in view.overlays
 

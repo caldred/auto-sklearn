@@ -14,7 +14,7 @@ The pre-baked reparameterizations are designed to:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Type
 
 from sklearn_meta.meta.reparameterization import (
     LinearReparameterization,
@@ -22,6 +22,9 @@ from sklearn_meta.meta.reparameterization import (
     RatioReparameterization,
     Reparameterization,
 )
+
+if TYPE_CHECKING:
+    from sklearn_meta.meta.reparameterization import ReparameterizedSpace
 
 
 @dataclass
@@ -428,7 +431,7 @@ def create_reparameterized_space(
     original_space,
     model_class: Type,
     custom_reparams: Optional[List[Reparameterization]] = None,
-) -> "ReparameterizedSpace":
+) -> ReparameterizedSpace:
     """
     Create a reparameterized search space for a model.
 

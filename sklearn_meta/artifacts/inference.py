@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
@@ -170,6 +170,38 @@ class JointQuantileInferenceGraph:
     fitted_nodes: Dict[str, QuantileFittedNode]  # property -> fitted node
     quantile_sampler: QuantileSampler  # from sklearn_meta.spec.quantile_sampler
 
+    @property
+    def property_order(self) -> List[str]:
+        """Convenience access to the graph property order."""
+        return self.graph.property_order
+
+    def get_property_quantiles(
+        self,
+        X: pd.DataFrame,
+        property_name: str,
+    ) -> np.ndarray:
+        """Return all quantile predictions for a single property.
+
+        Downstream properties are conditioned on the median predictions of all
+        upstream properties, matching the sequential joint-inference flow.
+        """
+        X_augmented = X.copy()
+
+        for current_property in self.graph.property_order:
+            fitted_node = self.fitted_nodes[current_property]
+            quantile_preds = fitted_node.predict_quantiles(X_augmented)
+
+            if current_property == property_name:
+                return quantile_preds
+
+            medians = self.quantile_sampler.get_median(
+                fitted_node.quantile_levels,
+                quantile_preds,
+            )
+            X_augmented[f"cond_{current_property}"] = medians
+
+        raise KeyError(f"Property '{property_name}' not found in joint quantile graph")
+
     def sample_joint(self, X: pd.DataFrame, n_samples: Optional[int] = None) -> Dict[str, np.ndarray]:
         """
         Sample from the joint distribution of all properties.
@@ -246,7 +278,7 @@ class JointQuantileInferenceGraph:
     def save(self, path) -> None:
         import joblib
         from pathlib import Path
-        from sklearn_meta.persistence.manifest import write_manifest, to_json_safe
+        from sklearn_meta.persistence.manifest import write_manifest
 
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)

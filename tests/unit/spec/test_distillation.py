@@ -1,6 +1,5 @@
 """Tests for knowledge distillation module."""
 
-import inspect
 
 import numpy as np
 import pytest

@@ -7,7 +7,6 @@ from sklearn.linear_model import Ridge
 from sklearn_meta.artifacts.training import (
     TrainingRun,
     NodeRunResult,
-    QuantileNodeRunResult,
     RunMetadata,
 )
 from sklearn_meta.runtime.config import (

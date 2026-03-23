@@ -6,7 +6,7 @@ from sklearn.linear_model import LogisticRegression
 
 from sklearn_meta.spec.graph import CycleError, GraphSpec
 from sklearn_meta.spec.node import NodeSpec
-from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
+from sklearn_meta.spec.dependency import DependencyEdge
 
 
 class TestGraphSpecBasics:

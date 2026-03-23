@@ -11,6 +11,12 @@ from sklearn_meta.spec.node import NodeSpec, OutputType
 from sklearn_meta.spec.dependency import DependencyType, DependencyEdge
 from sklearn_meta.spec.distillation import DistillationConfig
 from sklearn_meta.spec.builder import GraphBuilder
+from sklearn_meta.spec.quantile import (
+    JointQuantileConfig,
+    JointQuantileGraphSpec,
+    OrderConstraint,
+    QuantileScalingConfig,
+)
 
 # Data
 from sklearn_meta.data.record import DatasetRecord
@@ -32,7 +38,7 @@ from sklearn_meta.engine.runner import GraphRunner
 
 # Artifacts
 from sklearn_meta.artifacts.training import TrainingRun, NodeRunResult
-from sklearn_meta.artifacts.inference import InferenceGraph
+from sklearn_meta.artifacts.inference import InferenceGraph, JointQuantileInferenceGraph
 
 # Reusable (unchanged)
 from sklearn_meta.search.space import SearchSpace
@@ -50,7 +56,7 @@ from sklearn_meta.audit.logger import AuditLogger
 from sklearn_meta.persistence.cache import FitCache
 
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def fit(
@@ -73,6 +79,10 @@ __all__ = [
     "DependencyEdge",
     "DistillationConfig",
     "GraphBuilder",
+    "JointQuantileConfig",
+    "JointQuantileGraphSpec",
+    "OrderConstraint",
+    "QuantileScalingConfig",
     # Data
     "DatasetRecord",
     "DataView",
@@ -90,6 +100,7 @@ __all__ = [
     "TrainingRun",
     "NodeRunResult",
     "InferenceGraph",
+    "JointQuantileInferenceGraph",
     # Search
     "SearchSpace",
     "OptunaBackend",

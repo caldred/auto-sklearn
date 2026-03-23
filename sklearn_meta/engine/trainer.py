@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics import get_scorer
 
-from sklearn_meta.data.batch import MaterializedBatch
 from sklearn_meta.data.view import DataView
 from sklearn_meta.engine._metrics import log_feature_selection
 from sklearn_meta.engine.cv import CVEngine
@@ -32,7 +31,6 @@ from sklearn_meta.spec.node import NodeSpec
 if TYPE_CHECKING:
     from typing import Protocol, runtime_checkable
 
-    from sklearn_meta.plugins.registry import PluginRegistry
     from sklearn_meta.runtime.services import RuntimeServices
 else:
     from typing import runtime_checkable

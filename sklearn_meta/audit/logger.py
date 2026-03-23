@@ -9,7 +9,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TextIO, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sklearn_meta.runtime.config import CVFold
@@ -228,13 +228,13 @@ class AuditLogger:
         """
         logs = self._fold_logs
         if node_name:
-            logs = [l for l in logs if l.node_name == node_name]
+            logs = [log for log in logs if log.node_name == node_name]
 
         if not logs:
             return {}
 
-        scores = [l.score for l in logs]
-        times = [l.fit_time for l in logs]
+        scores = [log.score for log in logs]
+        times = [log.fit_time for log in logs]
 
         return {
             "n_folds": len(logs),
@@ -259,13 +259,13 @@ class AuditLogger:
         """
         logs = self._trial_logs
         if node_name:
-            logs = [l for l in logs if l.node_name == node_name]
+            logs = [log for log in logs if log.node_name == node_name]
 
         if not logs:
             return {}
 
-        scores = [l.score for l in logs]
-        durations = [l.duration for l in logs]
+        scores = [log.score for log in logs]
+        durations = [log.duration for log in logs]
 
         return {
             "n_trials": len(logs),
@@ -284,27 +284,27 @@ class AuditLogger:
         export_data = {
             "fold_logs": [
                 {
-                    "node_name": l.node_name,
-                    "fold_idx": l.fold_idx,
-                    "repeat_idx": l.repeat_idx,
-                    "score": l.score,
-                    "fit_time": l.fit_time,
-                    "params": l.params,
-                    "timestamp": l.timestamp,
-                    "extra": l.extra,
+                    "node_name": log.node_name,
+                    "fold_idx": log.fold_idx,
+                    "repeat_idx": log.repeat_idx,
+                    "score": log.score,
+                    "fit_time": log.fit_time,
+                    "params": log.params,
+                    "timestamp": log.timestamp,
+                    "extra": log.extra,
                 }
-                for l in self._fold_logs
+                for log in self._fold_logs
             ],
             "trial_logs": [
                 {
-                    "node_name": l.node_name,
-                    "trial_id": l.trial_id,
-                    "params": l.params,
-                    "score": l.score,
-                    "duration": l.duration,
-                    "timestamp": l.timestamp,
+                    "node_name": log.node_name,
+                    "trial_id": log.trial_id,
+                    "params": log.params,
+                    "score": log.score,
+                    "duration": log.duration,
+                    "timestamp": log.timestamp,
                 }
-                for l in self._trial_logs
+                for log in self._trial_logs
             ],
         }
 

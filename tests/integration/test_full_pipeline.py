@@ -5,12 +5,10 @@ import numpy as np
 import pandas as pd
 from sklearn.datasets import make_classification, make_regression
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import LogisticRegression, Ridge
-from sklearn.metrics import accuracy_score, mean_squared_error
+from sklearn.linear_model import LogisticRegression
 
 from sklearn_meta.data.view import DataView
 from sklearn_meta.runtime.config import CVConfig, CVStrategy, RunConfig, TuningConfig
-from sklearn_meta.engine.cv import CVEngine
 from sklearn_meta.spec.graph import GraphSpec
 from sklearn_meta.spec.node import NodeSpec, OutputType
 from sklearn_meta.spec.dependency import DependencyEdge, DependencyType

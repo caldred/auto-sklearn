@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -358,7 +358,6 @@ class OrderSearchPlugin(ModelPlugin):
 
         # Respect fixed positions
         fixed = constraints.fixed_positions
-        free_positions = [i for i in range(len(props)) if i not in fixed.values()]
         free_props = [p for p in props if p not in fixed]
 
         # Shuffle free properties

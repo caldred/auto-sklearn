@@ -251,8 +251,8 @@ class TestConsistentSamplingPaths:
 
         # Sample from different quantile distributions
         levels = [0.1, 0.5, 0.9]
-        samples1 = sampler.sample_property("prop1", levels, np.array([10, 50, 90]))
-        samples2 = sampler.sample_property("prop2", levels, np.array([20, 60, 100]))
+        sampler.sample_property("prop1", levels, np.array([10, 50, 90]))
+        sampler.sample_property("prop2", levels, np.array([20, 60, 100]))
 
         # Uniforms should not have changed
         np.testing.assert_array_equal(sampler._uniform_samples, uniforms_original)

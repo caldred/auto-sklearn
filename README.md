@@ -5,7 +5,7 @@ A Python library for automated machine learning pipelines with hyperparameter op
 ## Installation
 
 ```bash
-pip install -e .
+python3 -m pip install -e .[dev]
 ```
 
 ### Optional Dependencies
@@ -15,6 +15,15 @@ pip install xgboost        # XGBoost support
 brew install libomp         # OpenMP on macOS (required for XGBoost)
 pip install lightgbm        # LightGBM support
 ```
+
+## Breaking Changes In 0.2.0
+
+`0.2.0` is intentionally breaking. The old `sklearn_meta.api` module and the
+`sklearn_meta.core.*` package tree were removed.
+
+Use the top-level `sklearn_meta` exports and the new `spec`, `data`, `runtime`,
+`engine`, and `artifacts` packages instead. See
+[docs/upgrading-to-0.2.md](docs/upgrading-to-0.2.md) for migration guidance.
 
 ## Table of Contents
 
@@ -906,14 +915,16 @@ sklearn_meta/
 ## Running Tests
 
 ```bash
-pip install pytest
+python3 -m pip install -e .[dev]
+
+# Lint
+python3 -m ruff check .
 
 # Run all tests
-pytest tests/ -v
+python3 -m pytest
 
-# Run with coverage
-pip install pytest-cov
-pytest tests/ --cov=sklearn_meta --cov-report=html
+# Build wheel and sdist
+python3 -m build --sdist --wheel
 ```
 
 ## License

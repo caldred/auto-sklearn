@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from sklearn_meta.data.record import DEFAULT_TARGET_KEY
 from sklearn_meta.data.view import DataView

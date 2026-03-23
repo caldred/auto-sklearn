@@ -8,11 +8,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Type, Union, TYPE_CHECKING
 
-from sklearn_meta.spec.dependency import DependencyEdge, DependencyType, ConditionalSampleConfig
+from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
 from sklearn_meta.spec.distillation import DistillationConfig
 from sklearn_meta.spec.graph import GraphSpec
 from sklearn_meta.spec.node import NodeSpec, OutputType
-from sklearn_meta.search.parameter import FloatParameter, IntParameter, CategoricalParameter
 
 if TYPE_CHECKING:
     from sklearn_meta.search.space import SearchSpace

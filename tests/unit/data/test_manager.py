@@ -1,11 +1,10 @@
 """Tests for CVEngine (formerly DataManager)."""
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from sklearn_meta.data.view import DataView
-from sklearn_meta.runtime.config import CVConfig, CVFold, CVStrategy, FoldResult
+from sklearn_meta.runtime.config import CVConfig, CVStrategy, FoldResult
 from sklearn_meta.engine.cv import CVEngine
 
 
@@ -53,7 +52,6 @@ class TestCVEngineCreateFolds:
         folds = cv_engine.create_folds(data_context)
 
         n_repeats = cv_config_repeated.n_repeats
-        n_splits = cv_config_repeated.n_splits
 
         for repeat in range(n_repeats):
             repeat_folds = [f for f in folds if f.repeat_idx == repeat]
@@ -168,18 +166,15 @@ class TestCVEngineRepeatedCV:
 
         n_splits = cv_config_repeated.n_splits
 
-        # Get first fold from each repeat
-        repeat_0_fold_0 = folds[0]
-        repeat_1_fold_0 = folds[n_splits]
-
         # The validation indices should be different
         # (with high probability for shuffled CV)
         if cv_config_repeated.shuffle:
-            val_0 = set(repeat_0_fold_0.val_indices)
-            val_1 = set(repeat_1_fold_0.val_indices)
-            # They might not be completely different, but shouldn't be identical
-            # unless random state produces same result
-            pass  # This is probabilistic
+            repeat_0_fold_0 = folds[0]
+            repeat_1_fold_0 = folds[n_splits]
+            assert not np.array_equal(
+                repeat_0_fold_0.val_indices,
+                repeat_1_fold_0.val_indices,
+            )
 
 
 class TestCVEngineSplitForFold:

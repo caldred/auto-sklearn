@@ -1,7 +1,6 @@
 """Tests for cross-validation configuration and fold management."""
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from sklearn_meta.runtime.config import (
@@ -22,7 +21,7 @@ class TestCVFold:
         train_indices = np.array([0, 1, 2, 3, 4])
         val_indices = np.array([5, 6, 7, 8, 9])
 
-        fold = CVFold(
+        CVFold(
             fold_idx=0,
             train_indices=train_indices,
             val_indices=val_indices,

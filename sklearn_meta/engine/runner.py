@@ -6,7 +6,7 @@ import datetime
 import hashlib
 import logging
 import time
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd

@@ -15,13 +15,17 @@ from sklearn_meta.artifacts.training import (
 )
 
 if TYPE_CHECKING:
-    from sklearn_meta.spec.quantile import JointQuantileGraphSpec, QuantileNodeSpec
-    from sklearn_meta.spec.quantile_sampler import QuantileSampler
+    pass
 
 
 class InferenceCompiler:
     @staticmethod
     def compile(run: TrainingRun) -> InferenceGraph:
+        from sklearn_meta.spec.quantile import JointQuantileGraphSpec
+
+        if isinstance(run.graph, JointQuantileGraphSpec):
+            return InferenceCompiler.compile_quantile(run)
+
         node_models: Dict[str, List[Any]] = {}
         selected_features: Dict[str, Optional[List[str]]] = {}
         node_params: Dict[str, Dict[str, Any]] = {}
@@ -39,7 +43,7 @@ class InferenceCompiler:
     @staticmethod
     def compile_quantile(run: TrainingRun) -> JointQuantileInferenceGraph:
         """Build a JointQuantileInferenceGraph from QuantileNodeRunResults in run.node_results."""
-        from sklearn_meta.spec.quantile import JointQuantileGraphSpec, QuantileNodeSpec
+        from sklearn_meta.spec.quantile import JointQuantileGraphSpec
 
         graph = run.graph
         if not isinstance(graph, JointQuantileGraphSpec):

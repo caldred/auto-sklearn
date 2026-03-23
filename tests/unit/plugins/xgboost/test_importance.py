@@ -1,9 +1,8 @@
 """Tests for XGBImportanceExtractor and XGBImportancePlugin."""
 
 import pytest
-import numpy as np
 import warnings
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from sklearn_meta.plugins.xgboost.importance import (
     XGBImportanceExtractor,

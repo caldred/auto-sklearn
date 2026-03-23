@@ -3,7 +3,6 @@
 import pytest
 import os
 from concurrent.futures import Future
-from unittest.mock import patch, MagicMock
 
 from sklearn_meta.execution.local import LocalExecutor, SequentialExecutor
 
@@ -318,13 +317,13 @@ class TestLocalExecutorParallelism:
         seq_executor = SequentialExecutor()
         seq_start = time.time()
         seq_result = seq_executor.map(slow_fn, list(range(10)))
-        seq_time = time.time() - seq_start
+        _ = time.time() - seq_start
 
         # Parallel with 2 workers
         par_executor = LocalExecutor(n_workers=2)
         par_start = time.time()
         par_result = par_executor.map(slow_fn, list(range(10)))
-        par_time = time.time() - par_start
+        _ = time.time() - par_start
         par_executor.shutdown()
 
         # Results should be the same

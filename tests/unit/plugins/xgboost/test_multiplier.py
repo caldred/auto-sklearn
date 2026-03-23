@@ -316,7 +316,6 @@ class TestXGBMultiplierPluginEvaluateParams:
     )
     def test_returns_score_on_success(self, classification_data):
         """Verify returns actual score on success."""
-        import pandas as pd
         from sklearn_meta.data.view import DataView
 
         X, y = classification_data
