@@ -5,6 +5,8 @@ A flexible meta-learning library for tuning and training sklearn-compatible ML m
 with arbitrary dependencies (stacking, feature chains, conditional execution).
 """
 
+from __future__ import annotations
+
 # Spec
 from sklearn_meta.spec.graph import GraphSpec
 from sklearn_meta.spec.node import NodeSpec, OutputType
@@ -35,6 +37,19 @@ from sklearn_meta.runtime.services import RuntimeServices
 
 # Engine
 from sklearn_meta.engine.runner import GraphRunner
+from sklearn_meta.execution.training import (
+    DispatchListener,
+    DispatchWarning,
+    LocalTrainingDispatcher,
+    NodeTrainingJob,
+    NodeTrainingJobBuilder,
+    NodeTrainingJobRunner,
+    NodeTrainingResult,
+    NodeTrainingResultReconstructor,
+    SchemaVersionError,
+    TrainingDispatcher,
+    validate_dispatchable,
+)
 
 # Artifacts
 from sklearn_meta.artifacts.training import TrainingRun, NodeRunResult
@@ -89,7 +104,7 @@ def fit(
 @typing.overload
 def fit(
     graph: GraphSpec,
-    X: pd.DataFrame,
+    X: typing.Any,
     y: typing.Any,
     config: RunConfig,
     *,
@@ -98,9 +113,38 @@ def fit(
 ) -> TrainingRun: ...
 
 
+def _coerce_feature_frame(X: typing.Any) -> pd.DataFrame:
+    """Coerce array-like feature inputs into a DataFrame."""
+    if isinstance(X, pd.DataFrame):
+        return X
+    if isinstance(X, (str, bytes)):
+        raise TypeError(
+            "Expected a DataView or array-like features as the second argument, "
+            f"got {type(X).__name__}."
+        )
+
+    try:
+        frame = pd.DataFrame(X)
+    except Exception as exc:  # pragma: no cover - defensive
+        raise TypeError(
+            "Expected a DataView or array-like features as the second argument, "
+            f"got {type(X).__name__}."
+        ) from exc
+
+    if frame.shape[1] == 0:
+        raise TypeError(
+            "Expected a DataView or 2D array-like features as the second argument, "
+            f"got {type(X).__name__}."
+        )
+
+    if isinstance(frame.columns, pd.RangeIndex):
+        frame.columns = [f"x{i}" for i in range(frame.shape[1])]
+    return frame
+
+
 def fit(
     graph: GraphSpec,
-    data_or_X: DataView | pd.DataFrame,
+    data_or_X: DataView | typing.Any,
     y_or_config: RunConfig | typing.Any = None,
     config: RunConfig | RuntimeServices | None = None,
     *,
@@ -110,7 +154,8 @@ def fit(
 ) -> TrainingRun:
     """Convenience function: fit a graph on data with the given config.
 
-    Accepts either a pre-built :class:`DataView` **or** raw ``X``/``y``::
+    Accepts either a pre-built :class:`DataView` **or** raw array-like
+    ``X``/``y``::
 
         # With DataView (original)
         fit(graph, data_view, config)
@@ -139,20 +184,17 @@ def fit(
                 "groups and **aux keyword arguments are only supported when "
                 "passing raw X/y.  Use DataView.from_Xy() to bind groups."
             )
-    elif isinstance(data_or_X, pd.DataFrame):
-        resolved_data = DataView.from_Xy(data_or_X, y=y_or_config, groups=groups, **aux)
+    else:
+        resolved_X = _coerce_feature_frame(data_or_X)
+        resolved_data = DataView.from_Xy(
+            resolved_X, y=y_or_config, groups=groups, **aux,
+        )
         if not isinstance(config, RunConfig):
             raise TypeError(
                 "When passing raw X/y, the fourth argument must be a RunConfig."
             )
         resolved_config = config
         resolved_services = services
-    else:
-        raise TypeError(
-            f"Expected a DataView or pandas DataFrame as the second argument, "
-            f"got {type(data_or_X).__name__}.  "
-            f"Wrap numpy arrays with pd.DataFrame(X) first."
-        )
 
     resolved_services = resolved_services or RuntimeServices.default()
     return GraphRunner(resolved_services).fit(graph, resolved_data, resolved_config)
@@ -184,6 +226,17 @@ __all__ = [
     "RuntimeServices",
     # Engine
     "GraphRunner",
+    "NodeTrainingJob",
+    "NodeTrainingResult",
+    "NodeTrainingJobBuilder",
+    "NodeTrainingJobRunner",
+    "NodeTrainingResultReconstructor",
+    "TrainingDispatcher",
+    "LocalTrainingDispatcher",
+    "DispatchListener",
+    "DispatchWarning",
+    "SchemaVersionError",
+    "validate_dispatchable",
     # Artifacts
     "TrainingRun",
     "NodeRunResult",

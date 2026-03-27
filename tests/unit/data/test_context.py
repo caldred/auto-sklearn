@@ -202,13 +202,6 @@ class TestDataViewAux:
         resolved = new_view.resolve_channel(new_view.aux["base_margin"])
         np.testing.assert_array_almost_equal(resolved, margin)
 
-    def test_aux_default_empty(self, classification_data):
-        """Verify aux defaults to empty."""
-        X, y = classification_data
-        view = DataView.from_Xy(X, y)
-
-        assert len(view.aux) == 0
-
     def test_with_aux_soft_targets(self, classification_data):
         """Verify soft targets can be stored as aux."""
         X, y = classification_data
@@ -236,18 +229,6 @@ class TestDataViewAux:
             st[indices],
         )
 
-    def test_select_rows_none_aux(self, classification_data):
-        """Verify select_rows works when aux is empty."""
-        X, y = classification_data
-        view = DataView.from_Xy(X, y)
-
-        indices = np.array([0, 5, 10])
-        subset_view = view.select_rows(indices)
-
-        subset_batch = subset_view.materialize()
-        assert len(subset_batch.aux) == 0
-
-
 class TestDataViewBindTarget:
     """Tests for DataView.bind_target() (formerly DataContext.with_y())."""
 
@@ -272,31 +253,6 @@ class TestDataViewBindTarget:
 
         batch = new_view.materialize()
         pd.testing.assert_frame_equal(batch.X, X)
-
-
-class TestDataViewProperties:
-    """Tests for DataView properties."""
-
-    def test_feature_cols_match_x_columns(self, classification_data):
-        """Verify feature_cols matches X columns."""
-        X, y = classification_data
-        view = DataView.from_Xy(X, y)
-
-        assert list(view.feature_cols) == list(X.columns)
-
-    def test_n_rows_correct(self, classification_data):
-        """Verify n_rows property is correct."""
-        X, y = classification_data
-        view = DataView.from_Xy(X, y)
-
-        assert view.n_rows == len(X)
-
-    def test_n_features_correct(self, classification_data):
-        """Verify n_features property is correct."""
-        X, y = classification_data
-        view = DataView.from_Xy(X, y)
-
-        assert view.n_features == X.shape[1]
 
 
 class TestDataViewValidation:

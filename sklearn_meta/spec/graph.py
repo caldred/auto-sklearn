@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from typing import Dict, Iterator, List, Set
+from collections import defaultdict, deque
+from typing import Callable, Dict, Iterator, List, Optional, Set
 
 from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
 from sklearn_meta.spec.node import NodeSpec
@@ -145,11 +145,11 @@ class GraphSpec:
             in_degree[edge.target] += 1
 
         # Start with nodes that have no dependencies
-        queue = [name for name, degree in in_degree.items() if degree == 0]
+        queue = deque(name for name, degree in in_degree.items() if degree == 0)
         result = []
 
         while queue:
-            node = queue.pop(0)
+            node = queue.popleft()
             result.append(node)
 
             for edge in self._adjacency[node]:
@@ -162,6 +162,35 @@ class GraphSpec:
 
         return result
 
+    def _compute_layers(
+        self,
+        edge_filter: Optional[Callable[[DependencyEdge], bool]] = None,
+    ) -> List[List[str]]:
+        """Compute layers with an optional edge filter.
+
+        Args:
+            edge_filter: When provided, only edges for which the callable
+                returns ``True`` are considered when assigning layers.
+        """
+        node_layers: Dict[str, int] = {}
+
+        for node_name in self.topological_order():
+            upstream = self.get_upstream(node_name)
+            if edge_filter is not None:
+                upstream = [e for e in upstream if edge_filter(e)]
+            if not upstream:
+                node_layers[node_name] = 0
+            else:
+                max_upstream_layer = max(node_layers[e.source] for e in upstream)
+                node_layers[node_name] = max_upstream_layer + 1
+
+        max_layer = max(node_layers.values()) if node_layers else -1
+        layers: List[List[str]] = [[] for _ in range(max_layer + 1)]
+        for node_name, layer in node_layers.items():
+            layers[layer].append(node_name)
+
+        return layers
+
     def get_layers(self) -> List[List[str]]:
         """
         Get nodes organized into layers for layer-wise optimization.
@@ -172,24 +201,17 @@ class GraphSpec:
         Returns:
             List of layers, where each layer is a list of node names.
         """
-        # Calculate the layer (longest path from any source) for each node
-        node_layers: Dict[str, int] = {}
+        return self._compute_layers()
 
-        for node_name in self.topological_order():
-            upstream = self.get_upstream(node_name)
-            if not upstream:
-                node_layers[node_name] = 0
-            else:
-                max_upstream_layer = max(node_layers[e.source] for e in upstream)
-                node_layers[node_name] = max_upstream_layer + 1
+    def get_training_layers(self) -> List[List[str]]:
+        """
+        Get nodes organized into fit-time layers.
 
-        # Group nodes by layer
-        max_layer = max(node_layers.values()) if node_layers else -1
-        layers: List[List[str]] = [[] for _ in range(max_layer + 1)]
-        for node_name, layer in node_layers.items():
-            layers[layer].append(node_name)
-
-        return layers
+        Unlike :meth:`get_layers`, this ignores edges that do not block
+        training (for example, conditional-sample edges that use observed
+        values during training).
+        """
+        return self._compute_layers(edge_filter=lambda e: e.blocks_training())
 
     def get_root_nodes(self) -> List[str]:
         """Get nodes with no dependencies (layer 0)."""

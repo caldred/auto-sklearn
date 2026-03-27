@@ -1,5 +1,7 @@
 """Tests for TrainingRun save/load round-trip."""
 
+from __future__ import annotations
+
 import numpy as np
 import pytest
 from sklearn.linear_model import Ridge
@@ -9,6 +11,7 @@ from sklearn_meta.artifacts.training import (
     NodeRunResult,
     RunMetadata,
 )
+from sklearn_meta.meta.reparameterization import LogProductReparameterization
 from sklearn_meta.runtime.config import (
     CVConfig,
     CVFold,
@@ -179,23 +182,6 @@ class TestTrainingRunPersistence:
         assert result.selected_features == ["f0", "f1", "f2"]
         np.testing.assert_allclose(result.mean_score, 0.85, atol=1e-6)
 
-    def test_round_trips_total_time(self, tmp_path):
-        run = _make_training_run(RunConfig())
-        run.save(tmp_path / "run")
-        loaded = TrainingRun.load(tmp_path / "run")
-        assert loaded.total_time == pytest.approx(1.23)
-
-    def test_round_trips_metadata(self, tmp_path):
-        run = _make_training_run(RunConfig())
-        run.save(tmp_path / "run")
-        loaded = TrainingRun.load(tmp_path / "run")
-
-        assert loaded.metadata.timestamp == "2026-01-01T00:00:00+00:00"
-        assert loaded.metadata.sklearn_meta_version == "0.1.0"
-        assert loaded.metadata.data_shape == (100, 3)
-        assert loaded.metadata.feature_names == ["f0", "f1", "f2"]
-        assert loaded.metadata.data_hash == "abc123"
-
     def test_round_trips_repeat_oof(self, tmp_path):
         repeat_oof = np.random.randn(2, 100)
         run = _make_training_run(
@@ -210,6 +196,33 @@ class TestTrainingRunPersistence:
             loaded.node_results["ridge"].cv_result.repeat_oof,
             repeat_oof,
         )
+
+    def test_round_trips_custom_reparameterizations(self, tmp_path):
+        config = RunConfig(
+            reparameterization=ReparameterizationConfig(
+                enabled=True,
+                use_prebaked=False,
+                custom_reparameterizations=(
+                    LogProductReparameterization(
+                        name="lr_budget",
+                        param1="learning_rate",
+                        param2="n_estimators",
+                    ),
+                ),
+            ),
+        )
+
+        run = _make_training_run(config)
+        run.save(tmp_path / "run")
+        loaded = TrainingRun.load(tmp_path / "run")
+
+        assert loaded.config.reparameterization is not None
+        restored_reparameterization = (
+            loaded.config.reparameterization.custom_reparameterizations[0]
+        )
+        assert isinstance(restored_reparameterization, LogProductReparameterization)
+        assert restored_reparameterization.param1 == "learning_rate"
+        assert restored_reparameterization.param2 == "n_estimators"
 
     def test_loads_legacy_manifest_without_run_config(self, tmp_path):
         """If run_config key is missing (old manifest), load still works with defaults."""

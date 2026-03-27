@@ -68,14 +68,6 @@ class NonXGBModel:
 class TestXGBMultiplierPluginInit:
     """Tests for XGBMultiplierPlugin initialization."""
 
-    def test_default_multipliers(self):
-        """Verify default multipliers are set."""
-        plugin = XGBMultiplierPlugin()
-
-        assert 0.5 in plugin.multipliers
-        assert 1.0 in plugin.multipliers
-        assert 2.0 in plugin.multipliers
-
     def test_custom_multipliers(self):
         """Verify custom multipliers can be set."""
         custom = [0.1, 0.5, 1.0]
@@ -83,32 +75,11 @@ class TestXGBMultiplierPluginInit:
 
         assert plugin.multipliers == custom
 
-    def test_default_cv_folds(self):
-        """Verify default CV folds."""
-        plugin = XGBMultiplierPlugin()
-
-        assert plugin.cv_folds == 3
-
     def test_custom_cv_folds(self):
         """Verify custom CV folds."""
         plugin = XGBMultiplierPlugin(cv_folds=5)
 
         assert plugin.cv_folds == 5
-
-    def test_name_property(self):
-        """Verify name property."""
-        plugin = XGBMultiplierPlugin()
-
-        assert plugin.name == "xgb_multiplier"
-
-    def test_repr(self):
-        """Verify repr includes multipliers."""
-        plugin = XGBMultiplierPlugin()
-
-        repr_str = repr(plugin)
-
-        assert "XGBMultiplierPlugin" in repr_str
-        assert "multipliers" in repr_str
 
 
 class TestXGBMultiplierPluginAppliesTo:

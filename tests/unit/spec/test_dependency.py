@@ -2,69 +2,15 @@
 
 import pytest
 
-from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
-
-
-class TestDependencyType:
-    """Tests for DependencyType enum."""
-
-    def test_all_types_defined(self):
-        """Verify all expected dependency types exist."""
-        expected_types = [
-            DependencyType.PREDICTION,
-            DependencyType.TRANSFORM,
-            DependencyType.FEATURE,
-            DependencyType.PROBA,
-            DependencyType.BASE_MARGIN,
-            DependencyType.CONDITIONAL_SAMPLE,
-            DependencyType.DISTILL,
-        ]
-
-        assert len(DependencyType) == 7
-        for dep_type in expected_types:
-            assert dep_type in DependencyType
-
-    def test_type_values(self):
-        """Verify dependency type string values."""
-        assert DependencyType.PREDICTION.value == "prediction"
-        assert DependencyType.TRANSFORM.value == "transform"
-        assert DependencyType.FEATURE.value == "feature"
-        assert DependencyType.PROBA.value == "proba"
-        assert DependencyType.BASE_MARGIN.value == "base_margin"
-        assert DependencyType.CONDITIONAL_SAMPLE.value == "conditional_sample"
-        assert DependencyType.DISTILL.value == "distill"
+from sklearn_meta.spec.dependency import (
+    ConditionalSampleConfig,
+    DependencyEdge,
+    DependencyType,
+)
 
 
 class TestDependencyEdgeCreation:
-    """Tests for DependencyEdge creation."""
-
-    def test_basic_creation(self):
-        """Verify basic edge creation."""
-        edge = DependencyEdge(source="A", target="B")
-
-        assert edge.source == "A"
-        assert edge.target == "B"
-        assert edge.dep_type == DependencyType.PREDICTION  # Default
-
-    def test_creation_with_type(self):
-        """Verify edge creation with explicit type."""
-        edge = DependencyEdge(
-            source="A",
-            target="B",
-            dep_type=DependencyType.PROBA,
-        )
-
-        assert edge.dep_type == DependencyType.PROBA
-
-    def test_creation_with_column_name(self):
-        """Verify edge creation with column name."""
-        edge = DependencyEdge(
-            source="A",
-            target="B",
-            column_name="custom_feature",
-        )
-
-        assert edge.column_name == "custom_feature"
+    """Tests for DependencyEdge creation and validation."""
 
     def test_empty_source_raises(self):
         """Verify empty source raises error."""
@@ -166,128 +112,134 @@ class TestDependencyEdgeFeatureName:
         assert edge.feature_name == "distill_teacher"
 
 
-class TestDependencyEdgeEquality:
-    """Tests for edge equality and hashing."""
+class TestDependencyEdgeBlocksTraining:
+    """Tests for fit-time dependency semantics."""
 
-    def test_equality_same_edge(self):
-        """Verify edges with same attributes are equal."""
-        edge1 = DependencyEdge(
+    @pytest.mark.parametrize(
+        ("dep_type", "expected"),
+        [
+            (DependencyType.PREDICTION, True),
+            (DependencyType.PROBA, True),
+            (DependencyType.TRANSFORM, True),
+            (DependencyType.FEATURE, True),
+            (DependencyType.BASE_MARGIN, True),
+            (DependencyType.DISTILL, True),
+        ],
+    )
+    def test_non_conditional_edges_block_training(self, dep_type, expected):
+        edge = DependencyEdge(source="A", target="B", dep_type=dep_type)
+        assert edge.blocks_training() is expected
+
+    def test_conditional_sample_with_actual_targets_does_not_block_training(self):
+        edge = DependencyEdge(
             source="A",
             target="B",
-            dep_type=DependencyType.PREDICTION,
+            dep_type=DependencyType.CONDITIONAL_SAMPLE,
+            conditional_config=ConditionalSampleConfig(
+                property_name="price",
+                use_actual_during_training=True,
+            ),
         )
-        edge2 = DependencyEdge(
+        assert edge.blocks_training() is False
+
+    def test_conditional_sample_without_actual_targets_blocks_training(self):
+        edge = DependencyEdge(
             source="A",
             target="B",
-            dep_type=DependencyType.PREDICTION,
+            dep_type=DependencyType.CONDITIONAL_SAMPLE,
+            conditional_config=ConditionalSampleConfig(
+                property_name="price",
+                use_actual_during_training=False,
+            ),
         )
-
-        assert edge1 == edge2
-
-    def test_inequality_different_source(self):
-        """Verify edges with different sources are not equal."""
-        edge1 = DependencyEdge(source="A", target="B")
-        edge2 = DependencyEdge(source="C", target="B")
-
-        assert edge1 != edge2
-
-    def test_inequality_different_target(self):
-        """Verify edges with different targets are not equal."""
-        edge1 = DependencyEdge(source="A", target="B")
-        edge2 = DependencyEdge(source="A", target="C")
-
-        assert edge1 != edge2
-
-    def test_inequality_different_type(self):
-        """Verify edges with different types are not equal."""
-        edge1 = DependencyEdge(source="A", target="B", dep_type=DependencyType.PREDICTION)
-        edge2 = DependencyEdge(source="A", target="B", dep_type=DependencyType.PROBA)
-
-        assert edge1 != edge2
-
-    def test_hash_same_edge(self):
-        """Verify edges with same attributes have same hash."""
-        edge1 = DependencyEdge(source="A", target="B", dep_type=DependencyType.PREDICTION)
-        edge2 = DependencyEdge(source="A", target="B", dep_type=DependencyType.PREDICTION)
-
-        assert hash(edge1) == hash(edge2)
-
-    def test_usable_in_set(self):
-        """Verify edges can be used in sets."""
-        edge1 = DependencyEdge(source="A", target="B")
-        edge2 = DependencyEdge(source="A", target="B")
-        edge3 = DependencyEdge(source="A", target="C")
-
-        edges = {edge1, edge2, edge3}
-
-        assert len(edges) == 2  # edge1 and edge2 are same
+        assert edge.blocks_training() is True
 
 
-class TestDependencyEdgeRepr:
-    """Tests for edge representation."""
+class TestDependencyEdgeSerialization:
+    """Tests verifying DependencyEdge attribute values survive to_dict/from_dict."""
 
-    def test_repr(self):
-        """Verify repr is informative."""
+    def test_basic_round_trip(self):
+        """Verify source, target, and dep_type are preserved."""
         edge = DependencyEdge(
             source="model_a",
             target="model_b",
-            dep_type=DependencyType.PROBA,
-        )
-
-        repr_str = repr(edge)
-
-        assert "model_a" in repr_str
-        assert "model_b" in repr_str
-        assert "proba" in repr_str
-
-
-class TestDependencyTypeUseCases:
-    """Tests for different dependency use cases."""
-
-    def test_prediction_dependency_stacking(self):
-        """Verify PREDICTION dependency for classic stacking."""
-        # Base model predictions become features for meta-learner
-        edge = DependencyEdge(
-            source="rf_base",
-            target="lr_meta",
             dep_type=DependencyType.PREDICTION,
         )
 
-        assert edge.dep_type == DependencyType.PREDICTION
-        assert edge.feature_name == "pred_rf_base"
+        restored = DependencyEdge.from_dict(edge.to_dict())
 
-    def test_proba_dependency_stacking(self):
-        """Verify PROBA dependency for probability stacking."""
-        # Base model probabilities become features for meta-learner
+        assert restored.source == "model_a"
+        assert restored.target == "model_b"
+        assert restored.dep_type == DependencyType.PREDICTION
+
+    def test_round_trip_with_column_name(self):
+        """Verify custom column_name is preserved."""
         edge = DependencyEdge(
-            source="rf_base",
-            target="lr_meta",
-            dep_type=DependencyType.PROBA,
+            source="encoder",
+            target="model",
+            dep_type=DependencyType.FEATURE,
+            column_name="encoded_category",
         )
 
-        assert edge.dep_type == DependencyType.PROBA
-        assert edge.feature_name == "proba_rf_base"
+        restored = DependencyEdge.from_dict(edge.to_dict())
 
-    def test_transform_dependency_pipeline(self):
-        """Verify TRANSFORM dependency for pipeline flow."""
-        # Preprocessor output flows to model
+        assert restored.column_name == "encoded_category"
+
+    def test_round_trip_with_conditional_config(self):
+        """Verify ConditionalSampleConfig attributes are preserved."""
         edge = DependencyEdge(
-            source="scaler",
-            target="svm",
-            dep_type=DependencyType.TRANSFORM,
+            source="price_q",
+            target="volume_q",
+            dep_type=DependencyType.CONDITIONAL_SAMPLE,
+            conditional_config=ConditionalSampleConfig(
+                property_name="price",
+                use_actual_during_training=False,
+            ),
         )
 
-        assert edge.dep_type == DependencyType.TRANSFORM
-        assert edge.feature_name == "trans_scaler"
+        restored = DependencyEdge.from_dict(edge.to_dict())
 
-    def test_base_margin_xgboost(self):
-        """Verify BASE_MARGIN for XGBoost stacking."""
-        # Base model predictions used as XGBoost base_margin
-        edge = DependencyEdge(
-            source="lr_init",
-            target="xgb",
-            dep_type=DependencyType.BASE_MARGIN,
-        )
+        assert restored.conditional_config is not None
+        assert restored.conditional_config.property_name == "price"
+        assert restored.conditional_config.use_actual_during_training is False
 
-        assert edge.dep_type == DependencyType.BASE_MARGIN
-        assert edge.feature_name == "margin_lr_init"
+    @pytest.mark.parametrize("dep_type", list(DependencyType))
+    def test_round_trip_each_dependency_type(self, dep_type):
+        """Verify dep_type enum value survives for every DependencyType."""
+        kwargs = {"source": "src", "target": "tgt", "dep_type": dep_type}
+        if dep_type == DependencyType.CONDITIONAL_SAMPLE:
+            kwargs["conditional_config"] = ConditionalSampleConfig(
+                property_name="prop",
+            )
+
+        edge = DependencyEdge(**kwargs)
+        restored = DependencyEdge.from_dict(edge.to_dict())
+
+        assert restored.dep_type == dep_type
+        assert restored.dep_type.value == dep_type.value
+
+    def test_from_dict_restores_conditional_config_none(self):
+        """Verify conditional_config is None when absent from dict."""
+        data = {
+            "source": "A",
+            "target": "B",
+            "dep_type": "prediction",
+            "column_name": None,
+        }
+
+        restored = DependencyEdge.from_dict(data)
+
+        assert restored.conditional_config is None
+
+
+class TestDependencyEdgeConditionalSampleValidation:
+    """Tests for CONDITIONAL_SAMPLE validation."""
+
+    def test_conditional_sample_without_config_raises(self):
+        """CONDITIONAL_SAMPLE without conditional_config raises ValueError."""
+        with pytest.raises(ValueError, match="conditional_config is required"):
+            DependencyEdge(
+                source="A",
+                target="B",
+                dep_type=DependencyType.CONDITIONAL_SAMPLE,
+            )

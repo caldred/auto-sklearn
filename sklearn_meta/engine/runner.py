@@ -17,12 +17,15 @@ from sklearn_meta.artifacts.training import (
     TrainingRun,
 )
 from sklearn_meta.data.view import DataView
+from sklearn_meta.execution.training import (
+    NodeTrainingJobBuilder,
+    NodeTrainingResultReconstructor,
+    get_trainer,
+)
 from sklearn_meta.engine.cv import CVEngine
 from sklearn_meta.engine.search import SearchService
 from sklearn_meta.engine.selection import FeatureSelectionService
 from sklearn_meta.engine.strategy import OptimizationStrategy
-from sklearn_meta.engine.trainer import StandardNodeTrainer
-from sklearn_meta.engine.quantile_trainer import QuantileNodeTrainer
 from sklearn_meta.runtime.config import RunConfig
 from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.spec.dependency import DependencyType
@@ -100,41 +103,66 @@ class GraphRunner:
 
             # Add OOF overlays from upstream nodes
             layer_data = self._add_oof_overlays(data, layer, oof_cache, graph)
+            dispatchable_jobs = []
+            local_nodes: List[str] = []
 
             for node_name in layer:
                 node = graph.get_node(node_name)
 
-                # Check conditional
                 if node.is_conditional and not node.should_run(layer_data):
                     continue
 
+                if self.services.training_dispatcher is not None and self._is_dispatchable(
+                    node, graph,
+                ):
+                    node_data = self._prepare_node_data(
+                        layer_data, node, oof_cache, graph,
+                    )
+                    dispatchable_jobs.append(
+                        NodeTrainingJobBuilder.build_for_dispatch(
+                            node=node,
+                            node_data=node_data,
+                            config=config,
+                            services=self.services,
+                        )
+                    )
+                    if self.services.audit_logger is not None:
+                        self.services.audit_logger.log_node_start(node_name)
+                else:
+                    local_nodes.append(node_name)
+
+            if dispatchable_jobs and self.services.training_dispatcher is not None:
+                dispatched_results = self.services.training_dispatcher.dispatch(
+                    dispatchable_jobs, self.services,
+                )
+                for job, result in zip(dispatchable_jobs, dispatched_results):
+                    reconstructed = NodeTrainingResultReconstructor.reconstruct(
+                        job, result,
+                    )
+                    node_results[result.node_name] = reconstructed
+                    oof_cache[result.node_name] = reconstructed.oof_predictions
+                    if self.services.audit_logger is not None:
+                        self.services.audit_logger.log_node_complete(
+                            result.node_name,
+                            reconstructed.mean_score,
+                            reconstructed.best_params,
+                            reconstructed.cv_result.total_fit_time,
+                        )
+
+            for node_name in local_nodes:
+                node = graph.get_node(node_name)
                 if self.services.audit_logger is not None:
                     self.services.audit_logger.log_node_start(node_name)
 
-                # Prepare node-specific data
-                node_data = layer_data
-
-                # Apply per-node feature_cols if specified
-                if node.feature_cols is not None:
-                    node_data = node_data.select_features(node.feature_cols)
-
-                # Inject distillation soft targets
-                if node.is_distilled:
-                    node_data = self._inject_soft_targets(
-                        node_data, node, oof_cache, graph,
-                    )
-
-                # For CONDITIONAL_SAMPLE edges, inject actual target values
-                # as overlays (the joint quantile training pattern)
-                node_data = self._inject_conditional_samples(
-                    node_data, node, graph,
-                )
-
-                # Choose trainer and fit
-                trainer = self._get_trainer(node)
-                result = trainer.fit_node(
-                    node, node_data, config, self.services,
-                    cv_engine, search_service, selection_service,
+                result = self._fit_node_inline(
+                    node=node,
+                    layer_data=layer_data,
+                    oof_cache=oof_cache,
+                    graph=graph,
+                    config=config,
+                    cv_engine=cv_engine,
+                    search_service=search_service,
+                    selection_service=selection_service,
                 )
 
                 node_results[node_name] = result
@@ -165,8 +193,8 @@ class GraphRunner:
     # Strategy routing
     # ------------------------------------------------------------------
 
-    @staticmethod
     def _get_ordered_layers(
+        self,
         graph: GraphSpec,
         config: RunConfig,
     ) -> List[List[str]]:
@@ -182,6 +210,8 @@ class GraphRunner:
         strategy = config.tuning.strategy
 
         if strategy == OptimizationStrategy.LAYER_BY_LAYER:
+            if self.services.training_dispatcher is not None:
+                return graph.get_training_layers()
             return graph.get_layers()
         elif strategy == OptimizationStrategy.GREEDY:
             return [[name] for name in graph.topological_order()]
@@ -190,25 +220,54 @@ class GraphRunner:
         else:
             raise ValueError(f"Unsupported optimization strategy: {strategy}")
 
-    # ------------------------------------------------------------------
-    # Trainer selection
-    # ------------------------------------------------------------------
+    def _fit_node_inline(
+        self,
+        node: NodeSpec,
+        layer_data: DataView,
+        oof_cache: Dict[str, np.ndarray],
+        graph: GraphSpec,
+        config: RunConfig,
+        cv_engine: CVEngine,
+        search_service: SearchService,
+        selection_service: Optional[FeatureSelectionService],
+    ) -> NodeRunResult:
+        node_data = self._prepare_node_data(layer_data, node, oof_cache, graph)
+        trainer = get_trainer(node)
+        return trainer.fit_node(
+            node,
+            node_data,
+            config,
+            self.services,
+            cv_engine,
+            search_service,
+            selection_service,
+        )
 
     @staticmethod
-    def _get_trainer(node: NodeSpec):
-        """Choose the appropriate trainer for a node.
+    def _prepare_node_data(
+        layer_data: DataView,
+        node: NodeSpec,
+        oof_cache: Dict[str, np.ndarray],
+        graph: GraphSpec,
+    ) -> DataView:
+        node_data = layer_data
+        if node.feature_cols is not None:
+            node_data = node_data.select_features(node.feature_cols)
 
-        Args:
-            node: The node to select a trainer for.
+        if node.is_distilled:
+            node_data = GraphRunner._inject_soft_targets(
+                node_data, node, oof_cache, graph,
+            )
 
-        Returns:
-            A StandardNodeTrainer or QuantileNodeTrainer instance.
-        """
-        from sklearn_meta.spec.quantile import QuantileNodeSpec
+        return GraphRunner._inject_conditional_samples(node_data, node, graph)
 
-        if isinstance(node, QuantileNodeSpec):
-            return QuantileNodeTrainer()
-        return StandardNodeTrainer()
+    @staticmethod
+    def _is_dispatchable(node: NodeSpec, graph: GraphSpec) -> bool:
+        if node.is_conditional:
+            return False
+        if node.is_distilled:
+            return False
+        return NodeTrainingJobBuilder.is_dispatchable(node, graph)
 
     # ------------------------------------------------------------------
     # OOF overlay injection
@@ -423,13 +482,7 @@ class GraphRunner:
             sklearn_meta_version=sklearn_meta.__version__,
             data_shape=(batch.n_samples, len(batch.feature_names)),
             feature_names=batch.feature_names,
-            cv_config={
-                "n_splits": config.cv.n_splits,
-                "n_repeats": config.cv.n_repeats,
-                "strategy": config.cv.strategy.value,
-                "shuffle": config.cv.shuffle,
-                "random_state": config.cv.random_state,
-            },
+            cv_config=config.cv.to_dict(),
             tuning_config_summary={
                 "strategy": config.tuning.strategy.value,
                 "n_trials": config.tuning.n_trials,

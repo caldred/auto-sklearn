@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 class SearchParameter(ABC):
@@ -27,6 +27,45 @@ class SearchParameter(ABC):
     @abstractmethod
     def __repr__(self) -> str:
         pass
+
+    @abstractmethod
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize this parameter to a JSON-safe dictionary."""
+        pass
+
+    @staticmethod
+    def from_dict(data: Dict[str, Any]) -> "SearchParameter":
+        """Deserialize a parameter from ``to_dict()`` output."""
+        param_type = data["type"]
+        if param_type == "float":
+            return FloatParameter(
+                name=data["name"],
+                low=data["low"],
+                high=data["high"],
+                log=data.get("log", False),
+                step=data.get("step"),
+            )
+        if param_type == "int":
+            return IntParameter(
+                name=data["name"],
+                low=data["low"],
+                high=data["high"],
+                log=data.get("log", False),
+                step=data.get("step", 1),
+            )
+        if param_type == "categorical":
+            return CategoricalParameter(
+                name=data["name"],
+                choices=list(data["choices"]),
+            )
+        if param_type == "conditional":
+            return ConditionalParameter(
+                name=data["name"],
+                parent_name=data["parent_name"],
+                parent_value=data["parent_value"],
+                parameter=SearchParameter.from_dict(data["parameter"]),
+            )
+        raise ValueError(f"Unknown parameter type: {param_type}")
 
 
 @dataclass
@@ -67,6 +106,16 @@ class FloatParameter(SearchParameter):
         step_str = f", step={self.step}" if self.step else ""
         return f"Float({self.name}: [{self.low}, {self.high}]{log_str}{step_str})"
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": "float",
+            "name": self.name,
+            "low": self.low,
+            "high": self.high,
+            "log": self.log,
+            "step": self.step,
+        }
+
 
 @dataclass
 class IntParameter(SearchParameter):
@@ -104,6 +153,16 @@ class IntParameter(SearchParameter):
         step_str = f", step={self.step}" if self.step > 1 else ""
         return f"Int({self.name}: [{self.low}, {self.high}]{log_str}{step_str})"
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": "int",
+            "name": self.name,
+            "low": self.low,
+            "high": self.high,
+            "log": self.log,
+            "step": self.step,
+        }
+
 
 @dataclass
 class CategoricalParameter(SearchParameter):
@@ -131,6 +190,13 @@ class CategoricalParameter(SearchParameter):
         if len(self.choices) > 3:
             choices_str += ", ..."
         return f"Cat({self.name}: [{choices_str}])"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": "categorical",
+            "name": self.name,
+            "choices": list(self.choices),
+        }
 
 
 @dataclass
@@ -161,6 +227,15 @@ class ConditionalParameter(SearchParameter):
 
     def __repr__(self) -> str:
         return f"Conditional({self.name} if {self.parent_name}={self.parent_value}: {self.parameter})"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": "conditional",
+            "name": self.name,
+            "parent_name": self.parent_name,
+            "parent_value": self.parent_value,
+            "parameter": self.parameter.to_dict(),
+        }
 
 
 def parse_shorthand(

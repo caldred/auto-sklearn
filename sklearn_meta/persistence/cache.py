@@ -60,6 +60,7 @@ class FitCache:
             max_size_mb: Maximum cache size in megabytes.
             enabled: Whether caching is enabled.
         """
+        self._explicit_cache_dir = cache_dir is not None
         if cache_dir is None:
             cache_dir = os.path.join(tempfile.gettempdir(), "sklearn_meta_cache")
 
@@ -73,6 +74,16 @@ class FitCache:
     def _ensure_dir(self) -> None:
         """Ensure cache directory exists."""
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def is_shared(self) -> bool:
+        """Whether this cache uses an explicitly provided (likely shared) directory.
+
+        Returns ``True`` when the cache was created with an explicit
+        ``cache_dir`` rather than the default temp directory.  Shared-
+        filesystem caches (NFS, S3-FUSE) should always use an explicit path.
+        """
+        return self._explicit_cache_dir
 
     def cache_key(
         self,

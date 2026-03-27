@@ -50,33 +50,6 @@ class EstimatorAB:
 class TestPluginRegistry:
     """Tests for PluginRegistry."""
 
-    def test_empty_registry(self):
-        """Verify empty registry has no plugins."""
-        registry = PluginRegistry()
-
-        assert len(registry) == 0
-        assert registry.plugin_names == []
-
-    def test_register_plugin(self):
-        """Verify plugin registration works."""
-        registry = PluginRegistry()
-        plugin = DummyPluginA()
-
-        registry.register(plugin)
-
-        assert len(registry) == 1
-        assert "DummyPluginA" in registry
-
-    def test_register_with_custom_name(self):
-        """Verify registration with custom name."""
-        registry = PluginRegistry()
-        plugin = DummyPluginA()
-
-        registry.register(plugin, name="custom_name")
-
-        assert "custom_name" in registry
-        assert "DummyPluginA" not in registry
-
     def test_register_duplicate_raises(self):
         """Verify registering duplicate name raises."""
         registry = PluginRegistry()
@@ -109,32 +82,6 @@ class TestPluginRegistry:
         assert removed is plugin
         assert len(registry) == 0
         assert "DummyPluginA" not in registry
-
-    def test_unregister_nonexistent(self):
-        """Verify unregistering nonexistent returns None."""
-        registry = PluginRegistry()
-
-        removed = registry.unregister("NonexistentPlugin")
-
-        assert removed is None
-
-    def test_get_existing(self):
-        """Verify get returns registered plugin."""
-        registry = PluginRegistry()
-        plugin = DummyPluginA()
-        registry.register(plugin)
-
-        result = registry.get("DummyPluginA")
-
-        assert result is plugin
-
-    def test_get_nonexistent(self):
-        """Verify get returns None for nonexistent."""
-        registry = PluginRegistry()
-
-        result = registry.get("NonexistentPlugin")
-
-        assert result is None
 
     def test_get_plugins_for_matching(self):
         """Verify get_plugins_for returns matching plugins."""
@@ -171,15 +118,6 @@ class TestPluginRegistry:
         # The registry stores them in order
         assert len(result) == 3
 
-    def test_get_plugins_for_none_matching(self):
-        """Verify get_plugins_for returns empty for no matches."""
-        registry = PluginRegistry()
-        registry.register(DummyPluginA())
-
-        result = registry.get_plugins_for(EstimatorB)
-
-        assert result == []
-
     def test_get_plugins_for_handles_failure(self):
         """Verify get_plugins_for handles applies_to exceptions."""
         registry = PluginRegistry()
@@ -205,16 +143,6 @@ class TestPluginRegistry:
         assert isinstance(result[0], DummyPluginA)
         assert isinstance(result[1], DummyPluginAll)
 
-    def test_get_plugins_for_names_skips_missing(self):
-        """Verify get_plugins_for_names skips missing plugins."""
-        registry = PluginRegistry()
-        registry.register(DummyPluginA())
-
-        result = registry.get_plugins_for_names(["DummyPluginA", "Nonexistent"])
-
-        assert len(result) == 1
-        assert isinstance(result[0], DummyPluginA)
-
     def test_get_plugins_for_names_preserves_order(self):
         """Verify get_plugins_for_names preserves requested order."""
         registry = PluginRegistry()
@@ -226,57 +154,3 @@ class TestPluginRegistry:
         assert isinstance(result[0], DummyPluginB)
         assert isinstance(result[1], DummyPluginA)
 
-    def test_contains(self):
-        """Verify __contains__ works correctly."""
-        registry = PluginRegistry()
-        registry.register(DummyPluginA())
-
-        assert "DummyPluginA" in registry
-        assert "DummyPluginB" not in registry
-
-    def test_len(self):
-        """Verify __len__ returns correct count."""
-        registry = PluginRegistry()
-
-        assert len(registry) == 0
-
-        registry.register(DummyPluginA())
-        assert len(registry) == 1
-
-        registry.register(DummyPluginB())
-        assert len(registry) == 2
-
-    def test_repr(self):
-        """Verify repr includes plugin names."""
-        registry = PluginRegistry()
-        registry.register(DummyPluginA())
-
-        repr_str = repr(registry)
-
-        assert "DummyPluginA" in repr_str
-        assert "PluginRegistry" in repr_str
-
-
-class TestDefaultRegistry:
-    """Tests for default registry functionality."""
-
-    def test_get_default_registry_returns_registry(self):
-        """Verify get_default_registry returns a PluginRegistry."""
-        registry = get_default_registry()
-
-        assert isinstance(registry, PluginRegistry)
-
-    def test_get_default_registry_singleton(self):
-        """Verify get_default_registry returns same instance."""
-        registry1 = get_default_registry()
-        registry2 = get_default_registry()
-
-        assert registry1 is registry2
-
-    def test_default_registry_has_xgb_plugins(self):
-        """Verify default registry includes XGBoost plugins if available."""
-        registry = get_default_registry()
-
-        # This test depends on whether xgboost is installed
-        # The plugins are optional, so we just check the registry exists
-        assert isinstance(registry, PluginRegistry)

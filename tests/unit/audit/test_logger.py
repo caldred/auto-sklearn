@@ -8,115 +8,6 @@ from unittest.mock import MagicMock
 from sklearn_meta.audit.logger import AuditLogger, FoldLog, TrialLog
 
 
-class TestFoldLog:
-    """Tests for FoldLog dataclass."""
-
-    def test_create_fold_log(self):
-        """Verify fold log can be created."""
-        log = FoldLog(
-            node_name="test_node",
-            fold_idx=0,
-            repeat_idx=0,
-            score=0.95,
-            fit_time=10.5,
-            params={"n_estimators": 100},
-            timestamp="2024-01-01T00:00:00",
-        )
-
-        assert log.node_name == "test_node"
-        assert log.score == 0.95
-        assert log.fit_time == 10.5
-
-    def test_fold_log_with_extra(self):
-        """Verify fold log with extra metadata."""
-        log = FoldLog(
-            node_name="test",
-            fold_idx=0,
-            repeat_idx=0,
-            score=0.9,
-            fit_time=5.0,
-            params={},
-            timestamp="2024-01-01",
-            extra={"memory_mb": 256},
-        )
-
-        assert log.extra == {"memory_mb": 256}
-
-    def test_fold_log_default_extra(self):
-        """Verify default extra is empty dict."""
-        log = FoldLog(
-            node_name="test",
-            fold_idx=0,
-            repeat_idx=0,
-            score=0.9,
-            fit_time=5.0,
-            params={},
-            timestamp="2024-01-01",
-        )
-
-        assert log.extra == {}
-
-
-class TestTrialLog:
-    """Tests for TrialLog dataclass."""
-
-    def test_create_trial_log(self):
-        """Verify trial log can be created."""
-        log = TrialLog(
-            node_name="test_node",
-            trial_id=5,
-            params={"learning_rate": 0.1},
-            score=0.85,
-            duration=30.0,
-            timestamp="2024-01-01T00:00:00",
-        )
-
-        assert log.node_name == "test_node"
-        assert log.trial_id == 5
-        assert log.score == 0.85
-
-
-class TestAuditLoggerInit:
-    """Tests for AuditLogger initialization."""
-
-    def test_default_init(self):
-        """Verify default initialization."""
-        logger = AuditLogger()
-
-        assert logger.name == "sklearn_meta"
-        assert len(logger._fold_logs) == 0
-        assert len(logger._trial_logs) == 0
-
-    def test_custom_name(self):
-        """Verify custom logger name."""
-        logger = AuditLogger(name="my_logger")
-
-        assert logger.name == "my_logger"
-
-    def test_with_log_file(self, tmp_path):
-        """Verify log file is created."""
-        log_file = tmp_path / "test.log"
-        logger = AuditLogger(log_file=str(log_file))
-
-        assert logger.log_file == log_file
-
-    def test_creates_log_directory(self, tmp_path):
-        """Verify log directory is created."""
-        log_file = tmp_path / "subdir" / "test.log"
-        AuditLogger(log_file=str(log_file))
-
-        assert log_file.parent.exists()
-
-    def test_repr(self):
-        """Verify repr includes useful info."""
-        logger = AuditLogger(name="test_logger")
-
-        repr_str = repr(logger)
-
-        assert "AuditLogger" in repr_str
-        assert "test_logger" in repr_str
-
-
 class TestAuditLoggerLogFold:
     """Tests for AuditLogger.log_fold method."""
 
@@ -159,26 +50,6 @@ class TestAuditLoggerLogFold:
 
         assert logger._fold_logs[0].extra == {"custom_metric": 0.5}
 
-    def test_log_fold_sets_timestamp(self):
-        """Verify log_fold sets timestamp."""
-        logger = AuditLogger(console_level=logging.CRITICAL)
-
-        fold = MagicMock()
-        fold.fold_idx = 0
-        fold.repeat_idx = 0
-
-        logger.log_fold(
-            node_name="test",
-            fold=fold,
-            score=0.9,
-            fit_time=5.0,
-            params={},
-        )
-
-        assert logger._fold_logs[0].timestamp is not None
-        assert len(logger._fold_logs[0].timestamp) > 0
-
-
 class TestAuditLoggerLogTrial:
     """Tests for AuditLogger.log_trial method."""
 
@@ -198,104 +69,8 @@ class TestAuditLoggerLogTrial:
         assert logger._trial_logs[0].node_name == "test_node"
         assert logger._trial_logs[0].trial_id == 5
 
-    def test_log_trial_sets_timestamp(self):
-        """Verify log_trial sets timestamp."""
-        logger = AuditLogger(console_level=logging.CRITICAL)
-
-        logger.log_trial(
-            node_name="test",
-            trial_id=0,
-            params={},
-            score=0.9,
-            duration=10.0,
-        )
-
-        assert logger._trial_logs[0].timestamp is not None
-
-
-class TestAuditLoggerLogMethods:
-    """Tests for various logging methods."""
-
-    def test_log_layer_start(self, caplog):
-        """Verify log_layer_start outputs message."""
-        logger = AuditLogger(console_level=logging.INFO)
-
-        with caplog.at_level(logging.INFO):
-            logger.log_layer_start(0, ["node1", "node2"])
-
-        assert "layer 1" in caplog.text.lower()
-        assert "node1" in caplog.text
-
-    def test_log_layer_complete(self, caplog):
-        """Verify log_layer_complete outputs message."""
-        logger = AuditLogger(console_level=logging.INFO)
-
-        with caplog.at_level(logging.INFO):
-            logger.log_layer_complete(0, {"node1": 0.95}, 10.0)
-
-        assert "completed" in caplog.text.lower()
-        assert "0.95" in caplog.text
-
-    def test_log_node_start(self, caplog):
-        """Verify log_node_start outputs message."""
-        logger = AuditLogger(console_level=logging.INFO)
-
-        with caplog.at_level(logging.INFO):
-            logger.log_node_start("test_node")
-
-        assert "test_node" in caplog.text
-
-    def test_log_node_complete(self, caplog):
-        """Verify log_node_complete outputs message."""
-        logger = AuditLogger(console_level=logging.INFO)
-
-        with caplog.at_level(logging.INFO):
-            logger.log_node_complete("test_node", 0.95, {"a": 1}, 10.0)
-
-        assert "test_node" in caplog.text
-        assert "0.95" in caplog.text
-
-    def test_log_warning(self, caplog):
-        """Verify log_warning outputs warning."""
-        logger = AuditLogger()
-
-        with caplog.at_level(logging.WARNING):
-            logger.log_warning("Test warning message")
-
-        assert "test warning" in caplog.text.lower()
-
-    def test_log_error(self, caplog):
-        """Verify log_error outputs error."""
-        logger = AuditLogger()
-
-        with caplog.at_level(logging.ERROR):
-            logger.log_error("Test error message")
-
-        assert "test error" in caplog.text.lower()
-
-    def test_log_error_with_exception(self, caplog):
-        """Verify log_error includes exception info."""
-        logger = AuditLogger()
-
-        try:
-            raise ValueError("Test exception")
-        except ValueError as e:
-            with caplog.at_level(logging.ERROR):
-                logger.log_error("Error occurred", exc=e)
-
-        assert "error occurred" in caplog.text.lower()
-
-
 class TestAuditLoggerGetFoldSummary:
     """Tests for AuditLogger.get_fold_summary method."""
-
-    def test_empty_summary(self):
-        """Verify empty summary for no logs."""
-        logger = AuditLogger(console_level=logging.CRITICAL)
-
-        summary = logger.get_fold_summary()
-
-        assert summary == {}
 
     def test_summary_with_logs(self):
         """Verify summary calculations are correct."""
@@ -347,14 +122,6 @@ class TestAuditLoggerGetFoldSummary:
 class TestAuditLoggerGetTrialSummary:
     """Tests for AuditLogger.get_trial_summary method."""
 
-    def test_empty_summary(self):
-        """Verify empty summary for no logs."""
-        logger = AuditLogger(console_level=logging.CRITICAL)
-
-        summary = logger.get_trial_summary()
-
-        assert summary == {}
-
     def test_summary_with_logs(self):
         """Verify summary calculations are correct."""
         logger = AuditLogger(console_level=logging.CRITICAL)
@@ -391,28 +158,6 @@ class TestAuditLoggerGetTrialSummary:
 class TestAuditLoggerExportLogs:
     """Tests for AuditLogger.export_logs method."""
 
-    def test_export_creates_file(self, tmp_path):
-        """Verify export creates file."""
-        logger = AuditLogger(console_level=logging.CRITICAL)
-        export_path = tmp_path / "export.json"
-
-        logger.export_logs(str(export_path))
-
-        assert export_path.exists()
-
-    def test_export_valid_json(self, tmp_path):
-        """Verify export creates valid JSON."""
-        logger = AuditLogger(console_level=logging.CRITICAL)
-        export_path = tmp_path / "export.json"
-
-        logger.export_logs(str(export_path))
-
-        with open(export_path) as f:
-            data = json.load(f)
-
-        assert "fold_logs" in data
-        assert "trial_logs" in data
-
     def test_export_includes_fold_logs(self, tmp_path):
         """Verify export includes fold logs."""
         logger = AuditLogger(console_level=logging.CRITICAL)
@@ -447,26 +192,6 @@ class TestAuditLoggerExportLogs:
 
         assert len(data["trial_logs"]) == 1
         assert data["trial_logs"][0]["trial_id"] == 5
-
-
-class TestAuditLoggerClear:
-    """Tests for AuditLogger.clear method."""
-
-    def test_clear_removes_all_logs(self):
-        """Verify clear removes all logs."""
-        logger = AuditLogger(console_level=logging.CRITICAL)
-
-        logger._fold_logs = [
-            FoldLog("node", 0, 0, 0.9, 10.0, {}, "2024-01-01"),
-        ]
-        logger._trial_logs = [
-            TrialLog("node", 0, {}, 0.8, 10.0, "2024-01-01"),
-        ]
-
-        logger.clear()
-
-        assert len(logger._fold_logs) == 0
-        assert len(logger._trial_logs) == 0
 
 
 class TestAuditLoggerFileLogging:

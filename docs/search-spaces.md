@@ -202,6 +202,33 @@ config = {
 space = SearchSpace.from_dict(config)
 ```
 
+Conditional parameters are also supported in the explicit format:
+
+```python
+config = {
+    "optimizer": {"type": "categorical", "name": "optimizer", "choices": ["adam", "sgd"]},
+    "momentum": {
+        "type": "conditional",
+        "name": "momentum",
+        "parent_name": "optimizer",
+        "parent_value": "sgd",
+        "parameter": {"type": "float", "name": "momentum", "low": 0.0, "high": 1.0},
+    },
+}
+
+space = SearchSpace.from_dict(config)
+```
+
+### Serialization
+
+`to_dict()` produces the explicit dictionary format, making it the inverse of `from_dict()`. Useful for saving search spaces to JSON or sending them to a training dispatcher:
+
+```python
+space = SearchSpace().add_float("lr", 0.001, 0.1, log=True).add_int("n", 10, 200)
+serialized = space.to_dict()
+restored = SearchSpace.from_dict(serialized)
+```
+
 ---
 
 ## Space Operations

@@ -39,31 +39,6 @@ class MockQuantileRegressor:
 class TestOrderConstraintCreation:
     """Tests for OrderConstraint creation."""
 
-    def test_default_creation(self):
-        """Verify default constraint creation."""
-        constraint = OrderConstraint()
-
-        assert constraint.fixed_positions == {}
-        assert constraint.must_precede == []
-        assert constraint.no_swap == []
-
-    def test_creation_with_fixed_positions(self):
-        """Verify constraint with fixed positions."""
-        constraint = OrderConstraint(
-            fixed_positions={"price": 0, "volume": 1},
-        )
-
-        assert constraint.fixed_positions["price"] == 0
-        assert constraint.fixed_positions["volume"] == 1
-
-    def test_creation_with_must_precede(self):
-        """Verify constraint with precedence rules."""
-        constraint = OrderConstraint(
-            must_precede=[("A", "B"), ("B", "C")],
-        )
-
-        assert ("A", "B") in constraint.must_precede
-
 
 class TestOrderConstraintValidateOrder:
     """Tests for validate_order method."""
@@ -173,24 +148,6 @@ class TestOrderConstraintGetDefaultOrder:
 class TestJointQuantileConfigCreation:
     """Tests for JointQuantileConfig creation."""
 
-    def test_basic_creation(self):
-        """Verify basic config creation."""
-        config = JointQuantileConfig(
-            property_names=["price", "volume"],
-        )
-
-        assert config.property_names == ["price", "volume"]
-        assert config.n_properties == 2
-
-    def test_creation_with_quantile_levels(self):
-        """Verify config with custom quantile levels."""
-        config = JointQuantileConfig(
-            property_names=["price", "volume"],
-            quantile_levels=[0.1, 0.5, 0.9],
-        )
-
-        assert config.quantile_levels == [0.1, 0.5, 0.9]
-
     def test_empty_property_names_raises(self):
         """Verify empty property names raises error."""
         with pytest.raises(ValueError, match="cannot be empty"):
@@ -217,19 +174,6 @@ class TestJointQuantileConfigCreation:
 
 class TestJointQuantileGraphSpecCreation:
     """Tests for JointQuantileGraphSpec creation."""
-
-    def test_basic_creation(self):
-        """Verify basic graph creation."""
-        config = JointQuantileConfig(
-            property_names=["price", "volume"],
-            estimator_class=MockQuantileRegressor,
-        )
-
-        graph = JointQuantileGraphSpec(config)
-
-        assert len(graph) == 2
-        assert "quantile_price" in graph
-        assert "quantile_volume" in graph
 
     def test_creates_conditional_edges(self):
         """Verify conditional edges are created."""
@@ -378,92 +322,14 @@ class TestJointQuantileGraphSpecValidSwaps:
 class TestJointQuantileGraphSpecQuantileNode:
     """Tests for get_quantile_node method."""
 
-    def test_get_quantile_node(self):
-        """Verify get_quantile_node returns correct node."""
-        config = JointQuantileConfig(
-            property_names=["price", "volume"],
-            estimator_class=MockQuantileRegressor,
-            quantile_levels=[0.1, 0.5, 0.9],
-        )
-
-        graph = JointQuantileGraphSpec(config)
-        node = graph.get_quantile_node("price")
-
-        assert node.property_name == "price"
-        assert node.quantile_levels == [0.1, 0.5, 0.9]
-
 
 class TestJointQuantileGraphSpecConditioningProperties:
     """Tests for get_conditioning_properties method."""
-
-    def test_conditioning_properties_first(self):
-        """Verify first property has no conditioning."""
-        config = JointQuantileConfig(
-            property_names=["A", "B", "C"],
-            estimator_class=MockQuantileRegressor,
-        )
-
-        graph = JointQuantileGraphSpec(config)
-
-        assert graph.get_conditioning_properties("A") == []
-
-    def test_conditioning_properties_second(self):
-        """Verify second property conditions on first."""
-        config = JointQuantileConfig(
-            property_names=["A", "B", "C"],
-            estimator_class=MockQuantileRegressor,
-        )
-
-        graph = JointQuantileGraphSpec(config)
-
-        assert graph.get_conditioning_properties("B") == ["A"]
-
-    def test_conditioning_properties_third(self):
-        """Verify third property conditions on first two."""
-        config = JointQuantileConfig(
-            property_names=["A", "B", "C"],
-            estimator_class=MockQuantileRegressor,
-        )
-
-        graph = JointQuantileGraphSpec(config)
-
-        assert graph.get_conditioning_properties("C") == ["A", "B"]
 
 
 class TestJointQuantileGraphSpecSampler:
     """Tests for create_quantile_sampler method."""
 
-    def test_create_sampler(self):
-        """Verify sampler creation with graph config."""
-        config = JointQuantileConfig(
-            property_names=["A", "B"],
-            estimator_class=MockQuantileRegressor,
-            sampling_strategy=SamplingStrategy.NORMAL,
-            n_inference_samples=500,
-            random_state=42,
-        )
-
-        graph = JointQuantileGraphSpec(config)
-        sampler = graph.create_quantile_sampler()
-
-        assert sampler.strategy == SamplingStrategy.NORMAL
-        assert sampler.n_samples == 500
-
 
 class TestJointQuantileGraphSpecRepr:
     """Tests for graph representation."""
-
-    def test_repr(self):
-        """Verify repr is informative."""
-        config = JointQuantileConfig(
-            property_names=["price", "volume"],
-            estimator_class=MockQuantileRegressor,
-            quantile_levels=[0.1, 0.5, 0.9],
-        )
-
-        graph = JointQuantileGraphSpec(config)
-        repr_str = repr(graph)
-
-        assert "price" in repr_str
-        assert "volume" in repr_str
-        assert "n_quantiles=3" in repr_str

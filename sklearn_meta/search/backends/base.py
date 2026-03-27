@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -170,3 +171,19 @@ class SearchBackend(ABC):
     def load_state(self, state: Dict[str, Any]) -> None:
         """Load state from serialization."""
         pass
+
+    def clone(self) -> "SearchBackend":
+        """Clone this backend, preserving serializable state.
+
+        Subclasses with additional constructor arguments should override this
+        method and then call ``load_state()`` on the clone.
+        """
+        try:
+            clone = self.__class__(
+                direction=self.direction,
+                random_state=self.random_state,
+            )
+        except TypeError:
+            return copy.deepcopy(self)
+        clone.load_state(self.get_state())
+        return clone

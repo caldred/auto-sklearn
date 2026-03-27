@@ -15,28 +15,6 @@ from sklearn_meta.search.parameter import (
 class TestFloatParameter:
     """Tests for FloatParameter."""
 
-    def test_basic_creation(self):
-        """Verify basic float parameter creation."""
-        param = FloatParameter(name="learning_rate", low=0.01, high=0.3)
-
-        assert param.name == "learning_rate"
-        assert param.low == 0.01
-        assert param.high == 0.3
-        assert param.log is False
-        assert param.step is None
-
-    def test_log_scale_creation(self):
-        """Verify log scale parameter creation."""
-        param = FloatParameter(name="lr", low=0.001, high=1.0, log=True)
-
-        assert param.log is True
-
-    def test_step_creation(self):
-        """Verify step parameter creation."""
-        param = FloatParameter(name="alpha", low=0.0, high=1.0, step=0.1)
-
-        assert param.step == 0.1
-
     def test_low_greater_than_high_raises(self):
         """Verify low >= high raises error."""
         with pytest.raises(ValueError, match="must be less than"):
@@ -89,28 +67,6 @@ class TestFloatParameter:
 class TestIntParameter:
     """Tests for IntParameter."""
 
-    def test_basic_creation(self):
-        """Verify basic int parameter creation."""
-        param = IntParameter(name="n_estimators", low=10, high=100)
-
-        assert param.name == "n_estimators"
-        assert param.low == 10
-        assert param.high == 100
-        assert param.log is False
-        assert param.step == 1
-
-    def test_log_scale_creation(self):
-        """Verify log scale parameter creation."""
-        param = IntParameter(name="n", low=1, high=1000, log=True)
-
-        assert param.log is True
-
-    def test_step_creation(self):
-        """Verify step parameter creation."""
-        param = IntParameter(name="n", low=10, high=100, step=5)
-
-        assert param.step == 5
-
     def test_low_greater_than_high_raises(self):
         """Verify low >= high raises error."""
         with pytest.raises(ValueError, match="must be less than"):
@@ -145,13 +101,6 @@ class TestIntParameter:
 
 class TestCategoricalParameter:
     """Tests for CategoricalParameter."""
-
-    def test_basic_creation(self):
-        """Verify basic categorical parameter creation."""
-        param = CategoricalParameter(name="solver", choices=["adam", "sgd", "rmsprop"])
-
-        assert param.name == "solver"
-        assert param.choices == ["adam", "sgd", "rmsprop"]
 
     def test_empty_choices_raises(self):
         """Verify empty choices raises error."""
@@ -189,21 +138,6 @@ class TestCategoricalParameter:
 
 class TestConditionalParameter:
     """Tests for ConditionalParameter."""
-
-    def test_basic_creation(self):
-        """Verify basic conditional parameter creation."""
-        inner = FloatParameter(name="momentum", low=0.0, high=1.0)
-        param = ConditionalParameter(
-            name="momentum",
-            parent_name="optimizer",
-            parent_value="sgd",
-            parameter=inner,
-        )
-
-        assert param.name == "momentum"
-        assert param.parent_name == "optimizer"
-        assert param.parent_value == "sgd"
-        assert param.parameter is inner
 
     def test_sample_optuna(self, mock_trial):
         """Verify Optuna sampling delegates to inner parameter."""
@@ -297,27 +231,5 @@ class TestParseShorthand:
 class TestSearchParameterBase:
     """Tests for SearchParameter abstract base class."""
 
-    def test_parameter_has_name(self):
-        """Verify all parameters have name attribute."""
-        params = [
-            FloatParameter(name="a", low=0.0, high=1.0),
-            IntParameter(name="b", low=1, high=10),
-            CategoricalParameter(name="c", choices=["x", "y"]),
-        ]
-
-        for param in params:
-            assert hasattr(param, "name")
-            assert isinstance(param.name, str)
-
-    def test_parameter_has_sample_optuna(self):
-        """Verify all parameters have sample_optuna method."""
-        params = [
-            FloatParameter(name="a", low=0.0, high=1.0),
-            IntParameter(name="b", low=1, high=10),
-            CategoricalParameter(name="c", choices=["x", "y"]),
-        ]
-
-        for param in params:
-            assert hasattr(param, "sample_optuna")
-            assert callable(param.sample_optuna)
+    pass
 

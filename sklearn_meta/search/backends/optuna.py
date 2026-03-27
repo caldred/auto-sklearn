@@ -126,6 +126,7 @@ class OptunaBackend(SearchBackend):
                 if self._show_progress_bar
                 else optuna.logging.WARNING
             )
+        self._verbosity = verbosity
         optuna.logging.set_verbosity(verbosity)
 
         # Apply float precision formatter to Optuna's logger handlers.
@@ -296,6 +297,10 @@ class OptunaBackend(SearchBackend):
                 {
                     "number": t.number,
                     "params": t.params,
+                    "distributions": {
+                        name: optuna.distributions.distribution_to_json(dist)
+                        for name, dist in t.distributions.items()
+                    },
                     "value": t.value,
                     "state": t.state.name,
                 }
@@ -318,11 +323,15 @@ class OptunaBackend(SearchBackend):
         # Replay trials
         for trial_data in state.get("trials", []):
             if trial_data["state"] == TrialState.COMPLETE and trial_data["value"] is not None:
+                distributions = {
+                    name: optuna.distributions.json_to_distribution(dist)
+                    for name, dist in trial_data.get("distributions", {}).items()
+                }
                 self._study.add_trial(
                     optuna.trial.create_trial(
                         params=trial_data["params"],
                         values=[trial_data["value"]],
-                        distributions={},  # Will be inferred
+                        distributions=distributions,
                         state=optuna.trial.TrialState.COMPLETE,
                     )
                 )
@@ -331,6 +340,20 @@ class OptunaBackend(SearchBackend):
     def study(self) -> Optional[optuna.Study]:
         """Access the underlying Optuna study."""
         return self._study
+
+    def clone(self) -> "OptunaBackend":
+        """Clone this backend, preserving Optuna-specific configuration."""
+        clone = self.__class__(
+            direction=self.direction,
+            random_state=self.random_state,
+            sampler=self.sampler,
+            pruner=self.pruner,
+            n_jobs=self._n_jobs,
+            show_progress_bar=self._show_progress_bar,
+            verbosity=self._verbosity,
+        )
+        clone.load_state(self.get_state())
+        return clone
 
     def get_param_importances(self) -> Dict[str, float]:
         """

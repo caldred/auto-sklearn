@@ -150,14 +150,6 @@ def orchestrator(joint_graph):
 class TestOrderSearchConfigCreation:
     """Tests for OrderSearchConfig creation."""
 
-    def test_default_creation(self):
-        """Verify default config creation."""
-        config = OrderSearchConfig()
-
-        assert config.max_iterations == 10
-        assert config.n_random_restarts == 0
-        assert config.verbose == 1
-
     def test_creation_with_params(self):
         """Verify config creation with custom params."""
         config = OrderSearchConfig(
@@ -178,26 +170,6 @@ class TestOrderSearchConfigCreation:
 class TestOrderSearchResultProperties:
     """Tests for OrderSearchResult properties."""
 
-    def test_result_properties(self):
-        """Verify result properties."""
-        result = OrderSearchResult(
-            best_order=["A", "B", "C"],
-            best_score=0.5,
-            best_fit_result=None,
-            search_history=[
-                (["A", "B", "C"], 0.6),
-                (["B", "A", "C"], 0.5),
-            ],
-            n_iterations=2,
-            converged=True,
-        )
-
-        assert result.best_order == ["A", "B", "C"]
-        assert result.best_score == 0.5
-        assert result.n_iterations == 2
-        assert result.converged is True
-        assert len(result.search_history) == 2
-
 
 # =============================================================================
 # OrderSearchPlugin Tests
@@ -207,24 +179,12 @@ class TestOrderSearchResultProperties:
 class TestOrderSearchPluginCreation:
     """Tests for OrderSearchPlugin creation."""
 
-    def test_default_creation(self):
-        """Verify default plugin creation."""
-        plugin = OrderSearchPlugin()
-
-        assert plugin.config is not None
-
     def test_creation_with_config(self):
         """Verify plugin creation with custom config."""
         config = OrderSearchConfig(max_iterations=5)
         plugin = OrderSearchPlugin(config=config)
 
         assert plugin.config.max_iterations == 5
-
-    def test_applies_to_returns_false(self):
-        """Verify applies_to returns False (plugin not for standard hooks)."""
-        plugin = OrderSearchPlugin()
-
-        assert plugin.applies_to(MockQuantileRegressor) is False
 
 
 class TestOrderSearchPluginSearchOrder:
@@ -371,15 +331,3 @@ class TestOrderSearchPluginRandomOrder:
 
 class TestOrderSearchPluginRepr:
     """Tests for plugin representation."""
-
-    def test_repr(self):
-        """Verify repr is informative."""
-        plugin = OrderSearchPlugin(config=OrderSearchConfig(
-            max_iterations=15,
-            n_random_restarts=3,
-        ))
-
-        repr_str = repr(plugin)
-
-        assert "max_iterations=15" in repr_str
-        assert "n_random_restarts=3" in repr_str

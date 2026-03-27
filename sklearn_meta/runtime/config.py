@@ -13,6 +13,36 @@ from sklearn_meta.engine.estimator_scaling import EstimatorScalingConfig
 from sklearn_meta.engine.strategy import OptimizationStrategy
 
 
+def _serialize_custom_reparameterization(reparameterization: Any) -> Dict[str, Any]:
+    """Serialize a custom reparameterization to JSON-safe state."""
+    from sklearn_meta.persistence.manifest import to_json_safe
+
+    from sklearn_meta.spec._resolve import get_class_path
+
+    cls = reparameterization.__class__
+    return {
+        "kind": "reparameterization",
+        "class_path": get_class_path(cls),
+        "state": to_json_safe(
+            dict(reparameterization.__dict__),
+            path=f"{cls.__name__}.state",
+        ),
+    }
+
+
+def _deserialize_custom_reparameterization(data: Any) -> Any:
+    """Reconstruct a custom reparameterization from serialized state."""
+    if not isinstance(data, dict) or data.get("kind") != "reparameterization":
+        return data
+
+    from sklearn_meta.spec._resolve import resolve_class_path
+
+    reparameterization_cls = resolve_class_path(data["class_path"])
+    reparameterization = reparameterization_cls.__new__(reparameterization_cls)
+    reparameterization.__dict__.update(dict(data.get("state", {})))
+    return reparameterization
+
+
 def _infer_greater_is_better(metric: str) -> bool:
     """Infer score direction from a sklearn metric name.
 
@@ -149,6 +179,28 @@ class CVConfig:
             f"strategy={self.strategy.value}{nested_str})"
         )
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "n_splits": self.n_splits,
+            "n_repeats": self.n_repeats,
+            "strategy": self.strategy.value,
+            "shuffle": self.shuffle,
+            "random_state": self.random_state,
+            "inner_cv": self.inner_cv.to_dict() if self.inner_cv is not None else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "CVConfig":
+        inner_cv = data.get("inner_cv")
+        return cls(
+            n_splits=data.get("n_splits", 5),
+            n_repeats=data.get("n_repeats", 1),
+            strategy=data.get("strategy", CVStrategy.GROUP),
+            shuffle=data.get("shuffle", True),
+            random_state=data.get("random_state", 42),
+            inner_cv=cls.from_dict(inner_cv) if inner_cv is not None else None,
+        )
+
 
 @dataclass
 class FoldResult:
@@ -236,6 +288,38 @@ class FeatureSelectionConfig:
     random_state: int = 42
     feature_groups: Optional[Dict[str, List[str]]] = None
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "method": self.method.value,
+            "n_shadows": self.n_shadows,
+            "threshold_mult": self.threshold_mult,
+            "threshold_percentile": self.threshold_percentile,
+            "retune_after_pruning": self.retune_after_pruning,
+            "min_features": self.min_features,
+            "max_features": self.max_features,
+            "random_state": self.random_state,
+            "feature_groups": self.feature_groups,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "FeatureSelectionConfig":
+        method = data.get("method", FeatureSelectionMethod.SHADOW)
+        if isinstance(method, str):
+            method = FeatureSelectionMethod(method)
+        return cls(
+            enabled=data.get("enabled", True),
+            method=method,
+            n_shadows=data.get("n_shadows", 5),
+            threshold_mult=data.get("threshold_mult", 1.414),
+            threshold_percentile=data.get("threshold_percentile", 10.0),
+            retune_after_pruning=data.get("retune_after_pruning", True),
+            min_features=data.get("min_features", 1),
+            max_features=data.get("max_features"),
+            random_state=data.get("random_state", 42),
+            feature_groups=data.get("feature_groups"),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tuning config
@@ -264,6 +348,32 @@ class TuningConfig:
                 self, "greater_is_better", _infer_greater_is_better(self.metric)
             )
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "n_trials": self.n_trials,
+            "timeout": self.timeout,
+            "early_stopping_rounds": self.early_stopping_rounds,
+            "metric": self.metric,
+            "greater_is_better": self.greater_is_better,
+            "strategy": self.strategy.value,
+            "show_progress": self.show_progress,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TuningConfig":
+        strategy = data.get("strategy", OptimizationStrategy.LAYER_BY_LAYER)
+        if isinstance(strategy, str):
+            strategy = OptimizationStrategy(strategy)
+        return cls(
+            n_trials=data.get("n_trials", 100),
+            timeout=data.get("timeout"),
+            early_stopping_rounds=data.get("early_stopping_rounds"),
+            metric=data.get("metric", "neg_mean_squared_error"),
+            greater_is_better=data.get("greater_is_better"),
+            strategy=strategy,
+            show_progress=data.get("show_progress", False),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Reparameterization config
@@ -275,6 +385,27 @@ class ReparameterizationConfig:
     enabled: bool = True
     use_prebaked: bool = True
     custom_reparameterizations: tuple = ()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "use_prebaked": self.use_prebaked,
+            "custom_reparameterizations": [
+                _serialize_custom_reparameterization(reparameterization)
+                for reparameterization in self.custom_reparameterizations
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ReparameterizationConfig":
+        return cls(
+            enabled=data.get("enabled", True),
+            use_prebaked=data.get("use_prebaked", True),
+            custom_reparameterizations=tuple(
+                _deserialize_custom_reparameterization(item)
+                for item in data.get("custom_reparameterizations", ())
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +421,45 @@ class RunConfig:
     reparameterization: Optional[ReparameterizationConfig] = None
     estimator_scaling: Optional[EstimatorScalingConfig] = None
     verbosity: int = 1
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "cv": self.cv.to_dict(),
+            "tuning": self.tuning.to_dict(),
+            "feature_selection": (
+                self.feature_selection.to_dict()
+                if self.feature_selection is not None else None
+            ),
+            "reparameterization": (
+                self.reparameterization.to_dict()
+                if self.reparameterization is not None else None
+            ),
+            "estimator_scaling": (
+                self.estimator_scaling.to_dict()
+                if self.estimator_scaling is not None else None
+            ),
+            "verbosity": self.verbosity,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RunConfig":
+        return cls(
+            cv=CVConfig.from_dict(data.get("cv", {})),
+            tuning=TuningConfig.from_dict(data.get("tuning", {})),
+            feature_selection=(
+                FeatureSelectionConfig.from_dict(data["feature_selection"])
+                if data.get("feature_selection") is not None else None
+            ),
+            reparameterization=(
+                ReparameterizationConfig.from_dict(data["reparameterization"])
+                if data.get("reparameterization") is not None else None
+            ),
+            estimator_scaling=(
+                EstimatorScalingConfig.from_dict(data["estimator_scaling"])
+                if data.get("estimator_scaling") is not None else None
+            ),
+            verbosity=data.get("verbosity", 1),
+        )
 
 
 # ---------------------------------------------------------------------------

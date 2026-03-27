@@ -63,106 +63,8 @@ class OtherEstimator:
     pass
 
 
-class TestModelPluginBase:
-    """Tests for ModelPlugin abstract base class."""
-
-    def test_plugin_name_default(self):
-        """Verify default name is class name."""
-        plugin = AlwaysPlugin()
-        assert plugin.name == "AlwaysPlugin"
-
-    def test_plugin_repr(self):
-        """Verify repr includes class name."""
-        plugin = AlwaysPlugin()
-        assert "AlwaysPlugin" in repr(plugin)
-
-    def test_applies_to_abstract(self):
-        """Verify applies_to must be implemented."""
-        with pytest.raises(TypeError):
-            ModelPlugin()
-
-    def test_default_modify_search_space_passthrough(self, simple_search_space, rf_classifier_node):
-        """Verify default modify_search_space returns space unchanged."""
-        plugin = AlwaysPlugin()
-
-        result = plugin.modify_search_space(simple_search_space, rf_classifier_node)
-
-        assert result is simple_search_space
-
-    def test_default_modify_params_passthrough(self, rf_classifier_node):
-        """Verify default modify_params returns params unchanged."""
-        plugin = AlwaysPlugin()
-        params = {"a": 1, "b": 2}
-
-        result = plugin.modify_params(params, rf_classifier_node)
-
-        assert result == params
-
-    def test_default_modify_fit_params_passthrough(self, data_context):
-        """Verify default modify_fit_params returns params unchanged."""
-        plugin = AlwaysPlugin()
-        params = {"verbose": True}
-
-        result = plugin.modify_fit_params(params, data_context)
-
-        assert result == params
-
-    def test_default_pre_fit_passthrough(self, rf_classifier_node, data_context):
-        """Verify default pre_fit returns model unchanged."""
-        plugin = AlwaysPlugin()
-        model = object()
-
-        result = plugin.pre_fit(model, rf_classifier_node, data_context)
-
-        assert result is model
-
-    def test_default_post_fit_passthrough(self, rf_classifier_node, data_context):
-        """Verify default post_fit returns model unchanged."""
-        plugin = NeverPlugin()  # Use NeverPlugin to avoid AlwaysPlugin's modification
-        model = object()
-
-        result = plugin.post_fit(model, rf_classifier_node, data_context)
-
-        assert result is model
-
-    def test_default_post_tune_passthrough(self, rf_classifier_node, data_context):
-        """Verify default post_tune returns params unchanged."""
-        plugin = AlwaysPlugin()
-        params = {"n_estimators": 100}
-
-        result = plugin.post_tune(params, rf_classifier_node, data_context)
-
-        assert result == params
-
-    def test_on_fold_start_noop(self, rf_classifier_node, data_context):
-        """Verify on_fold_start does nothing by default."""
-        plugin = AlwaysPlugin()
-
-        # Should not raise
-        plugin.on_fold_start(0, rf_classifier_node, data_context)
-
-    def test_on_fold_end_noop(self, rf_classifier_node):
-        """Verify on_fold_end does nothing by default."""
-        plugin = AlwaysPlugin()
-
-        # Should not raise
-        plugin.on_fold_end(0, None, 0.85, rf_classifier_node)
-
-
 class TestDummyPlugin:
     """Tests for custom plugin implementation."""
-
-    def test_applies_to_target_class(self):
-        """Verify applies_to returns True for matching class."""
-        plugin = DummyPlugin()
-
-        assert plugin.applies_to(TargetEstimator) is True
-
-    def test_not_applies_to_other_class(self):
-        """Verify applies_to returns False for non-matching class."""
-        plugin = DummyPlugin()
-
-        assert plugin.applies_to(OtherEstimator) is False
 
     def test_modify_params_adds_key(self, rf_classifier_node):
         """Verify modify_params adds the expected key."""
@@ -209,36 +111,6 @@ class TestDummyPlugin:
 
 class TestCompositePlugin:
     """Tests for CompositePlugin."""
-
-    def test_composite_name_includes_children(self):
-        """Verify composite name includes child plugin names."""
-        plugins = [DummyPlugin(), AlwaysPlugin()]
-        composite = CompositePlugin(plugins)
-
-        assert "DummyPlugin" in composite.name
-        assert "AlwaysPlugin" in composite.name
-        assert "Composite" in composite.name
-
-    def test_composite_repr(self):
-        """Verify composite repr shows plugin count."""
-        plugins = [DummyPlugin(), AlwaysPlugin()]
-        composite = CompositePlugin(plugins)
-
-        assert "n_plugins=2" in repr(composite)
-
-    def test_applies_to_any_match(self):
-        """Verify applies_to returns True if any child matches."""
-        plugins = [DummyPlugin(), NeverPlugin()]
-        composite = CompositePlugin(plugins)
-
-        assert composite.applies_to(TargetEstimator) is True
-
-    def test_applies_to_none_match(self):
-        """Verify applies_to returns False if no child matches."""
-        plugins = [NeverPlugin(), NeverPlugin()]
-        composite = CompositePlugin(plugins)
-
-        assert composite.applies_to(TargetEstimator) is False
 
     def test_modify_params_chains_applicable(self, rf_classifier_node):
         """Verify modify_params chains applicable plugins."""

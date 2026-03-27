@@ -52,6 +52,20 @@ def _make_classification_ctx(n_samples=200, n_features=5, random_state=42):
     return DataView.from_Xy(X_df, pd.Series(y)), X_df
 
 
+def _make_multiclass_ctx(n_samples=240, n_features=6, random_state=42):
+    X, y = make_classification(
+        n_samples=n_samples,
+        n_features=n_features,
+        n_informative=4,
+        n_redundant=0,
+        n_classes=3,
+        n_clusters_per_class=1,
+        random_state=random_state,
+    )
+    X_df = pd.DataFrame(X, columns=[f"f{i}" for i in range(n_features)])
+    return DataView.from_Xy(X_df, pd.Series(y)), X_df, np.unique(y)
+
+
 def _quick_tuning_config(metric="neg_mean_squared_error", greater_is_better=False):
     cv_config = CVConfig(
         n_splits=2,
@@ -131,6 +145,70 @@ class TestSingleNodePrediction:
         preds_named = inference.predict(X_df, node_name="tree")
 
         np.testing.assert_array_equal(preds_default, preds_named)
+
+    def test_classifier_predict_returns_valid_binary_labels(self, mock_search_backend):
+        ctx, X_df = _make_classification_ctx()
+
+        node = NodeSpec(
+            name="tree",
+            estimator_class=DecisionTreeClassifier,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+        inference = fitted.compile_inference()
+        preds = inference.predict(X_df)
+
+        assert preds.shape == (len(X_df),)
+        assert np.all(np.isin(preds, [0, 1]))
+
+    def test_classifier_predict_returns_valid_multiclass_labels(self, mock_search_backend):
+        ctx, X_df, classes = _make_multiclass_ctx()
+
+        node = NodeSpec(
+            name="tree",
+            estimator_class=DecisionTreeClassifier,
+            fixed_params={"random_state": 42, "max_depth": 4},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=3,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+        inference = fitted.compile_inference()
+        preds = inference.predict(X_df)
+
+        assert preds.shape == (len(X_df),)
+        assert np.all(np.isin(preds, classes))
 
 
 class TestProbabilityPrediction:
@@ -372,7 +450,7 @@ class TestProbaStackingPrediction:
 
         # Default output_type for meta_clf is PREDICTION, so shape is (n,)
         assert preds.shape == (len(X_df),)
-        assert np.isfinite(preds).all()
+        assert np.all(np.isin(preds, [0, 1]))
 
     def test_predict_proba_on_classifier_leaf_uses_leaf_estimator(
         self, mock_search_backend
@@ -895,3 +973,41 @@ class TestPersistenceContract:
         probas_after = loaded.predict_proba(X_df)
 
         np.testing.assert_array_equal(probas_before, probas_after)
+
+    def test_inference_only_round_trip_preserves_classifier_labels(
+        self, tmp_path, mock_search_backend
+    ):
+        ctx, X_df = _make_classification_ctx()
+
+        node = NodeSpec(
+            name="tree",
+            estimator_class=DecisionTreeClassifier,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+        inference = fitted.compile_inference()
+        preds_before = inference.predict(X_df)
+
+        inference.save(tmp_path / "model")
+        loaded = InferenceGraph.load(tmp_path / "model")
+        preds_after = loaded.predict(X_df)
+
+        assert np.all(np.isin(preds_before, [0, 1]))
+        np.testing.assert_array_equal(preds_before, preds_after)

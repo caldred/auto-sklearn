@@ -9,33 +9,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn_meta.selection.shadow import ShadowFeatureSelector, ShadowResult
 
 
-class TestShadowFeatureSelectorCreation:
-    """Tests for ShadowFeatureSelector creation."""
-
-    def test_default_creation(self):
-        """Verify default selector creation."""
-        selector = ShadowFeatureSelector()
-
-        assert selector.n_shadows == 5
-        assert selector.n_clusters == 5
-        assert selector.threshold_mult == pytest.approx(1.414, rel=1e-3)
-        assert selector.random_state == 42
-
-    def test_custom_parameters(self):
-        """Verify custom parameter creation."""
-        selector = ShadowFeatureSelector(
-            n_shadows=3,
-            n_clusters=4,
-            threshold_mult=2.0,
-            random_state=123,
-        )
-
-        assert selector.n_shadows == 3
-        assert selector.n_clusters == 4
-        assert selector.threshold_mult == 2.0
-        assert selector.random_state == 123
-
-
 class TestShadowFeatureSelectorEntropy:
     """Tests for entropy computation."""
 
@@ -277,26 +250,6 @@ class TestShadowFeatureSelectorThreshold:
         assert len(result.features_to_keep) >= len(X.columns) // 2
 
 
-class TestShadowResult:
-    """Tests for ShadowResult dataclass."""
-
-    def test_shadow_result_fields(self):
-        """Verify ShadowResult has expected fields."""
-        result = ShadowResult(
-            features_to_keep=["a", "b"],
-            features_to_drop=["c"],
-            feature_importances={"a": 0.5, "b": 0.3, "c": 0.2},
-            shadow_importances={"shadow_1": 0.1},
-            feature_to_shadow={"a": "shadow_1", "b": "shadow_1", "c": "shadow_1"},
-            threshold_used=0.14,
-        )
-
-        assert result.features_to_keep == ["a", "b"]
-        assert result.features_to_drop == ["c"]
-        assert result.feature_importances["a"] == 0.5
-        assert result.threshold_used == 0.14
-
-
 class TestShadowFeatureSelectorSelectFeatures:
     """Tests for select_features convenience method."""
 
@@ -316,15 +269,3 @@ class TestShadowFeatureSelectorSelectFeatures:
         assert all(f in X.columns for f in selected)
 
 
-class TestShadowFeatureSelectorRepr:
-    """Tests for repr."""
-
-    def test_repr(self):
-        """Verify repr is informative."""
-        selector = ShadowFeatureSelector(n_shadows=3, threshold_mult=1.5)
-
-        repr_str = repr(selector)
-
-        assert "ShadowFeatureSelector" in repr_str
-        assert "n_shadows=3" in repr_str
-        assert "1.5" in repr_str

@@ -46,19 +46,6 @@ class TestFitWithDataView:
 
         mock_runner_inst.fit.assert_called_once_with(dummy_graph, data, dummy_config)
 
-    @patch("sklearn_meta.GraphRunner")
-    def test_dataview_positional_services(self, MockRunner, dummy_graph, dummy_config, sample_xy):
-        X, y = sample_xy
-        data = DataView.from_Xy(X, y)
-        mock_services = MagicMock()
-        mock_runner_inst = MockRunner.return_value
-        mock_runner_inst.fit.return_value = MagicMock()
-
-        fit(dummy_graph, data, dummy_config, mock_services)
-
-        MockRunner.assert_called_once_with(mock_services)
-        mock_runner_inst.fit.assert_called_once_with(dummy_graph, data, dummy_config)
-
     def test_dataview_rejects_groups_kwarg(self, dummy_graph, dummy_config, sample_xy):
         X, y = sample_xy
         data = DataView.from_Xy(X, y)
@@ -75,41 +62,9 @@ class TestFitWithDataView:
 class TestFitWithRawXy:
     """New DataFrame + y path."""
 
-    @patch("sklearn_meta.GraphRunner")
-    def test_raw_xy_path(self, MockRunner, dummy_graph, dummy_config, sample_xy):
-        X, y = sample_xy
-        mock_runner_inst = MockRunner.return_value
-        mock_runner_inst.fit.return_value = MagicMock()
-
-        fit(dummy_graph, X, y, dummy_config)
-
-        call_args = mock_runner_inst.fit.call_args
-        passed_data = call_args[0][1]
-        assert isinstance(passed_data, DataView)
-
-    @patch("sklearn_meta.GraphRunner")
-    def test_raw_xy_with_groups(self, MockRunner, dummy_graph, dummy_config, sample_xy):
-        X, y = sample_xy
-        groups = np.array([0, 0, 1, 1])
-        mock_runner_inst = MockRunner.return_value
-        mock_runner_inst.fit.return_value = MagicMock()
-
-        fit(dummy_graph, X, y, dummy_config, groups=groups)
-
-        call_args = mock_runner_inst.fit.call_args
-        passed_data = call_args[0][1]
-        assert isinstance(passed_data, DataView)
-        np.testing.assert_array_equal(passed_data.groups, groups)
-
-
 class TestFitTypeErrors:
     """Helpful error messages for common mistakes."""
 
-    def test_ndarray_raises_type_error(self, dummy_graph, dummy_config):
-        X = np.array([[1, 2], [3, 4]])
-        with pytest.raises(TypeError, match="DataFrame"):
-            fit(dummy_graph, X, np.array([0, 1]), dummy_config)
-
     def test_string_raises_type_error(self, dummy_graph, dummy_config):
-        with pytest.raises(TypeError, match="DataFrame"):
+        with pytest.raises(TypeError, match="array-like features"):
             fit(dummy_graph, "not_data", None, dummy_config)

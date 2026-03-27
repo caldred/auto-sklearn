@@ -246,6 +246,8 @@ layers = graph.get_layers()
 # [['rf', 'xgb', 'svm'], ['meta']]
 ```
 
+`get_training_layers()` is similar but ignores edges that do not block training (e.g., `CONDITIONAL_SAMPLE` edges with `use_actual_during_training=True`). This is used by `GraphRunner` when a `TrainingDispatcher` is configured, enabling nodes to be trained in parallel even when they share non-blocking edges.
+
 ### Root and Leaf Nodes
 
 ```python

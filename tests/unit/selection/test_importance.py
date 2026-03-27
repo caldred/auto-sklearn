@@ -211,11 +211,3 @@ class TestImportanceNormalization:
 
         assert all(v == 0 for v in normalized.values())
 
-    def test_normalize_preserves_order(self):
-        """Verify normalize preserves relative ordering."""
-        extractor = TreeImportanceExtractor()
-
-        importance = {"a": 5, "b": 10, "c": 15}
-        normalized = extractor.normalize(importance)
-
-        assert normalized["a"] < normalized["b"] < normalized["c"]

@@ -604,6 +604,9 @@ class MockSearchBackend:
             study_name=study_name,
         )
 
+    def clone(self) -> "MockSearchBackend":
+        return MockSearchBackend(best_params=dict(self._best_params))
+
 
 @pytest.fixture
 def mock_search_backend():

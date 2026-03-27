@@ -143,7 +143,7 @@ predictions = result.predict(X_test)
 print(result.best_score_)   # meta-learner's CV score
 ```
 
-Base models are tuned first, then their out-of-fold predictions become features for the meta-learner. See [Stacking](stacking.md) for details on how this works and when to use it.
+Base models are tuned first, then their out-of-fold predictions become features for the meta-learner. For classifier stacks, `stack()` uses base-model probabilities by default when they are available; pass `stack_output="prediction"` to stack class labels instead. See [Stacking](stacking.md) for details on how this works and when to use it.
 
 ---
 
@@ -154,6 +154,7 @@ All four helpers return a `TrainingRun` (or `ComparisonResult` for `compare()`).
 ```python
 # Predictions
 predictions = result.predict(X_test)
+# For classifiers, predict() returns final class labels
 
 # Best hyperparameters and score
 result.best_params_

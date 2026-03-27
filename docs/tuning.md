@@ -196,6 +196,29 @@ result = runner.fit(graph, data, config)
 
 Use parallel execution when you have multiple independent base models in the same layer and sufficient CPU/memory. Avoid it when models already use internal parallelism (`n_jobs=-1`), since they'll contend for the same cores.
 
+### Training Dispatch
+
+For more control over where and how node training runs, use a `TrainingDispatcher`. The `LocalTrainingDispatcher` runs node-training jobs in the local process, using live in-memory objects for single-worker execution and serialized jobs when parallelizing via an executor. Implement the `TrainingDispatcher` protocol to run jobs on remote workers or custom infrastructure.
+
+```python
+from sklearn_meta import GraphRunner, RuntimeServices, LocalTrainingDispatcher
+
+services = RuntimeServices(training_dispatcher=LocalTrainingDispatcher())
+result = GraphRunner(services).fit(graph, data, config)
+```
+
+When a dispatcher is configured, the runner uses `graph.get_training_layers()` to find nodes that can train concurrently (ignoring non-blocking edges), then batches dispatchable nodes per layer. Conditional and distilled nodes are always trained locally.
+
+Use `validate_dispatchable()` to check compatibility before dispatch:
+
+```python
+from sklearn_meta import validate_dispatchable
+
+warnings = validate_dispatchable(graph, config)
+for w in warnings:
+    print(f"{w.node_name}: {w.message}")
+```
+
 ---
 
 ## Custom Search Backend

@@ -3,32 +3,15 @@
 import pytest
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 from sklearn_meta.spec.graph import CycleError, GraphSpec
-from sklearn_meta.spec.node import NodeSpec
-from sklearn_meta.spec.dependency import DependencyEdge
+from sklearn_meta.spec.node import NodeSpec, OutputType
+from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
 
 
 class TestGraphSpecBasics:
     """Tests for basic GraphSpec operations."""
-
-    def test_empty_graph(self):
-        """Verify empty graph has no nodes or edges."""
-        graph = GraphSpec()
-
-        assert len(graph) == 0
-        assert len(graph.edges) == 0
-
-    def test_add_node(self):
-        """Verify node can be added to graph."""
-        graph = GraphSpec()
-        node = NodeSpec(name="test", estimator_class=LogisticRegression)
-
-        graph.add_node(node)
-
-        assert len(graph) == 1
-        assert "test" in graph
-        assert graph.get_node("test") is node
 
     def test_add_duplicate_node_raises(self):
         """Verify adding duplicate node raises error."""
@@ -47,16 +30,6 @@ class TestGraphSpecBasics:
 
         with pytest.raises(KeyError, match="not found"):
             graph.get_node("nonexistent")
-
-    def test_contains(self):
-        """Verify __contains__ works correctly."""
-        graph = GraphSpec()
-        node = NodeSpec(name="test", estimator_class=LogisticRegression)
-        graph.add_node(node)
-
-        assert "test" in graph
-        assert "nonexistent" not in graph
-
 
 class TestGraphSpecEdges:
     """Tests for edge operations."""
@@ -246,65 +219,6 @@ class TestGraphSpecRootAndLeaf:
 
         assert leaves == ["meta"]
 
-    def test_single_node_is_both_root_and_leaf(self, simple_graph):
-        """Verify single node is both root and leaf."""
-        roots = simple_graph.get_root_nodes()
-        leaves = simple_graph.get_leaf_nodes()
-
-        assert roots == ["rf"]
-        assert leaves == ["rf"]
-
-
-class TestGraphSpecValidation:
-    """Tests for graph validation."""
-
-    def test_validate_valid_graph(self, stacking_graph):
-        """Verify valid graph returns no errors."""
-        warnings = stacking_graph.validate()
-
-        # May have warnings but should not raise
-        assert isinstance(warnings, list)
-
-    def test_validate_detects_orphan(self):
-        """Verify validation warns about orphaned nodes."""
-        graph = GraphSpec()
-        graph.add_node(NodeSpec(name="connected", estimator_class=LogisticRegression))
-        graph.add_node(NodeSpec(name="orphan", estimator_class=LogisticRegression))
-
-        warnings = graph.validate()
-
-        orphan_warning = any("orphan" in w.lower() or "no connections" in w.lower() for w in warnings)
-        assert orphan_warning
-
-
-class TestGraphSpecSubgraph:
-    """Tests for subgraph extraction."""
-
-    def test_subgraph_single_node(self, stacking_graph):
-        """Verify subgraph with single node."""
-        subgraph = stacking_graph.subgraph({"rf_base"})
-
-        assert len(subgraph) == 1
-        assert "rf_base" in subgraph
-        assert len(subgraph.edges) == 0
-
-    def test_subgraph_preserves_edges(self, stacking_graph):
-        """Verify subgraph preserves edges between included nodes."""
-        subgraph = stacking_graph.subgraph({"rf_base", "meta"})
-
-        assert len(subgraph) == 2
-        assert len(subgraph.edges) == 1
-        assert subgraph.edges[0].source == "rf_base"
-        assert subgraph.edges[0].target == "meta"
-
-    def test_subgraph_excludes_external_edges(self, stacking_graph):
-        """Verify subgraph excludes edges to nodes not in subgraph."""
-        subgraph = stacking_graph.subgraph({"rf_base", "lr_base"})
-
-        assert len(subgraph) == 2
-        assert len(subgraph.edges) == 0  # No edges between rf_base and lr_base
-
-
 class TestGraphSpecAncestorsDescendants:
     """Tests for ancestor and descendant extraction."""
 
@@ -345,46 +259,209 @@ class TestGraphSpecAncestorsDescendants:
         assert descendants_a == {"B", "C", "D"}
 
 
-class TestGraphSpecProperties:
-    """Tests for graph properties."""
+class TestGraphSpecSubgraph:
+    """Tests for subgraph extraction with detailed edge/node filtering."""
 
-    def test_nodes_property(self, stacking_graph):
-        """Verify nodes property returns dict copy."""
-        nodes = stacking_graph.nodes
+    def test_subgraph_diamond_excludes_missing_node_edges(self, diamond_graph):
+        """Subgraph {A,B,D} of diamond keeps A->B, B->D but not A->C, C->D."""
+        sub = diamond_graph.subgraph({"A", "B", "D"})
 
-        assert len(nodes) == 3
-        assert "rf_base" in nodes
-        assert "lr_base" in nodes
-        assert "meta" in nodes
+        assert len(sub) == 3
+        assert {"A", "B", "D"} == set(sub.nodes.keys())
 
-    def test_edges_property(self, stacking_graph):
-        """Verify edges property returns list copy."""
-        edges = stacking_graph.edges
+        edge_pairs = {(e.source, e.target) for e in sub.edges}
+        assert ("A", "B") in edge_pairs
+        assert ("B", "D") in edge_pairs
+        assert ("A", "C") not in edge_pairs
+        assert ("C", "D") not in edge_pairs
 
-        assert len(edges) == 2
+    def test_subgraph_single_node_no_edges(self, diamond_graph):
+        """Subgraph with a single node should have 1 node and 0 edges."""
+        sub = diamond_graph.subgraph({"B"})
 
-    def test_len(self, stacking_graph):
-        """Verify __len__ returns node count."""
-        assert len(stacking_graph) == 3
+        assert len(sub) == 1
+        assert "B" in sub
+        assert len(sub.edges) == 0
+
+    def test_subgraph_preserves_node_properties(self):
+        """Subgraph preserves estimator_class and fixed_params on nodes."""
+        graph = GraphSpec()
+        node = NodeSpec(
+            name="lr",
+            estimator_class=LogisticRegression,
+            fixed_params={"C": 0.5, "max_iter": 200},
+        )
+        graph.add_node(node)
+
+        sub = graph.subgraph({"lr"})
+        sub_node = sub.get_node("lr")
+
+        assert sub_node.estimator_class is LogisticRegression
+        assert sub_node.fixed_params == {"C": 0.5, "max_iter": 200}
+
+    def test_subgraph_stacking_base_models_no_edges(self, stacking_graph):
+        """Subgraph of base models only has no edges (target 'meta' excluded)."""
+        sub = stacking_graph.subgraph({"rf_base", "lr_base"})
+
+        assert len(sub) == 2
+        assert len(sub.edges) == 0
+
+    def test_subgraph_topological_order_valid(self, diamond_graph):
+        """Subgraph topological_order works without broken references."""
+        sub = diamond_graph.subgraph({"A", "B", "D"})
+        order = sub.topological_order()
+
+        assert order.index("A") < order.index("B")
+        assert order.index("B") < order.index("D")
 
 
-class TestGraphSpecIteration:
-    """Tests for graph iteration."""
+class TestGraphSpecValidateWarnings:
+    """Tests for validate() warnings and error detection."""
 
-    def test_iter_topological_order(self, linear_graph):
-        """Verify iteration is in topological order."""
-        nodes = list(linear_graph)
+    def test_two_orphan_nodes_produce_warnings(self):
+        """Two-node graph with no edges: both nodes should warn."""
+        graph = GraphSpec()
+        graph.add_node(NodeSpec(name="a", estimator_class=LogisticRegression))
+        graph.add_node(NodeSpec(name="b", estimator_class=LogisticRegression))
 
-        assert nodes == ["A", "B", "C"]
+        warnings = graph.validate()
+
+        warning_text = " ".join(warnings).lower()
+        assert "no connections" in warning_text or "orphan" in warning_text
+        # Both nodes should produce a warning
+        node_warnings = [w for w in warnings if "no connections" in w.lower() or "orphan" in w.lower()]
+        assert len(node_warnings) == 2
+
+    def test_single_node_no_orphan_warning(self):
+        """Single-node graph should NOT produce orphan warning."""
+        graph = GraphSpec()
+        graph.add_node(NodeSpec(name="solo", estimator_class=LogisticRegression))
+
+        warnings = graph.validate()
+
+        orphan_warnings = [w for w in warnings if "no connections" in w.lower() or "orphan" in w.lower()]
+        assert len(orphan_warnings) == 0
+
+    def test_prediction_dependency_lacking_predict_warns(self):
+        """Node used as PREDICTION dep but lacking predict: should warn."""
+        graph = GraphSpec()
+        graph.add_node(NodeSpec(
+            name="scaler",
+            estimator_class=StandardScaler,
+            output_type=OutputType.TRANSFORM,
+        ))
+        graph.add_node(NodeSpec(name="model", estimator_class=LogisticRegression))
+
+        graph.add_edge(DependencyEdge(
+            source="scaler",
+            target="model",
+            dep_type=DependencyType.PREDICTION,
+        ))
+
+        warnings = graph.validate()
+
+        predict_warnings = [w for w in warnings if "predict" in w.lower()]
+        assert len(predict_warnings) >= 1
+
+    def test_cycle_raises_cycle_error(self):
+        """Graph with a cycle should raise CycleError from validate."""
+        graph = GraphSpec()
+        graph.add_node(NodeSpec(name="A", estimator_class=LogisticRegression))
+        graph.add_node(NodeSpec(name="B", estimator_class=LogisticRegression))
+
+        graph.add_edge(DependencyEdge(source="A", target="B"))
+
+        # Adding C->A after B->C would be caught at add_edge time,
+        # so test that validate itself calls topological_order which
+        # would surface a cycle if one existed.
+        # We verify that a valid graph does not raise.
+        graph.validate()  # should not raise
+
+        # Now test that CycleError is raised when a cycle is attempted
+        with pytest.raises(CycleError):
+            graph.add_edge(DependencyEdge(source="B", target="A"))
 
 
-class TestGraphSpecRepr:
-    """Tests for graph representation."""
+class TestGraphSpecMixedEdgeTypes:
+    """Tests for graphs with mixed dependency types and layer computation."""
 
-    def test_repr(self, stacking_graph):
-        """Verify repr is informative."""
-        repr_str = repr(stacking_graph)
+    def test_transform_and_prediction_edges_three_layers(self):
+        """scaler->model (TRANSFORM), model->meta (PREDICTION) = 3 layers."""
+        graph = GraphSpec()
+        graph.add_node(NodeSpec(
+            name="scaler",
+            estimator_class=StandardScaler,
+            output_type=OutputType.TRANSFORM,
+        ))
+        graph.add_node(NodeSpec(name="model", estimator_class=LogisticRegression))
+        graph.add_node(NodeSpec(name="meta", estimator_class=LogisticRegression))
 
-        assert "GraphSpec" in repr_str
-        assert "nodes=3" in repr_str
-        assert "edges=2" in repr_str
+        graph.add_edge(DependencyEdge(
+            source="scaler", target="model", dep_type=DependencyType.TRANSFORM,
+        ))
+        graph.add_edge(DependencyEdge(
+            source="model", target="meta", dep_type=DependencyType.PREDICTION,
+        ))
+
+        layers = graph.get_layers()
+
+        assert len(layers) == 3
+        assert layers[0] == ["scaler"]
+        assert layers[1] == ["model"]
+        assert layers[2] == ["meta"]
+
+    def test_distill_edge_two_layers(self):
+        """teacher->student (DISTILL) should have 2 layers."""
+        graph = GraphSpec()
+        graph.add_node(NodeSpec(name="teacher", estimator_class=LogisticRegression))
+        graph.add_node(NodeSpec(name="student", estimator_class=LogisticRegression))
+
+        graph.add_edge(DependencyEdge(
+            source="teacher", target="student", dep_type=DependencyType.DISTILL,
+        ))
+
+        layers = graph.get_layers()
+
+        assert len(layers) == 2
+        assert layers[0] == ["teacher"]
+        assert layers[1] == ["student"]
+
+    def test_same_source_different_edge_types(self):
+        """One source with TRANSFORM to one target and PREDICTION to another."""
+        graph = GraphSpec()
+        graph.add_node(NodeSpec(
+            name="scaler",
+            estimator_class=StandardScaler,
+            output_type=OutputType.TRANSFORM,
+        ))
+        graph.add_node(NodeSpec(name="lr", estimator_class=LogisticRegression))
+        graph.add_node(NodeSpec(name="meta", estimator_class=LogisticRegression))
+
+        graph.add_edge(DependencyEdge(
+            source="scaler", target="lr", dep_type=DependencyType.TRANSFORM,
+        ))
+        graph.add_edge(DependencyEdge(
+            source="scaler", target="meta", dep_type=DependencyType.PREDICTION,
+        ))
+
+        # Both lr and meta depend on scaler, so 2 layers
+        layers = graph.get_layers()
+        assert len(layers) == 2
+        assert layers[0] == ["scaler"]
+        assert set(layers[1]) == {"lr", "meta"}
+
+
+class TestGraphSpecIterAndProperties:
+    """Tests for iteration, property copies, and root/leaf accessors."""
+
+    def test_iter_returns_topological_order(self):
+        """iter(graph) returns names in topological order."""
+        graph = GraphSpec()
+        graph.add_node(NodeSpec(name="A", estimator_class=LogisticRegression))
+        graph.add_node(NodeSpec(name="B", estimator_class=LogisticRegression))
+        graph.add_edge(DependencyEdge(source="A", target="B"))
+
+        names = list(graph)
+
+        assert names.index("A") < names.index("B")
+

@@ -37,6 +37,7 @@ result.best_score_           # meta-learner's CV score
 | `metric` | Scoring metric | `"neg_mean_squared_error"` |
 | `n_trials` | Optuna trials per model | `50` |
 | `cv` | Number of folds or a `CVConfig` | `5` |
+| `stack_output` | Base-model output mode: `"auto"`, `"prediction"`, or `"proba"` | `"auto"` |
 | `strategy` | CV strategy (auto-detected if omitted) | `None` |
 | `groups` | Group labels for group CV | `None` |
 
@@ -45,6 +46,8 @@ Model specs can be:
 - An estimator instance: `RandomForestClassifier(n_estimators=200)` (uses those params, no tuning)
 - A tuple: `(EstimatorClass, params_dict)` for tuning
 - A tuple: `(EstimatorClass, params_dict, fixed_params_dict)` for tuning with fixed params
+
+In `stack_output="auto"` mode, classifier base models use probabilities when they expose `predict_proba()`, while regressors and non-probabilistic classifiers use direct predictions. Use `stack_output="prediction"` to force label stacking, or `stack_output="proba"` to require probabilities from every base model.
 
 ---
 
@@ -60,7 +63,7 @@ sklearn-meta solves this with **out-of-fold (OOF) predictions**:
 4. Combine predictions -- every training sample has a prediction from a model that never saw it
 5. Train the meta-learner on these OOF predictions
 
-At prediction time, all fold models predict and their outputs are averaged before being passed to the meta-learner.
+At prediction time, all fold models predict and their outputs are aggregated before being passed to the meta-learner. Regressors are averaged, while classifier leaves return valid class labels rather than averaged numeric label values.
 
 ### Layer-by-Layer Optimization
 

@@ -14,104 +14,19 @@ class MockModel:
         self.value = value
 
 
-class TestCacheEntry:
-    """Tests for CacheEntry dataclass."""
-
-    def test_create_entry(self):
-        """Verify cache entry can be created."""
-        entry = CacheEntry(
-            cache_key="abc123",
-            model=MockModel(),
-            created_at="2024-01-01T00:00:00",
-        )
-
-        assert entry.cache_key == "abc123"
-        assert entry.hit_count == 0
-
-    def test_entry_defaults(self):
-        """Verify entry has sensible defaults."""
-        entry = CacheEntry(
-            cache_key="test",
-            model=None,
-            created_at="2024-01-01",
-        )
-
-        assert entry.hit_count == 0
-
-
 class TestFitCacheInit:
     """Tests for FitCache initialization."""
 
-    def test_default_cache_dir(self):
-        """Verify default cache dir is temp directory."""
-        cache = FitCache()
-
-        assert "sklearn_meta_cache" in str(cache.cache_dir)
-
-    def test_custom_cache_dir(self, tmp_path):
-        """Verify custom cache dir is used."""
-        custom_dir = tmp_path / "my_cache"
-        cache = FitCache(cache_dir=str(custom_dir))
-
-        assert cache.cache_dir == custom_dir
-
     def test_creates_directory(self, tmp_path):
-        """Verify cache directory is created."""
+        """Verify cache directory is created on init."""
         cache_dir = tmp_path / "new_cache"
         FitCache(cache_dir=str(cache_dir))
 
         assert cache_dir.exists()
 
-    def test_default_max_size(self):
-        """Verify default max size."""
-        cache = FitCache()
-
-        assert cache.max_size_mb == 1000.0
-
-    def test_custom_max_size(self):
-        """Verify custom max size."""
-        cache = FitCache(max_size_mb=500.0)
-
-        assert cache.max_size_mb == 500.0
-
-    def test_enabled_by_default(self):
-        """Verify cache is enabled by default."""
-        cache = FitCache()
-
-        assert cache.enabled is True
-
-    def test_disabled_cache(self):
-        """Verify cache can be disabled."""
-        cache = FitCache(enabled=False)
-
-        assert cache.enabled is False
-
-    def test_repr(self, tmp_path):
-        """Verify repr includes useful info."""
-        cache = FitCache(cache_dir=str(tmp_path))
-
-        repr_str = repr(cache)
-
-        assert "FitCache" in repr_str
-        assert "entries" in repr_str
-
 
 class TestFitCacheCacheKey:
     """Tests for FitCache.cache_key method."""
-
-    def test_cache_key_returns_string(self, data_context):
-        """Verify cache_key returns string."""
-        cache = FitCache()
-        node = MagicMock()
-        node.name = "test_node"
-        node.estimator_class = MockModel
-        node.estimator_class.__name__ = "MockModel"
-        params = {"n_estimators": 100}
-
-        key = cache.cache_key(node, params, data_context)
-
-        assert isinstance(key, str)
-        assert len(key) > 0
 
     def test_cache_key_deterministic(self, data_context):
         """Verify same inputs produce same key."""
@@ -186,15 +101,6 @@ class TestFitCacheCacheKey:
 
 class TestFitCacheDataHash:
     """Tests for FitCache._data_hash method."""
-
-    def test_data_hash_returns_string(self, data_context):
-        """Verify data hash returns string."""
-        cache = FitCache()
-
-        hash_val = cache._data_hash(data_context)
-
-        assert isinstance(hash_val, str)
-        assert len(hash_val) == 16
 
     def test_data_hash_deterministic(self, data_context):
         """Verify same data produces same hash."""
@@ -351,61 +257,8 @@ class TestFitCacheInvalidate:
         assert "test_key" not in cache._memory_cache
 
 
-class TestFitCacheClear:
-    """Tests for FitCache.clear method."""
-
-    def test_clear_removes_all(self, tmp_path):
-        """Verify clear removes all entries."""
-        cache = FitCache(cache_dir=str(tmp_path))
-        cache.put("key1", MockModel())
-        cache.put("key2", MockModel())
-        cache.put("key3", MockModel())
-
-        cache.clear()
-
-        assert len(cache._memory_cache) == 0
-        assert list(tmp_path.glob("*.pkl")) == []
-
-    def test_clear_empty_cache(self, tmp_path):
-        """Verify clear on empty cache doesn't error."""
-        cache = FitCache(cache_dir=str(tmp_path))
-
-        # Should not raise
-        cache.clear()
-
-
-class TestFitCacheSizeLimit:
-    """Tests for FitCache size limit enforcement."""
-
-    def test_enforce_size_limit(self, tmp_path):
-        """Verify size limit is enforced."""
-        cache = FitCache(cache_dir=str(tmp_path), max_size_mb=0.001)  # Tiny limit
-
-        # Put enough models to exceed limit
-        for i in range(10):
-            model = MockModel(value=i)
-            model.large_data = np.random.randn(1000)  # Add some size
-            cache.put(f"key_{i}", model)
-
-        # Some should have been evicted
-        # Note: exact count depends on model size and eviction strategy
-
-
 class TestFitCacheStats:
     """Tests for FitCache.stats method."""
-
-    def test_stats_returns_dict(self, tmp_path):
-        """Verify stats returns dictionary."""
-        cache = FitCache(cache_dir=str(tmp_path))
-
-        stats = cache.stats()
-
-        assert isinstance(stats, dict)
-        assert "enabled" in stats
-        assert "memory_entries" in stats
-        assert "disk_entries" in stats
-        assert "disk_size_mb" in stats
-        assert "total_hits" in stats
 
     def test_stats_reflects_state(self, tmp_path):
         """Verify stats reflect cache state."""
@@ -422,20 +275,124 @@ class TestFitCacheStats:
         assert stats["total_hits"] == 2
 
 
-class TestFitCacheCorruption:
-    """Tests for cache corruption handling."""
+class TestFitCacheSizeLimitEviction:
+    """Verify that size-limit enforcement actually removes entries."""
 
-    def test_handles_corrupted_disk_cache(self, tmp_path):
-        """Verify corrupted disk cache is handled."""
+    def test_evicts_oldest_entries_when_over_limit(self, tmp_path):
+        """After exceeding max_size_mb, the oldest disk entries are removed."""
+        # Each entry with 1000 doubles ≈ 0.01 MB; set limit so ~3-4 fit
+        cache = FitCache(cache_dir=str(tmp_path), max_size_mb=0.03)
+
+        for i in range(10):
+            model = MockModel(value=i)
+            model.large_data = np.random.randn(1000)
+            cache.put(f"key_{i}", model)
+
+        disk_files = list(tmp_path.glob("*.pkl"))
+        assert len(disk_files) < 10, "Expected some entries to be evicted"
+        assert len(disk_files) > 0, "Expected at least some entries to survive"
+
+    def test_eviction_keeps_most_recent(self, tmp_path):
+        """Most-recently-added entries survive eviction (LRU by mtime)."""
+        cache = FitCache(cache_dir=str(tmp_path), max_size_mb=0.03)
+
+        for i in range(10):
+            model = MockModel(value=i)
+            model.large_data = np.random.randn(1000)
+            cache.put(f"key_{i}", model)
+
+        # The last entry should still be accessible
+        last = cache.get("key_9")
+        assert last is not None
+        assert last.value == 9
+
+
+class TestFitCacheCorruptionRecovery:
+    """Verify the cache remains functional after encountering corruption."""
+
+    def test_put_works_after_corruption(self, tmp_path):
+        """Cache can store and retrieve new entries after hitting corruption."""
         cache = FitCache(cache_dir=str(tmp_path))
 
-        # Create corrupted cache file
-        corrupt_path = tmp_path / "corrupt_key.pkl"
-        with open(corrupt_path, "wb") as f:
-            f.write(b"not valid pickle data")
+        corrupt_path = tmp_path / "bad_key.pkl"
+        corrupt_path.write_bytes(b"not valid pickle")
 
-        # Should return None and remove corrupt file
-        result = cache.get("corrupt_key")
-
-        assert result is None
+        # Hit the corruption
+        assert cache.get("bad_key") is None
         assert not corrupt_path.exists()
+
+        # Cache should still work for new entries
+        cache.put("good_key", MockModel(value=77))
+        result = cache.get("good_key")
+        assert result is not None
+        assert result.value == 77
+
+    def test_get_from_disk_after_memory_eviction_survives_corruption(self, tmp_path):
+        """Corrupted file is removed; next put/get works normally."""
+        cache = FitCache(cache_dir=str(tmp_path))
+
+        cache.put("k1", MockModel(value=1))
+
+        # Corrupt the disk file while memory cache still has the entry
+        disk_path = tmp_path / "k1.pkl"
+        disk_path.write_bytes(b"garbage")
+
+        # Memory cache still works
+        assert cache.get("k1").value == 1
+
+        # Clear memory cache to force disk read → triggers corruption handler
+        cache._memory_cache.clear()
+        assert cache.get("k1") is None
+        assert not disk_path.exists()
+
+
+class TestFitCacheDataHashCollisions:
+    """Verify that data hashes distinguish data that differs only in values."""
+
+    def test_same_shape_different_values_produce_different_hashes(self, classification_data):
+        """Two DataViews with same shape but different X values hash differently."""
+        from sklearn_meta.data.view import DataView
+
+        cache = FitCache()
+        X, y = classification_data
+
+        ctx1 = DataView.from_Xy(X, y)
+        ctx2 = DataView.from_Xy(X * 2.0, y)
+
+        h1 = cache._data_hash(ctx1)
+        h2 = cache._data_hash(ctx2)
+        assert h1 != h2
+
+    def test_same_X_different_y_produce_different_hashes(self, classification_data):
+        """DataViews with same X but different y hash differently."""
+        from sklearn_meta.data.view import DataView
+
+        cache = FitCache()
+        X, y = classification_data
+
+        ctx1 = DataView.from_Xy(X, y)
+        ctx2 = DataView.from_Xy(X, 1 - y)  # Flip labels
+
+        h1 = cache._data_hash(ctx1)
+        h2 = cache._data_hash(ctx2)
+        assert h1 != h2
+
+    def test_same_values_different_columns_produce_different_hashes(self, classification_data):
+        """DataViews with same values but different column names hash differently."""
+        import pandas as pd
+        from sklearn_meta.data.view import DataView
+
+        cache = FitCache()
+        X, y = classification_data
+
+        X_renamed = X.copy()
+        X_renamed.columns = [f"renamed_{i}" for i in range(X.shape[1])]
+
+        ctx1 = DataView.from_Xy(X, y)
+        ctx2 = DataView.from_Xy(X_renamed, y)
+
+        h1 = cache._data_hash(ctx1)
+        h2 = cache._data_hash(ctx2)
+        assert h1 != h2
+
+

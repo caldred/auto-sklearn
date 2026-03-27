@@ -83,6 +83,19 @@ class QuantileScalingConfig:
 
         return params
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "base_params": dict(self.base_params),
+            "scaling_rules": dict(self.scaling_rules),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "QuantileScalingConfig":
+        return cls(
+            base_params=dict(data.get("base_params", {})),
+            scaling_rules=dict(data.get("scaling_rules", {})),
+        )
+
 
 @dataclass
 class QuantileNodeSpec(NodeSpec):
@@ -201,6 +214,35 @@ class QuantileNodeSpec(NodeSpec):
         return (
             f"QuantileNodeSpec(name={self.name!r}, property={self.property_name!r}, "
             f"estimator={class_name}, n_quantiles={self.n_quantiles})"
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result.update({
+            "property_name": self.property_name,
+            "quantile_levels": list(self.quantile_levels),
+            "xgboost_objective": self.xgboost_objective,
+        })
+        if self.quantile_scaling is not None:
+            result["quantile_scaling"] = self.quantile_scaling.to_dict()
+        return result
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "QuantileNodeSpec":
+        fields = cls._base_fields_from_dict(data)
+
+        quantile_scaling = None
+        if data.get("quantile_scaling") is not None:
+            quantile_scaling = QuantileScalingConfig.from_dict(
+                data["quantile_scaling"]
+            )
+
+        return cls(
+            **fields,
+            property_name=data["property_name"],
+            quantile_levels=list(data.get("quantile_levels", DEFAULT_QUANTILE_LEVELS)),
+            quantile_scaling=quantile_scaling,
+            xgboost_objective=data.get("xgboost_objective", "reg:quantileerror"),
         )
 
 

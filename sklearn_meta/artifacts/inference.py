@@ -7,10 +7,12 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+from sklearn.base import ClassifierMixin
 
 from sklearn_meta.engine.estimator_factory import get_output
 from sklearn_meta.spec.dependency import DependencyType
 from sklearn_meta.spec.graph import GraphSpec
+from sklearn_meta.spec.node import OutputType
 
 if TYPE_CHECKING:
     from sklearn_meta.spec.quantile import JointQuantileGraphSpec
@@ -86,22 +88,137 @@ class InferenceGraph:
             X_augmented = X_augmented[sel_feats]
 
         # Ensemble predictions from fold models
+        models = self.node_models[node_name]
+        aggregation_mode = self._resolve_aggregation_mode(
+            node,
+            models,
+            final_output_mode=final_output_mode,
+        )
+        model_output_mode = (
+            "predict_proba"
+            if aggregation_mode == "classifier_proba_to_labels"
+            else final_output_mode
+        )
         predictions = []
-        for model in self.node_models[node_name]:
+        for model in models:
             predictions.append(
                 self._get_model_output(
                     node,
                     model,
                     X_augmented,
-                    final_output_mode=final_output_mode,
+                    final_output_mode=model_output_mode,
                 )
             )
 
-        result = np.mean(predictions, axis=0)
+        result = self._aggregate_outputs(
+            models,
+            predictions,
+            aggregation_mode=aggregation_mode,
+        )
         if final_output_mode == "configured":
             cache[node_name] = result
         cache[cache_key] = result
         return result
+
+    def _resolve_aggregation_mode(
+        self,
+        node,
+        models: List[Any],
+        *,
+        final_output_mode: str,
+    ) -> str:
+        if final_output_mode != "configured":
+            return "average"
+        if node.output_type != OutputType.PREDICTION:
+            return "average"
+        if not self._is_classifier(node, models):
+            return "average"
+        if all(hasattr(model, "predict_proba") for model in models):
+            return "classifier_proba_to_labels"
+        return "classifier_vote"
+
+    def _aggregate_outputs(
+        self,
+        models: List[Any],
+        predictions: List[np.ndarray],
+        *,
+        aggregation_mode: str,
+    ) -> np.ndarray:
+        if aggregation_mode == "classifier_proba_to_labels":
+            return self._aggregate_classifier_proba_predictions(models, predictions)
+        if aggregation_mode == "classifier_vote":
+            return self._aggregate_classifier_votes(models, predictions)
+        return np.mean(predictions, axis=0)
+
+    @staticmethod
+    def _is_classifier(node, models: List[Any]) -> bool:
+        if models and hasattr(models[0], "classes_"):
+            return True
+        return (
+            isinstance(node.estimator_class, type)
+            and issubclass(node.estimator_class, ClassifierMixin)
+        )
+
+    @staticmethod
+    def _aggregate_classifier_proba_predictions(
+        models: List[Any],
+        predictions: List[np.ndarray],
+    ) -> np.ndarray:
+        target_classes = InferenceGraph._get_class_order(models, predictions)
+        class_to_index = {
+            label: idx for idx, label in enumerate(target_classes.tolist())
+        }
+
+        aligned_predictions: List[np.ndarray] = []
+        for model, model_predictions in zip(models, predictions):
+            model_predictions = np.asarray(model_predictions)
+            model_classes = np.asarray(getattr(model, "classes_", target_classes))
+            if np.array_equal(model_classes, target_classes):
+                aligned_predictions.append(model_predictions)
+                continue
+
+            aligned = np.zeros(
+                (model_predictions.shape[0], len(target_classes)),
+                dtype=model_predictions.dtype,
+            )
+            for source_idx, class_label in enumerate(model_classes.tolist()):
+                target_idx = class_to_index.get(class_label)
+                if target_idx is not None:
+                    aligned[:, target_idx] = model_predictions[:, source_idx]
+            aligned_predictions.append(aligned)
+
+        averaged = np.mean(aligned_predictions, axis=0)
+        return target_classes[np.argmax(averaged, axis=1)]
+
+    def _aggregate_classifier_votes(
+        self,
+        models: List[Any],
+        predictions: List[np.ndarray],
+    ) -> np.ndarray:
+        class_order = self._get_class_order(models, predictions)
+        vote_counts = np.zeros((len(predictions[0]), len(class_order)), dtype=np.int32)
+
+        for fold_predictions in predictions:
+            fold_predictions = np.asarray(fold_predictions)
+            for class_idx, class_label in enumerate(class_order.tolist()):
+                vote_counts[:, class_idx] += fold_predictions == class_label
+
+        return class_order[np.argmax(vote_counts, axis=1)]
+
+    @staticmethod
+    def _get_class_order(
+        models: List[Any],
+        predictions: List[np.ndarray],
+    ) -> np.ndarray:
+        ordered_labels: List[Any] = []
+        for model in models:
+            if hasattr(model, "classes_"):
+                ordered_labels.extend(np.asarray(model.classes_).tolist())
+        if ordered_labels:
+            return np.asarray(list(dict.fromkeys(ordered_labels)))
+
+        ordered_labels = list(dict.fromkeys(np.asarray(predictions[0]).tolist()))
+        return np.asarray(ordered_labels)
 
     def _get_model_output(
         self,

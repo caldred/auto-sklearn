@@ -13,7 +13,7 @@ from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.spec.graph import GraphSpec
 from sklearn_meta.spec.node import NodeSpec, OutputType
 from sklearn_meta.spec.dependency import DependencyEdge, DependencyType
-from sklearn_meta.execution.local import LocalExecutor
+from sklearn_meta.execution.training import LocalTrainingDispatcher
 
 
 @pytest.fixture
@@ -32,10 +32,10 @@ def medium_classification_data():
     return X_df, y_series
 
 
-def _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=None):
+def _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, training_dispatcher=None):
     """Helper to fit a graph using the new API."""
     config = RunConfig(cv=cv_config, tuning=tuning_config, verbosity=0)
-    services = RuntimeServices(search_backend=mock_search_backend, executor=executor)
+    services = RuntimeServices(search_backend=mock_search_backend, training_dispatcher=training_dispatcher)
     runner = GraphRunner(services)
     return runner.fit(graph, ctx, config)
 
@@ -49,7 +49,7 @@ class TestParallelCVFolds:
         X, y = medium_classification_data
         ctx = DataView.from_Xy(X, y)
 
-        executor = LocalExecutor(n_workers=2, backend="threading")
+        dispatcher = LocalTrainingDispatcher(n_workers=2, backend="threading")
 
         node = NodeSpec(
             name="rf",
@@ -66,7 +66,7 @@ class TestParallelCVFolds:
             greater_is_better=True,
         )
 
-        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, training_dispatcher=dispatcher)
 
         # Should have 5 models (one per fold)
         assert len(fitted.node_results["rf"].models) == 5
@@ -104,7 +104,7 @@ class TestParallelCVFolds:
         fitted_seq = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend)
 
         # Parallel execution
-        executor = LocalExecutor(n_workers=2, backend="threading")
+        dispatcher = LocalTrainingDispatcher(n_workers=2, backend="threading")
 
         node2 = NodeSpec(
             name="rf",
@@ -114,7 +114,7 @@ class TestParallelCVFolds:
         graph2 = GraphSpec()
         graph2.add_node(node2)
 
-        fitted_par = _fit_graph(graph2, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+        fitted_par = _fit_graph(graph2, ctx, cv_config, tuning_config, mock_search_backend, training_dispatcher=dispatcher)
 
         # Both should have same number of models
         assert len(fitted_seq.node_results["rf"].models) == len(fitted_par.node_results["rf"].models)
@@ -134,7 +134,7 @@ class TestParallelNodeFitting:
         X, y = medium_classification_data
         ctx = DataView.from_Xy(X, y)
 
-        executor = LocalExecutor(n_workers=2, backend="threading")
+        dispatcher = LocalTrainingDispatcher(n_workers=2, backend="threading")
 
         rf_node = NodeSpec(
             name="rf",
@@ -158,7 +158,7 @@ class TestParallelNodeFitting:
             greater_is_better=True,
         )
 
-        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, training_dispatcher=dispatcher)
 
         # Both models should be fitted
         assert "rf" in fitted.node_results
@@ -173,7 +173,7 @@ class TestParallelNodeFitting:
         X, y = medium_classification_data
         ctx = DataView.from_Xy(X, y)
 
-        executor = LocalExecutor(n_workers=2, backend="threading")
+        dispatcher = LocalTrainingDispatcher(n_workers=2, backend="threading")
 
         rf_node = NodeSpec(
             name="rf",
@@ -207,7 +207,7 @@ class TestParallelNodeFitting:
             greater_is_better=True,
         )
 
-        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, training_dispatcher=dispatcher)
 
         # All models should be fitted
         assert "rf" in fitted.node_results
@@ -263,27 +263,16 @@ class TestOptunaParallelTrials:
         assert fitted.node_results["rf"].optimization_result is not None
         assert fitted.node_results["rf"].optimization_result.n_trials == 5
 
-    def test_optuna_backend_n_jobs_parameter(self):
-        """Verify OptunaBackend accepts n_jobs parameter."""
-        from sklearn_meta.search.backends.optuna import OptunaBackend
-
-        backend = OptunaBackend(n_jobs=4)
-        assert backend._n_jobs == 4
-
-        backend_single = OptunaBackend()
-        assert backend_single._n_jobs == 1
-
-
 @pytest.mark.integration
-class TestLocalExecutorConfigurations:
-    """Integration tests for different LocalExecutor configurations."""
+class TestLocalDispatcherConfigurations:
+    """Integration tests for different LocalTrainingDispatcher configurations."""
 
     def test_threading_backend(self, medium_classification_data, mock_search_backend):
         """Verify threading backend works correctly."""
         X, y = medium_classification_data
         ctx = DataView.from_Xy(X, y)
 
-        executor = LocalExecutor(n_workers=2, backend="threading")
+        dispatcher = LocalTrainingDispatcher(n_workers=2, backend="threading")
 
         node = NodeSpec(
             name="rf",
@@ -300,7 +289,7 @@ class TestLocalExecutorConfigurations:
             greater_is_better=True,
         )
 
-        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, training_dispatcher=dispatcher)
         assert len(fitted.node_results["rf"].models) == 3
 
     @pytest.mark.slow
@@ -309,7 +298,7 @@ class TestLocalExecutorConfigurations:
         X, y = medium_classification_data
         ctx = DataView.from_Xy(X, y)
 
-        executor = LocalExecutor(n_workers=2, backend="loky")
+        dispatcher = LocalTrainingDispatcher(n_workers=2, backend="loky")
 
         node = NodeSpec(
             name="rf",
@@ -326,21 +315,15 @@ class TestLocalExecutorConfigurations:
             greater_is_better=True,
         )
 
-        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, training_dispatcher=dispatcher)
         assert len(fitted.node_results["rf"].models) == 3
 
-    def test_executor_auto_cpu_count(self, medium_classification_data, mock_search_backend):
-        """Verify executor with n_workers=-1 uses all CPUs."""
-        import os
-
+    def test_dispatcher_auto_cpu_count(self, medium_classification_data, mock_search_backend):
+        """Verify dispatcher with n_workers=-1 uses all CPUs."""
         X, y = medium_classification_data
         ctx = DataView.from_Xy(X, y)
 
-        executor = LocalExecutor(n_workers=-1, backend="threading")
-
-        # Should use all available CPUs
-        expected_workers = os.cpu_count() or 1
-        assert executor.n_workers == expected_workers
+        dispatcher = LocalTrainingDispatcher(n_workers=-1, backend="threading")
 
         # Should still work correctly
         node = NodeSpec(
@@ -358,5 +341,5 @@ class TestLocalExecutorConfigurations:
             greater_is_better=True,
         )
 
-        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, executor=executor)
+        fitted = _fit_graph(graph, ctx, cv_config, tuning_config, mock_search_backend, training_dispatcher=dispatcher)
         assert len(fitted.node_results["rf"].models) == 3

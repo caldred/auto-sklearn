@@ -30,7 +30,7 @@ result = tune(
 )
 result.best_params_        # best hyperparameters
 result.best_score_         # mean CV score
-result.predict(X_test)     # predictions from all fold models
+result.predict(X_test)     # final class labels
 ```
 
 This runs 100 Optuna trials with 5-fold stratified CV, then returns a `TrainingRun` with fitted fold models ready for inference.
@@ -72,6 +72,8 @@ result = stack(
 )
 result.predict(X_test)
 ```
+
+For classifier stacks, `stack()` now uses base-model probabilities by default when they are available. Pass `stack_output="prediction"` to stack class labels instead.
 
 ### Cross-validate without tuning
 
@@ -190,7 +192,7 @@ sklearn_meta/
 ├── meta/                  # Reparameterization transforms
 ├── selection/             # Feature selection (shadow, permutation, threshold)
 ├── plugins/               # Model-specific plugins (XGBoost, joint quantile)
-├── execution/             # Parallel execution backends
+├── execution/             # Parallel execution backends, training dispatch
 ├── persistence/           # Fit caching
 └── audit/                 # Logging
 ```

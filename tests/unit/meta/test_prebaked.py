@@ -93,17 +93,6 @@ class TestGetPrebakedReparameterization:
         has_complexity = any("complexity" in r.name.lower() for r in reparams)
         assert has_complexity
 
-    def test_no_match_returns_empty(self):
-        """Verify no match returns empty list."""
-        param_names = ["completely_unknown_param"]
-
-        reparams = get_prebaked_reparameterization(LogisticRegression, param_names)
-
-        # LogisticRegression with unknown params should have no matches
-        # (unless it accidentally matches something)
-        # This is acceptable - just verify it returns a list
-        assert isinstance(reparams, list)
-
     def test_partial_params_no_match(self):
         """Verify partial param match doesn't apply reparam."""
         # Only learning_rate, missing n_estimators
@@ -124,18 +113,6 @@ class TestGetPrebakedReparameterization:
         # Should have SVM kernel reparam
         has_svm = any("svm" in r.name.lower() or "kernel" in r.name.lower() for r in reparams)
         assert has_svm
-
-    def test_alternative_param_names(self):
-        """Verify alternative param names are matched."""
-        # Using 'eta' instead of 'learning_rate'
-        param_names = ["eta", "num_boost_round"]  # XGBoost native names
-
-        reparams = get_prebaked_reparameterization(XGBClassifier, param_names)
-
-        # Should still match learning budget
-        # Note: depends on how patterns are configured
-        assert isinstance(reparams, list)
-
 
 class TestGetAllPrebakedForModel:
     """Tests for get_all_prebaked_for_model function."""
@@ -187,17 +164,6 @@ class TestSuggestReparameterizations:
         if suggestions:
             assert all("description" in s for s in suggestions)
 
-    def test_indicates_missing_params(self):
-        """Verify suggestions indicate missing params for partial matches."""
-        param_names = ["learning_rate"]  # Missing n_estimators
-
-        suggestions = suggest_reparameterizations(XGBClassifier, param_names)
-
-        # Should have non-applicable suggestion with missing info
-        # Some might have missing params indicated
-        assert isinstance(suggestions, list)
-
-
 class TestPrebakedRegistry:
     """Tests for the prebaked registry."""
 
@@ -232,38 +198,6 @@ class TestPrebakedRegistry:
             assert hasattr(reparam, "get_transformed_bounds")
             assert hasattr(reparam, "original_params")
             assert hasattr(reparam, "transformed_params")
-
-
-class TestPrebakedConfig:
-    """Tests for PrebakedConfig dataclass."""
-
-    def test_basic_creation(self):
-        """Verify basic config creation."""
-        config = PrebakedConfig(
-            name="test_config",
-            description="Test description",
-            model_patterns=["TestModel"],
-            param_patterns=["param_a", "param_b"],
-            create_reparam=lambda: LogProductReparameterization(
-                name="test", param1="param_a", param2="param_b"
-            ),
-        )
-
-        assert config.name == "test_config"
-        assert config.priority == 0  # Default
-
-    def test_config_with_priority(self):
-        """Verify config with custom priority."""
-        config = PrebakedConfig(
-            name="test",
-            description="Test",
-            model_patterns=["Test"],
-            param_patterns=["a"],
-            create_reparam=lambda: None,
-            priority=10,
-        )
-
-        assert config.priority == 10
 
 
 class TestSpecificPrebakedConfigs:

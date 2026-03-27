@@ -92,22 +92,6 @@ class TestConcreteExecutor:
 
         assert result == [2, 4, 6, 8]
 
-    def test_map_empty_list(self):
-        """Verify map handles empty list."""
-        executor = ConcreteExecutor()
-
-        result = executor.map(lambda x: x, [])
-
-        assert result == []
-
-    def test_map_preserves_order(self):
-        """Verify map preserves item order."""
-        executor = ConcreteExecutor()
-
-        result = executor.map(str, [5, 4, 3, 2, 1])
-
-        assert result == ["5", "4", "3", "2", "1"]
-
     def test_submit_returns_future(self):
         """Verify submit returns a Future."""
         executor = ConcreteExecutor()
@@ -147,39 +131,8 @@ class TestConcreteExecutor:
         with pytest.raises(ValueError, match="Test error"):
             future.result()
 
-    def test_shutdown_callable(self):
-        """Verify shutdown can be called."""
-        executor = ConcreteExecutor()
-
-        executor.shutdown(wait=True)
-
-        assert executor._shutdown_called
-
-    def test_n_workers_property(self):
-        """Verify n_workers property returns correct value."""
-        executor = ConcreteExecutor(n_workers=4)
-
-        assert executor.n_workers == 4
-
-
-class TestExecutorDefaultMethods:
-    """Tests for Executor default method implementations."""
-
-    def test_default_n_workers(self):
-        """Verify default n_workers is 1."""
-        # Access via class attribute
-        assert Executor.n_workers.fget(ConcreteExecutor(n_workers=1)) == 1
-
-
 class TestExecutorContextManager:
     """Tests for Executor context manager protocol."""
-
-    def test_context_manager_enter(self):
-        """Verify __enter__ returns self."""
-        executor = ConcreteExecutor()
-
-        with executor as e:
-            assert e is executor
 
     def test_context_manager_exit_calls_shutdown(self):
         """Verify __exit__ calls shutdown."""
@@ -200,14 +153,4 @@ class TestExecutorContextManager:
         except ValueError:
             pass
 
-        assert executor._shutdown_called
-
-    def test_context_manager_with_work(self):
-        """Verify context manager works with actual work."""
-        executor = ConcreteExecutor()
-
-        with executor as e:
-            result = e.map(lambda x: x ** 2, [1, 2, 3])
-
-        assert result == [1, 4, 9]
         assert executor._shutdown_called

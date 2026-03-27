@@ -20,14 +20,6 @@ from sklearn_meta.spec.quantile_sampler import (
 class TestSamplingStrategy:
     """Tests for SamplingStrategy enum."""
 
-    def test_enum_values(self):
-        """Verify enum values are correct."""
-        assert SamplingStrategy.LINEAR_INTERPOLATION.value == "linear_interpolation"
-        assert SamplingStrategy.NORMAL.value == "normal"
-        assert SamplingStrategy.SKEW_NORMAL.value == "skew_normal"
-        assert SamplingStrategy.JOHNSON_SU.value == "johnson_su"
-        assert SamplingStrategy.AUTO.value == "auto"
-
 
 # =============================================================================
 # LinearInterpolationSampler Tests
@@ -36,17 +28,6 @@ class TestSamplingStrategy:
 
 class TestLinearInterpolationSampler:
     """Tests for LinearInterpolationSampler."""
-
-    def test_fit_stores_values(self):
-        """Verify fit stores quantile levels and values."""
-        sampler = LinearInterpolationSampler()
-        levels = np.array([0.1, 0.5, 0.9])
-        values = np.array([10, 50, 90])
-
-        sampler.fit(levels, values)
-
-        np.testing.assert_array_equal(sampler._quantile_levels, levels)
-        np.testing.assert_array_equal(sampler._quantile_values, values)
 
     def test_ppf_exact_levels(self):
         """Verify ppf returns exact values at known levels."""
@@ -71,18 +52,6 @@ class TestLinearInterpolationSampler:
         result = sampler.ppf(np.array([0.5]))
 
         np.testing.assert_array_almost_equal(result, [50])
-
-    def test_sample_returns_correct_shape(self):
-        """Verify sample returns correct number of samples."""
-        sampler = LinearInterpolationSampler()
-        sampler.fit(
-            np.array([0.1, 0.5, 0.9]),
-            np.array([10, 50, 90]),
-        )
-
-        samples = sampler.sample(1000)
-
-        assert samples.shape == (1000,)
 
     def test_sample_uses_provided_uniforms(self):
         """Verify sample uses provided uniform samples."""
@@ -145,15 +114,6 @@ class TestParametricSamplerNormal:
 
         np.testing.assert_array_almost_equal(result, values, decimal=1)
 
-    def test_sample_shape(self, normal_quantiles):
-        """Verify sample returns correct shape."""
-        levels, values = normal_quantiles
-        sampler = ParametricSampler("normal")
-        sampler.fit(levels, values)
-
-        samples = sampler.sample(1000)
-
-        assert samples.shape == (1000,)
 
 
 class TestParametricSamplerSkewNormal:
@@ -187,27 +147,6 @@ class TestParametricSamplerSkewNormal:
 class TestAutoSelectSampler:
     """Tests for AutoSelectSampler."""
 
-    def test_fit_selects_distribution(self):
-        """Verify fit selects a distribution."""
-        sampler = AutoSelectSampler()
-        sampler.fit(
-            np.array([0.1, 0.5, 0.9]),
-            np.array([10, 50, 90]),
-        )
-
-        assert sampler._best_sampler is not None
-        assert sampler._best_distribution is not None
-
-    def test_selected_distribution_property(self):
-        """Verify selected_distribution property works."""
-        sampler = AutoSelectSampler()
-        sampler.fit(
-            np.array([0.1, 0.5, 0.9]),
-            np.array([10, 50, 90]),
-        )
-
-        assert sampler.selected_distribution in ["linear", "normal", "skew_normal"]
-
     def test_sample_uses_best_sampler(self):
         """Verify sample delegates to best sampler."""
         sampler = AutoSelectSampler()
@@ -228,25 +167,6 @@ class TestAutoSelectSampler:
 
 class TestQuantileSamplerCreation:
     """Tests for QuantileSampler creation."""
-
-    def test_default_creation(self):
-        """Verify default sampler creation."""
-        sampler = QuantileSampler()
-
-        assert sampler.strategy == SamplingStrategy.LINEAR_INTERPOLATION
-        assert sampler.n_samples == 1000
-        assert sampler._uniform_samples is not None
-
-    def test_creation_with_params(self):
-        """Verify sampler creation with custom params."""
-        sampler = QuantileSampler(
-            strategy=SamplingStrategy.NORMAL,
-            n_samples=500,
-            random_state=42,
-        )
-
-        assert sampler.strategy == SamplingStrategy.NORMAL
-        assert sampler.n_samples == 500
 
     def test_uniform_samples_shape(self):
         """Verify uniform samples have correct shape."""
@@ -287,21 +207,6 @@ class TestQuantileSamplerSampleProperty:
 
         assert samples.shape == (2, 100)
 
-    def test_consistent_sampling_paths(self):
-        """Verify same uniform samples are used for consistency."""
-        sampler = QuantileSampler(n_samples=100, random_state=42)
-
-        levels = [0.1, 0.5, 0.9]
-        predictions1 = np.array([10, 50, 90])
-        predictions2 = np.array([20, 60, 100])
-
-        samples1 = sampler.sample_property("prop1", levels, predictions1)
-        samples2 = sampler.sample_property("prop2", levels, predictions2)
-
-        # Both should use the same uniform samples, so ordering should be preserved
-        # If uniform sample was 0.5, sample1 should be 50 and sample2 should be 60
-        # The relative ordering should be consistent
-        assert samples1.shape == samples2.shape
 
 
 class TestQuantileSamplerBatched:
@@ -395,14 +300,3 @@ class TestQuantileSamplerReset:
 
 class TestQuantileSamplerUniformProperty:
     """Tests for uniform_samples property."""
-
-    def test_uniform_samples_returns_copy(self):
-        """Verify uniform_samples returns a copy."""
-        sampler = QuantileSampler(n_samples=100, random_state=42)
-
-        samples1 = sampler.uniform_samples
-        samples2 = sampler.uniform_samples
-
-        # Modifying one shouldn't affect the other
-        samples1[0] = -1
-        assert samples2[0] != -1

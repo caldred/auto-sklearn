@@ -7,15 +7,19 @@ the same ``TrainingRun`` objects as the full API.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Literal, Optional, Type, Union, TYPE_CHECKING
 
 import pandas as pd
 from sklearn.base import ClassifierMixin
 
 from sklearn_meta.artifacts.training import TrainingRun
+
+if TYPE_CHECKING:
+    from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.engine.strategy import OptimizationStrategy
 from sklearn_meta.runtime.config import CVConfig, CVStrategy, RunConfig, TuningConfig
+from sklearn_meta.spec.dependency import DependencyType
+from sklearn_meta.spec.node import OutputType
 from sklearn_meta.spec.builder import GraphBuilder, NodeBuilder
 
 
@@ -71,7 +75,7 @@ def _resolve_strategy(
 ) -> CVStrategy:
     """Resolve an explicit or inferred CV strategy for an estimator."""
     if strategy in (None, "auto"):
-        if isinstance(estimator_class, type) and issubclass(estimator_class, ClassifierMixin):
+        if _is_classifier_estimator(estimator_class):
             return CVStrategy.STRATIFIED
         return CVStrategy.RANDOM
 
@@ -157,6 +161,57 @@ def _model_class_from_spec(model_spec: Union[Type, tuple, Any]) -> Type:
     return estimator_class
 
 
+def _is_classifier_estimator(estimator_class: Type) -> bool:
+    """Whether an estimator class should default to classifier behavior."""
+    return isinstance(estimator_class, type) and issubclass(
+        estimator_class,
+        ClassifierMixin,
+    )
+
+
+def _resolve_stack_base_output_type(
+    name: str,
+    estimator_class: Type,
+    fixed_params: Dict[str, Any],
+    stack_output: Literal["auto", "prediction", "proba"],
+) -> OutputType:
+    """Resolve the output type a base stack node should expose."""
+    supports_proba = _supports_probability_output(estimator_class, fixed_params)
+
+    if stack_output == "prediction":
+        return OutputType.PREDICTION
+
+    if stack_output == "proba":
+        if not supports_proba:
+            raise ValueError(
+                f"Base model '{name}' does not support predict_proba(), so "
+                "stack_output='proba' is invalid for this stack."
+            )
+        return OutputType.PROBA
+
+    if stack_output == "auto":
+        if _is_classifier_estimator(estimator_class) and supports_proba:
+            return OutputType.PROBA
+        return OutputType.PREDICTION
+
+    raise ValueError(
+        "stack_output must be one of 'auto', 'prediction', or 'proba', "
+        f"got {stack_output!r}."
+    )
+
+
+def _supports_probability_output(
+    estimator_class: Type,
+    fixed_params: Dict[str, Any],
+) -> bool:
+    """Whether a configured estimator instance exposes predict_proba()."""
+    try:
+        estimator = estimator_class(**fixed_params)
+    except Exception:
+        return hasattr(estimator_class, "predict_proba")
+    return hasattr(estimator, "predict_proba")
+
+
 def _fit_graph(
     graph,
     X: pd.DataFrame,
@@ -164,11 +219,12 @@ def _fit_graph(
     config: RunConfig,
     *,
     groups: Any = None,
+    services: Optional[RuntimeServices] = None,
 ) -> TrainingRun:
     """Route convenience helpers through the public fit() entry point."""
     from sklearn_meta import fit as fit_graph
 
-    return fit_graph(graph, X, y, config, groups=groups)
+    return fit_graph(graph, X, y, config, groups=groups, services=services)
 
 
 class ComparisonResult:
@@ -262,6 +318,7 @@ def _build_single_model_run(
     strategy: Optional[Union[str, CVStrategy]] = None,
     groups: Any = None,
     verbosity: int = 1,
+    services: Optional[RuntimeServices] = None,
 ) -> TrainingRun:
     """Shared implementation for tune() and cross_validate()."""
     estimator_class, resolved_fixed_params = _normalize_estimator(
@@ -291,7 +348,7 @@ def _build_single_model_run(
         verbosity=verbosity,
     )
 
-    return _fit_graph(graph, X, y, config, groups=groups)
+    return _fit_graph(graph, X, y, config, groups=groups, services=services)
 
 
 # ------------------------------------------------------------------
@@ -311,6 +368,7 @@ def tune(
     strategy: Optional[Union[str, CVStrategy]] = None,
     groups: Any = None,
     verbosity: int = 1,
+    services: Optional[RuntimeServices] = None,
 ) -> TrainingRun:
     """Tune a single model with cross-validated hyperparameter search.
 
@@ -370,6 +428,7 @@ def tune(
         strategy=strategy,
         groups=groups,
         verbosity=verbosity,
+        services=services,
     )
 
 
@@ -384,6 +443,7 @@ def cross_validate(
     strategy: Optional[Union[str, CVStrategy]] = None,
     groups: Any = None,
     verbosity: int = 1,
+    services: Optional[RuntimeServices] = None,
 ) -> TrainingRun:
     """Cross-validate a single model with fixed hyperparameters.
 
@@ -431,6 +491,7 @@ def cross_validate(
         strategy=strategy,
         groups=groups,
         verbosity=verbosity,
+        services=services,
     )
 
 
@@ -443,9 +504,11 @@ def stack(
     metric: str = "neg_mean_squared_error",
     n_trials: int = 50,
     cv: Union[int, CVConfig] = 5,
+    stack_output: Literal["auto", "prediction", "proba"] = "auto",
     strategy: Optional[Union[str, CVStrategy]] = None,
     groups: Any = None,
     verbosity: int = 1,
+    services: Optional[RuntimeServices] = None,
 ) -> TrainingRun:
     """Build and fit a stacking ensemble in one call.
 
@@ -465,6 +528,11 @@ def stack(
         metric: sklearn scorer name.
         n_trials: Number of Optuna trials per model.
         cv: Number of CV folds or a ``CVConfig``.
+        stack_output: Output exposed by base models to the meta-learner.
+            ``"auto"`` uses probabilities for classifiers when available and
+            predictions otherwise. ``"prediction"`` always stacks labels or
+            regression outputs. ``"proba"`` requires all base models to
+            support ``predict_proba()``.
         strategy: CV strategy. If omitted, defaults to ``"stratified"``
             for classifier meta-learners and ``"random"`` otherwise.
             Ignored when ``cv`` is a ``CVConfig``.
@@ -494,14 +562,29 @@ def stack(
     """
     builder = GraphBuilder()
     base_names: List[str] = []
+    base_output_types: Dict[str, OutputType] = {}
 
     for name, model_spec in base_models.items():
         base_names.append(name)
-        _add_model_from_spec(builder, name, model_spec)
+        estimator_class, params, fixed_params = _normalize_model_spec(name, model_spec)
+        output_type = _resolve_stack_base_output_type(
+            name, estimator_class, fixed_params, stack_output,
+        )
+        base_output_types[name] = output_type
+        _add_model_from_normalized(
+            builder, name, estimator_class, params, fixed_params,
+            output_type=output_type,
+        )
 
     # Meta-learner
     meta_node = _add_model_from_spec(builder, "meta", meta_model)
-    meta_node.stacks(*base_names)
+    for base_name in base_names:
+        dep_type = (
+            DependencyType.PROBA
+            if base_output_types[base_name] == OutputType.PROBA
+            else DependencyType.PREDICTION
+        )
+        meta_node.depends_on(base_name, dep_type=dep_type)
 
     graph = builder.build()
 
@@ -518,7 +601,7 @@ def stack(
         verbosity=verbosity,
     )
 
-    return _fit_graph(graph, X, y, config, groups=groups)
+    return _fit_graph(graph, X, y, config, groups=groups, services=services)
 
 
 def compare(
@@ -532,6 +615,7 @@ def compare(
     strategy: Optional[Union[str, CVStrategy]] = None,
     groups: Any = None,
     verbosity: int = 1,
+    services: Optional[RuntimeServices] = None,
 ) -> ComparisonResult:
     """Fit several single-model specs and return a sortable leaderboard.
 
@@ -559,28 +643,42 @@ def compare(
             strategy=strategy,
             groups=groups,
             verbosity=verbosity,
+            services=services,
         )
 
     return ComparisonResult(runs=runs, metric=metric)
+
+
+def _add_model_from_normalized(
+    builder: GraphBuilder,
+    name: str,
+    estimator_class: Type,
+    params: Optional[Dict[str, Any]],
+    fixed_params: Dict[str, Any],
+    *,
+    output_type: Optional[OutputType] = None,
+) -> NodeBuilder:
+    """Add a model to a GraphBuilder from already-normalized components."""
+    node = builder.add_model(name, estimator_class)
+    if output_type is not None:
+        node.output_type(output_type)
+    if params:
+        _apply_params(node, params)
+    if fixed_params:
+        node.fixed_params(**fixed_params)
+    return node
 
 
 def _add_model_from_spec(
     builder: GraphBuilder,
     name: str,
     model_spec: Union[Type, tuple, Any],
+    *,
+    output_type: Optional[OutputType] = None,
 ) -> NodeBuilder:
-    """Add a model to a GraphBuilder from a flexible spec format.
-
-    Accepted formats:
-        ``EstimatorClass``
-        ``EstimatorInstance``
-        ``(EstimatorOrInstance, params_dict)``
-        ``(EstimatorOrInstance, params_dict, fixed_params_dict)``
-    """
+    """Add a model to a GraphBuilder from a flexible spec format."""
     estimator_class, params, fixed_params = _normalize_model_spec(name, model_spec)
-    node = builder.add_model(name, estimator_class)
-    if params:
-        _apply_params(node, params)
-    if fixed_params:
-        node.fixed_params(**fixed_params)
-    return node
+    return _add_model_from_normalized(
+        builder, name, estimator_class, params, fixed_params,
+        output_type=output_type,
+    )

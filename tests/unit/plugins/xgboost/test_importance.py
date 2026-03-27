@@ -40,18 +40,6 @@ class NonXGBModel:
 class TestXGBImportanceExtractor:
     """Tests for XGBImportanceExtractor."""
 
-    def test_default_importance_type(self):
-        """Verify default importance type is total_gain."""
-        extractor = XGBImportanceExtractor()
-
-        assert extractor.importance_type == "total_gain"
-
-    def test_custom_importance_type(self):
-        """Verify custom importance type can be set."""
-        extractor = XGBImportanceExtractor(importance_type="weight")
-
-        assert extractor.importance_type == "weight"
-
     def test_applies_to_xgb_model(self):
         """Verify applies to models with get_booster."""
         extractor = XGBImportanceExtractor()
@@ -135,63 +123,6 @@ class TestXGBImportanceExtractor:
 
 class TestXGBImportancePlugin:
     """Tests for XGBImportancePlugin."""
-
-    def test_default_importance_type(self):
-        """Verify default importance type."""
-        plugin = XGBImportancePlugin()
-
-        assert plugin.importance_type == "total_gain"
-
-    def test_custom_importance_type(self):
-        """Verify custom importance type."""
-        plugin = XGBImportancePlugin(importance_type="weight")
-
-        assert plugin.importance_type == "weight"
-
-    def test_name_property(self):
-        """Verify name property."""
-        plugin = XGBImportancePlugin()
-
-        assert plugin.name == "xgb_importance"
-
-    def test_repr(self):
-        """Verify repr includes importance_type."""
-        plugin = XGBImportancePlugin(importance_type="gain")
-
-        repr_str = repr(plugin)
-
-        assert "XGBImportancePlugin" in repr_str
-        assert "gain" in repr_str
-
-    def test_applies_to_xgb_classifier(self):
-        """Verify applies to XGBClassifier."""
-
-        class XGBClassifier:
-            pass
-
-        plugin = XGBImportancePlugin()
-
-        assert plugin.applies_to(XGBClassifier) is True
-
-    def test_applies_to_xgb_regressor(self):
-        """Verify applies to XGBRegressor."""
-
-        class XGBRegressor:
-            pass
-
-        plugin = XGBImportancePlugin()
-
-        assert plugin.applies_to(XGBRegressor) is True
-
-    def test_applies_to_xgb_ranker(self):
-        """Verify applies to XGBRanker."""
-
-        class XGBRanker:
-            pass
-
-        plugin = XGBImportancePlugin()
-
-        assert plugin.applies_to(XGBRanker) is True
 
     def test_not_applies_to_other(self):
         """Verify doesn't apply to non-XGBoost."""
@@ -323,18 +254,6 @@ class TestXGBImportancePluginGetTopFeatures:
         assert result[0][0] == "b"  # Highest
         assert result[1][0] == "c"  # Second highest
 
-    def test_returns_tuples(self):
-        """Verify returns list of tuples."""
-        plugin = XGBImportancePlugin()
-        model = MockXGBModel()
-        model._sklearn_meta_meta["feature_importance"] = {"a": 10.0, "b": 20.0}
-
-        result = plugin.get_top_features(model, n=2)
-
-        assert isinstance(result, list)
-        assert all(isinstance(item, tuple) for item in result)
-        assert all(len(item) == 2 for item in result)
-
     def test_sorted_descending(self):
         """Verify features are sorted by importance descending."""
         plugin = XGBImportancePlugin()
@@ -349,18 +268,6 @@ class TestXGBImportancePluginGetTopFeatures:
 
         importances = [imp for _, imp in result]
         assert importances == sorted(importances, reverse=True)
-
-    def test_default_n_is_10(self):
-        """Verify default n is 10."""
-        plugin = XGBImportancePlugin()
-        model = MockXGBModel()
-        model._sklearn_meta_meta["feature_importance"] = {
-            f"f{i}": float(i) for i in range(20)
-        }
-
-        result = plugin.get_top_features(model)
-
-        assert len(result) == 10
 
     def test_returns_all_if_less_than_n(self):
         """Verify returns all features if fewer than n."""

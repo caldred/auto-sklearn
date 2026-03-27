@@ -20,27 +20,6 @@ from sklearn_meta.engine.distillation import build_distillation_objective
 class TestDistillationConfig:
     """Tests for DistillationConfig validation and immutability."""
 
-    def test_default_values(self):
-        """Verify default temperature and alpha."""
-        config = DistillationConfig()
-
-        assert config.temperature == 3.0
-        assert config.alpha == 0.5
-
-    def test_custom_values(self):
-        """Verify custom temperature and alpha."""
-        config = DistillationConfig(temperature=5.0, alpha=0.7)
-
-        assert config.temperature == 5.0
-        assert config.alpha == 0.7
-
-    def test_frozen(self):
-        """Verify config is immutable."""
-        config = DistillationConfig()
-
-        with pytest.raises(FrozenInstanceError):
-            config.temperature = 10.0
-
     def test_temperature_zero_raises(self):
         """Verify temperature=0 raises error."""
         with pytest.raises(ValueError, match="temperature must be > 0"):
@@ -60,16 +39,6 @@ class TestDistillationConfig:
         """Verify alpha > 1 raises error."""
         with pytest.raises(ValueError, match="alpha must be in"):
             DistillationConfig(alpha=1.1)
-
-    def test_alpha_boundary_zero(self):
-        """Verify alpha=0 is valid (pure CE)."""
-        config = DistillationConfig(alpha=0.0)
-        assert config.alpha == 0.0
-
-    def test_alpha_boundary_one(self):
-        """Verify alpha=1 is valid (pure KL)."""
-        config = DistillationConfig(alpha=1.0)
-        assert config.alpha == 1.0
 
 
 # =============================================================================

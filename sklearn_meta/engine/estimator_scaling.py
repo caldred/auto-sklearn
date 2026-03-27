@@ -29,6 +29,23 @@ class EstimatorScalingConfig:
     scaling_search: bool = False
     scaling_factors: Optional[List[int]] = None
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "tuning_n_estimators": self.tuning_n_estimators,
+            "final_n_estimators": self.final_n_estimators,
+            "scaling_search": self.scaling_search,
+            "scaling_factors": self.scaling_factors,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "EstimatorScalingConfig":
+        return cls(
+            tuning_n_estimators=data.get("tuning_n_estimators"),
+            final_n_estimators=data.get("final_n_estimators"),
+            scaling_search=data.get("scaling_search", False),
+            scaling_factors=data.get("scaling_factors"),
+        )
+
 
 class EstimatorScaler:
     """Handles n_estimators/learning_rate scaling for boosting models."""

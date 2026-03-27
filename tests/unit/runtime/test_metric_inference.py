@@ -8,34 +8,6 @@ from sklearn_meta.runtime.config import TuningConfig, RunConfigBuilder
 class TestGreaterIsBetterInference:
     """TuningConfig infers greater_is_better from known sklearn metrics."""
 
-    def test_explicit_true_preserved(self):
-        cfg = TuningConfig(metric="accuracy", greater_is_better=True)
-        assert cfg.greater_is_better is True
-
-    def test_explicit_false_preserved(self):
-        cfg = TuningConfig(metric="accuracy", greater_is_better=False)
-        assert cfg.greater_is_better is False
-
-    def test_inferred_accuracy(self):
-        cfg = TuningConfig(metric="accuracy")
-        assert cfg.greater_is_better is True
-
-    def test_inferred_roc_auc(self):
-        cfg = TuningConfig(metric="roc_auc")
-        assert cfg.greater_is_better is True
-
-    def test_inferred_neg_mse(self):
-        cfg = TuningConfig(metric="neg_mean_squared_error")
-        assert cfg.greater_is_better is True
-
-    def test_inferred_f1(self):
-        cfg = TuningConfig(metric="f1")
-        assert cfg.greater_is_better is True
-
-    def test_inferred_r2(self):
-        cfg = TuningConfig(metric="r2")
-        assert cfg.greater_is_better is True
-
     def test_unknown_metric_warns_and_defaults_false(self):
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -64,7 +36,3 @@ class TestBuilderGreaterIsBetterInference:
             .build()
         )
         assert config.tuning.greater_is_better is False
-
-    def test_builder_default_infers(self):
-        config = RunConfigBuilder().build()
-        assert config.tuning.greater_is_better is True

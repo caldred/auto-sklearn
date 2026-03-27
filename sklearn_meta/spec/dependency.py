@@ -129,6 +129,14 @@ class DependencyEdge:
             }
         return result
 
+    def blocks_training(self) -> bool:
+        """Whether this edge requires upstream fitted outputs during training."""
+        if self.dep_type == DependencyType.CONDITIONAL_SAMPLE:
+            if self.conditional_config is None:
+                return True
+            return not self.conditional_config.use_actual_during_training
+        return True
+
     @classmethod
     def from_dict(cls, data: dict) -> "DependencyEdge":
         """

@@ -41,6 +41,11 @@ topological_order() -> list[str]
 # Layer 0 = no dependencies; Layer N = all dependencies in layers < N
 get_layers() -> list[list[str]]
 
+# Get nodes grouped by fit-time layers
+# Like get_layers(), but ignores edges that do not block training
+# (e.g., conditional-sample edges using observed values during training)
+get_training_layers() -> list[list[str]]
+
 # Get root nodes (no incoming edges)
 get_root_nodes() -> list[str]
 
@@ -195,7 +200,18 @@ class DependencyEdge:
 |----------|------|-------------|
 | `feature_name` | `str` | Auto-generated feature name (e.g. `pred_rf`, `proba_xgb`), or `column_name` if set |
 
-**Methods:** `to_dict()`, `from_dict(data)`.
+**Methods:**
+
+```python
+to_dict() -> dict[str, Any]
+
+@classmethod
+from_dict(data: dict) -> DependencyEdge
+
+# Whether this edge requires upstream fitted outputs during training.
+# Returns False for CONDITIONAL_SAMPLE edges with use_actual_during_training=True.
+blocks_training() -> bool
+```
 
 **Validation:** Source and target must be non-empty, cannot be equal (no self-loops). `conditional_config` is required when `dep_type` is `CONDITIONAL_SAMPLE`.
 
@@ -259,6 +275,12 @@ create_estimator_for_quantile(tau: float, params: dict | None = None) -> Any
 
 # Get complete parameter dict for a specific quantile level
 get_params_for_quantile(tau: float, tuned_params: dict | None = None) -> dict
+
+# Serialize / deserialize (extends NodeSpec serialization with quantile fields)
+to_dict() -> dict[str, Any]
+
+@classmethod
+from_dict(data: dict[str, Any]) -> QuantileNodeSpec
 ```
 
 **QuantileScalingConfig:**
@@ -273,6 +295,12 @@ class QuantileScalingConfig:
 
     # Get scaled parameters for a specific quantile level
     get_params_for_quantile(tau: float) -> dict[str, Any]
+
+    # Serialize / deserialize
+    to_dict() -> dict[str, Any]
+
+    @classmethod
+    from_dict(data: dict[str, Any]) -> QuantileScalingConfig
 ```
 
 **JointQuantileGraphSpec:**
@@ -553,6 +581,15 @@ class RunConfig:
     verbosity: int = 1
 ```
 
+**Serialization:**
+
+```python
+to_dict() -> dict[str, Any]
+
+@classmethod
+from_dict(data: dict[str, Any]) -> RunConfig
+```
+
 ---
 
 ### CVConfig
@@ -584,6 +621,12 @@ class CVConfig:
 ```python
 # Enable nested CV by adding an inner CV configuration
 with_inner_cv(n_splits: int = 3, strategy: CVStrategy | None = None) -> CVConfig
+
+# Serialize / deserialize
+to_dict() -> dict[str, Any]
+
+@classmethod
+from_dict(data: dict[str, Any]) -> CVConfig
 ```
 
 ---
@@ -624,6 +667,15 @@ class TuningConfig:
     show_progress: bool = False
 ```
 
+**Serialization:**
+
+```python
+to_dict() -> dict[str, Any]
+
+@classmethod
+from_dict(data: dict[str, Any]) -> TuningConfig
+```
+
 ---
 
 ### FeatureSelectionConfig and FeatureSelectionMethod
@@ -652,6 +704,15 @@ class FeatureSelectionConfig:
     feature_groups: dict[str, list[str]] | None = None
 ```
 
+**Serialization:**
+
+```python
+to_dict() -> dict[str, Any]
+
+@classmethod
+from_dict(data: dict[str, Any]) -> FeatureSelectionConfig
+```
+
 ---
 
 ### ReparameterizationConfig
@@ -666,6 +727,15 @@ class ReparameterizationConfig:
     enabled: bool = True
     use_prebaked: bool = True
     custom_reparameterizations: tuple = ()
+```
+
+**Serialization:**
+
+```python
+to_dict() -> dict[str, Any]
+
+@classmethod
+from_dict(data: dict[str, Any]) -> ReparameterizationConfig
 ```
 
 ---
@@ -755,16 +825,17 @@ Service wiring for training runs.
 @dataclass
 class RuntimeServices:
     search_backend: SearchBackend
-    executor: Executor | None = None
+    training_dispatcher: TrainingDispatcher | None = None
     plugin_registry: PluginRegistry | None = None
     audit_logger: AuditLogger | None = None
     fit_cache: FitCache | None = None
+    dispatch_listener: DispatchListener | None = None
 
     @classmethod
     def default() -> RuntimeServices
 ```
 
-`RuntimeServices.default()` creates a service object with only an `OptunaBackend`; no plugins, executor, cache, or logger.
+`RuntimeServices.default()` creates a service object with only an `OptunaBackend`; no plugins, cache, logger, dispatcher, or listener.
 
 ---
 
@@ -800,10 +871,11 @@ The runner orchestrates the full training pipeline:
 
 1. Validate graph
 2. Create `CVEngine`, `SearchService`, `FeatureSelectionService`
-3. Get layers from graph based on `config.tuning.strategy`
+3. Get layers from graph based on `config.tuning.strategy` (uses `get_training_layers()` when a `TrainingDispatcher` is configured)
 4. For each layer:
    - Add OOF overlays from upstream nodes
-   - For each node: choose trainer, check conditional, inject distillation soft targets, call `trainer.fit_node()` to produce `NodeRunResult`
+   - If a `TrainingDispatcher` is configured, partition nodes into dispatchable and local sets. Dispatchable nodes are serialized into `NodeTrainingJob` objects and sent to the dispatcher in batch; results are reconstructed into `NodeRunResult` objects.
+   - Remaining (local) nodes are fitted inline: choose trainer, check conditional, inject distillation soft targets, call `trainer.fit_node()`
    - Cache OOF predictions
 5. Build `RunMetadata`
 6. Assemble `TrainingRun`
@@ -1138,6 +1210,9 @@ add_from_shorthand(**kwargs) -> SearchSpace
 @classmethod
 from_dict(config: dict) -> SearchSpace
 
+# Serialize to a JSON-safe dictionary (inverse of from_dict with explicit format)
+to_dict() -> dict[str, Any]
+
 # Narrow search space around a center point
 narrow_around(
     center: dict,
@@ -1183,6 +1258,10 @@ from sklearn_meta.search.parameter import (
 class SearchParameter(ABC):
     name: str
     sample_optuna(trial) -> Any
+    to_dict() -> dict[str, Any]            # Serialize to JSON-safe dict
+
+    @staticmethod
+    from_dict(data: dict[str, Any]) -> SearchParameter  # Deserialize from to_dict() output
 
 @dataclass
 class FloatParameter(SearchParameter):
@@ -1223,6 +1302,51 @@ Formats:
 - `(low, high)` -- Float or Int range (inferred from types)
 - `(low, high, "log")` -- Float/Int with log scale
 - `[a, b, c]` -- Categorical choices
+
+---
+
+### SearchBackend
+
+```python
+from sklearn_meta.search.backends.base import SearchBackend
+```
+
+Abstract base class for search backends. The default implementation is `OptunaBackend`.
+
+```python
+class SearchBackend(ABC):
+    # Clone this backend, preserving serializable state.
+    # Used by the training dispatcher to create isolated backends for worker jobs.
+    clone() -> SearchBackend
+```
+
+`OptunaBackend` overrides `clone()` to preserve its sampler, pruner, and parallelism settings.
+
+---
+
+### EstimatorScalingConfig
+
+```python
+from sklearn_meta.engine.estimator_scaling import EstimatorScalingConfig
+```
+
+```python
+@dataclass
+class EstimatorScalingConfig:
+    tuning_n_estimators: int | None = None
+    final_n_estimators: int | None = None
+    scaling_search: bool = False
+    scaling_factors: list[int] | None = None
+```
+
+**Serialization:**
+
+```python
+to_dict() -> dict[str, Any]
+
+@classmethod
+from_dict(data: dict[str, Any]) -> EstimatorScalingConfig
+```
 
 ---
 
@@ -1326,6 +1450,7 @@ tune(
     strategy: str | CVStrategy = None,  # auto-inferred from estimator
     groups = None,
     verbosity: int = 1,
+    services: RuntimeServices = None,
 ) -> TrainingRun
 ```
 
@@ -1372,6 +1497,7 @@ cross_validate(
     strategy: str | CVStrategy = None,
     groups = None,
     verbosity: int = 1,
+    services: RuntimeServices = None,
 ) -> TrainingRun
 ```
 
@@ -1406,13 +1532,20 @@ stack(
     metric: str = "neg_mean_squared_error",
     n_trials: int = 50,
     cv: int | CVConfig = 5,
+    stack_output: Literal["auto", "prediction", "proba"] = "auto",
     strategy: str | CVStrategy = None,
     groups = None,
     verbosity: int = 1,
+    services: RuntimeServices = None,
 ) -> TrainingRun
 ```
 
 Build and fit a stacking ensemble in one call. Base model predictions are stacked as features for the meta-learner, with automatic OOF handling.
+
+`stack_output` controls what base models expose to the meta-learner:
+- `"auto"` (default) -- uses probabilities for classifiers that support `predict_proba()`, predictions otherwise
+- `"prediction"` -- always stacks labels or regression outputs
+- `"proba"` -- requires all base models to support `predict_proba()`
 
 Each model spec can be:
 - `EstimatorClass` -- no tuning, uses defaults
@@ -1454,6 +1587,7 @@ compare(
     strategy: str | CVStrategy = None,
     groups = None,
     verbosity: int = 1,
+    services: RuntimeServices = None,
 ) -> ComparisonResult
 ```
 
@@ -1501,6 +1635,311 @@ Result bundle returned by `compare()`. Supports dict-style access.
 | `metric` | `str` | Metric used for comparison |
 
 **Methods:** `to_frame()` (alias for `leaderboard`), `__getitem__`, `__contains__`, `__len__`, `__repr__`.
+
+---
+
+## 8. execution/ --- Training Dispatch
+
+---
+
+### TrainingDispatcher
+
+```python
+from sklearn_meta.execution.training import TrainingDispatcher
+```
+
+Protocol for dispatching full node-training jobs. Implement this protocol to run node training on remote workers or custom infrastructure.
+
+```python
+class TrainingDispatcher(Protocol):
+    @property
+    requires_serialized_jobs -> bool
+    # True for out-of-process/remote dispatch; False for in-process execution.
+
+    def dispatch(
+        self,
+        jobs: list[NodeTrainingJob],
+        services: RuntimeServices,
+    ) -> list[NodeTrainingResult]: ...
+
+    def make_worker_services(self, base: RuntimeServices) -> RuntimeServices
+    # Build isolated services for a worker. Override to customize
+    # worker service setup (e.g. distributed search backend storage).
+```
+
+---
+
+### DispatchListener
+
+```python
+from sklearn_meta.execution.training import DispatchListener
+```
+
+Optional observer protocol for training dispatch lifecycle events. Pass an instance via `RuntimeServices(dispatch_listener=...)`. All methods are optional -- implement only the hooks you need.
+
+```python
+class DispatchListener(Protocol):
+    def on_dispatch_start(self, jobs: list[NodeTrainingJob]) -> None: ...
+    def on_job_complete(self, job: NodeTrainingJob, result: NodeTrainingResult) -> None: ...
+    def on_job_failed(self, job: NodeTrainingJob, error: Exception) -> None: ...
+    def on_dispatch_complete(self, jobs: list[NodeTrainingJob], results: list[NodeTrainingResult]) -> None: ...
+```
+
+---
+
+### LocalTrainingDispatcher
+
+```python
+from sklearn_meta.execution.training import LocalTrainingDispatcher
+```
+
+Default implementation that runs node-training jobs in the local process. For single-worker execution, jobs use live in-memory objects (no serialization overhead). When `n_workers > 1`, jobs are serialized and parallelized via joblib.
+
+```python
+class LocalTrainingDispatcher:
+    def __init__(
+        self,
+        n_workers: int = 1,      # 1 = sequential, -1 = all CPUs
+        backend: str = "threading",
+        prefer: str = "processes",
+    ) -> None
+
+    @property
+    requires_serialized_jobs -> bool  # True when n_workers != 1
+
+    def dispatch(
+        self,
+        jobs: list[NodeTrainingJob],
+        services: RuntimeServices,
+    ) -> list[NodeTrainingResult]: ...
+```
+
+---
+
+### NodeTrainingJob
+
+```python
+from sklearn_meta.execution.training import NodeTrainingJob
+```
+
+Serialized representation of a node-training job. Created by `NodeTrainingJobBuilder`.
+
+```python
+@dataclass
+class NodeTrainingJob:
+    SCHEMA_VERSION = 1
+
+    job_id: str
+    node_spec: dict[str, Any]
+    config: dict[str, Any]
+    plugin_names: list[str]
+    features: bytes
+    targets: dict[str, bytes]
+    overlays: dict[str, bytes]
+    aux: dict[str, bytes]
+    groups: bytes | None
+    feature_names: list[str]
+    n_samples: int
+```
+
+**Methods:**
+
+```python
+has_payload() -> bool                    # Whether serialized data is present
+has_live_objects() -> bool               # Whether live Python objects are present
+validate_for_serialized_execution()      # Raises if no payload
+validate_for_live_execution()            # Raises if no live objects
+payload_summary() -> dict[str, Any]     # Lightweight metadata (no binary data)
+
+# Serialization
+to_dict() -> dict[str, Any]
+@classmethod from_dict(data: dict) -> NodeTrainingJob
+
+# Filesystem persistence (for cloud dispatch via shared storage)
+save(path: str | Path) -> None
+@classmethod load(path: str | Path) -> NodeTrainingJob
+```
+
+---
+
+### NodeTrainingResult
+
+```python
+from sklearn_meta.execution.training import NodeTrainingResult
+```
+
+Serialized result returned by a `TrainingDispatcher`.
+
+```python
+@dataclass
+class NodeTrainingResult:
+    SCHEMA_VERSION = 1
+
+    job_id: str
+    node_name: str
+    best_params: dict[str, Any]
+    selected_features: list[str] | None
+    oof_predictions: bytes
+    fold_models: list[bytes]
+    optimization_summary: dict[str, Any] | None
+    cv_scores: list[float]
+    mean_score: float
+    fit_time: float
+    fold_results: list[dict[str, Any]] = field(default_factory=list)
+    repeat_oof: bytes | None = None
+    is_quantile: bool = False
+    oof_quantile_predictions: bytes | None = None
+    quantile_models: dict[str, list[bytes]] | None = None
+```
+
+**Methods:**
+
+```python
+payload_summary() -> dict[str, Any]     # Lightweight metadata (no binary data)
+
+# Serialization
+to_dict() -> dict[str, Any]
+@classmethod from_dict(data: dict) -> NodeTrainingResult
+
+# Filesystem persistence
+save(path: str | Path) -> None
+@classmethod load(path: str | Path) -> NodeTrainingResult
+```
+
+---
+
+### NodeTrainingJobBuilder
+
+```python
+from sklearn_meta.execution.training import NodeTrainingJobBuilder
+```
+
+Builds `NodeTrainingJob` objects from live coordinator state.
+
+```python
+class NodeTrainingJobBuilder:
+    @staticmethod
+    is_dispatchable(node: NodeSpec, graph: GraphSpec) -> bool
+
+    @staticmethod
+    build(node, node_data, config, include_payload=True) -> NodeTrainingJob
+
+    @classmethod
+    build_live(node, node_data, config) -> NodeTrainingJob
+    # Shortcut for build(..., include_payload=False)
+
+    @classmethod
+    build_serialized(node, node_data, config) -> NodeTrainingJob
+    # Shortcut for build(..., include_payload=True)
+
+    @classmethod
+    build_for_dispatch(node, node_data, config, services) -> NodeTrainingJob
+    # Automatically chooses live vs. serialized based on the dispatcher
+```
+
+When `include_payload` is `False`, serialized byte payloads are skipped and the job carries live objects for zero-copy in-process execution. The `LocalTrainingDispatcher` uses this fast path for single-worker runs.
+
+---
+
+### NodeTrainingJobRunner
+
+```python
+from sklearn_meta.execution.training import NodeTrainingJobRunner
+```
+
+Executes a single `NodeTrainingJob` and packages the result. This is the worker-side entry point for cloud dispatchers.
+
+```python
+class NodeTrainingJobRunner:
+    @staticmethod
+    make_worker_services(base: RuntimeServices) -> RuntimeServices
+    # Build isolated services for worker execution. Shared-filesystem
+    # caches are propagated; non-shared caches are dropped.
+
+    @classmethod
+    run(job, services) -> NodeTrainingResult
+    # Auto-selects live vs. serialized execution
+
+    @staticmethod
+    run_live(job, services) -> NodeTrainingResult
+    # Run against in-memory live objects
+
+    @classmethod
+    run_serialized(job, base_services) -> NodeTrainingResult
+    # Deserialize payloads and run with isolated worker services
+```
+
+---
+
+### NodeTrainingResultReconstructor
+
+```python
+from sklearn_meta.execution.training import NodeTrainingResultReconstructor
+```
+
+Reconstruct a `NodeRunResult` (or `QuantileNodeRunResult`) from a dispatched `NodeTrainingResult`.
+
+```python
+class NodeTrainingResultReconstructor:
+    @staticmethod
+    reconstruct(job: NodeTrainingJob, result: NodeTrainingResult) -> NodeRunResult
+```
+
+The module-level function `reconstruct_node_result(job, result)` is a backward-compatible wrapper.
+
+---
+
+### validate_dispatchable
+
+```python
+from sklearn_meta.execution.training import validate_dispatchable
+```
+
+Pre-flight check for remote dispatch compatibility.
+
+```python
+validate_dispatchable(
+    graph: GraphSpec,
+    config: RunConfig,
+    *,
+    plugin_registry = None,
+) -> list[DispatchWarning]
+```
+
+Returns a list of `DispatchWarning` objects. An empty list means the graph is fully dispatchable. Warnings do not prevent dispatch -- conditional and distilled nodes automatically fall back to inline execution.
+
+---
+
+### DispatchWarning
+
+```python
+from sklearn_meta.execution.training import DispatchWarning
+```
+
+```python
+@dataclass
+class DispatchWarning:
+    node_name: str
+    category: str   # "serialization", "import", "condition", "distillation", "plugin"
+    message: str
+```
+
+---
+
+### SchemaVersionError
+
+```python
+from sklearn_meta.execution.training import SchemaVersionError
+```
+
+Raised when a serialized `NodeTrainingJob` or `NodeTrainingResult` has an unsupported schema version (e.g. coordinator and worker running different sklearn-meta versions).
+
+```python
+class SchemaVersionError(ValueError):
+    object_type: str
+    found_version: Any
+    supported_versions: set[int]
+```
 
 ---
 
@@ -1556,6 +1995,24 @@ from sklearn_meta import GraphRunner
 from sklearn_meta.engine.cv import CVEngine
 from sklearn_meta.engine.strategy import OptimizationStrategy
 from sklearn_meta.engine.trainer import StandardNodeTrainer
+
+# Execution / Training Dispatch
+from sklearn_meta import (
+    TrainingDispatcher,
+    LocalTrainingDispatcher,
+    DispatchListener,
+    DispatchWarning,
+    SchemaVersionError,
+    validate_dispatchable,
+)
+from sklearn_meta.execution.training import (
+    NodeTrainingJob,
+    NodeTrainingResult,
+    NodeTrainingJobBuilder,
+    NodeTrainingJobRunner,
+    NodeTrainingResultReconstructor,
+    reconstruct_node_result,
+)
 
 # Artifacts
 from sklearn_meta import TrainingRun, NodeRunResult, InferenceGraph

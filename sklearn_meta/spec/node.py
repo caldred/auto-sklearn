@@ -105,12 +105,11 @@ class NodeSpec:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize this NodeSpec to a JSON-safe dictionary."""
-        cls = self.estimator_class
-        estimator_class_str = f"{cls.__module__}.{cls.__qualname__}"
+        from sklearn_meta.spec._resolve import get_class_path
 
         result: Dict[str, Any] = {
             "name": self.name,
-            "estimator_class": estimator_class_str,
+            "estimator_class": get_class_path(self.estimator_class),
             "output_type": self.output_type.value,
             "fixed_params": self.fixed_params,
             "fit_params": self.fit_params,
@@ -118,6 +117,9 @@ class NodeSpec:
             "description": self.description,
             "plugins": self.plugins,
         }
+
+        if self.search_space is not None:
+            result["search_space"] = self.search_space.to_dict()
 
         if self.distillation_config is not None:
             result["distillation_config"] = {
@@ -128,52 +130,48 @@ class NodeSpec:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "NodeSpec":
-        """Reconstruct a NodeSpec from a dictionary produced by to_dict()."""
-        import importlib
+    def _base_fields_from_dict(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse fields common to NodeSpec and its subclasses."""
+        from sklearn_meta.spec._resolve import resolve_class_path
 
-        class_path = data["estimator_class"]
-        path_parts = class_path.split(".")
-        estimator_class = None
-        for split_idx in range(len(path_parts) - 1, 0, -1):
-            module_path = ".".join(path_parts[:split_idx])
-            attr_parts = path_parts[split_idx:]
-            try:
-                obj = importlib.import_module(module_path)
-            except ModuleNotFoundError as exc:
-                if exc.name != module_path:
-                    raise
-                continue
-
-            try:
-                for attr_name in attr_parts:
-                    obj = getattr(obj, attr_name)
-            except AttributeError:
-                continue
-
-            estimator_class = obj
-            break
-
-        if estimator_class is None:
-            raise ImportError(
-                f"Could not resolve estimator class '{class_path}'"
-            )
+        estimator_class = resolve_class_path(data["estimator_class"])
 
         distillation_config = None
-        if "distillation_config" in data and data["distillation_config"] is not None:
+        if data.get("distillation_config") is not None:
             from sklearn_meta.spec.distillation import DistillationConfig
             distillation_config = DistillationConfig(**data["distillation_config"])
 
+        search_space = None
+        if data.get("search_space") is not None:
+            from sklearn_meta.search.space import SearchSpace
+            search_space = SearchSpace.from_dict(data["search_space"])
+
+        return {
+            "name": data["name"],
+            "estimator_class": estimator_class,
+            "search_space": search_space,
+            "fixed_params": data.get("fixed_params", {}),
+            "fit_params": data.get("fit_params", {}),
+            "feature_cols": data.get("feature_cols"),
+            "description": data.get("description", ""),
+            "plugins": data.get("plugins", []),
+            "distillation_config": distillation_config,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "NodeSpec":
+        """Reconstruct a NodeSpec from a dictionary produced by to_dict()."""
+        if (
+            cls is NodeSpec
+            and data.get("output_type") == OutputType.QUANTILES.value
+        ):
+            from sklearn_meta.spec.quantile import QuantileNodeSpec
+            return QuantileNodeSpec.from_dict(data)
+
+        fields = cls._base_fields_from_dict(data)
         return cls(
-            name=data["name"],
-            estimator_class=estimator_class,
             output_type=OutputType(data["output_type"]),
-            fixed_params=data.get("fixed_params", {}),
-            fit_params=data.get("fit_params", {}),
-            feature_cols=data.get("feature_cols"),
-            description=data.get("description", ""),
-            plugins=data.get("plugins", []),
-            distillation_config=distillation_config,
+            **fields,
         )
 
     def __repr__(self) -> str:

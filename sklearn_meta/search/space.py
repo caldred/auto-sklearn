@@ -287,9 +287,24 @@ class SearchSpace:
                     )
                 elif param_type == "categorical":
                     space.add_categorical(name, spec["choices"])
+                elif param_type == "conditional":
+                    inner = SearchParameter.from_dict(spec["parameter"])
+                    space.add_conditional(
+                        name=name,
+                        parent_name=spec["parent_name"],
+                        parent_value=spec["parent_value"],
+                        parameter=inner,
+                    )
                 else:
                     raise ValueError(f"Unknown parameter type: {param_type}")
         return space
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize this search space to a JSON-safe dictionary."""
+        return {
+            name: parameter.to_dict()
+            for name, parameter in self._parameters.items()
+        }
 
     def narrow_around(
         self,

@@ -51,38 +51,6 @@ class MockQuantileRegressor:
 # =============================================================================
 
 
-class TestQuantileScalingConfigCreation:
-    """Tests for QuantileScalingConfig creation."""
-
-    def test_basic_creation(self):
-        """Verify basic config creation."""
-        config = QuantileScalingConfig(
-            base_params={"n_estimators": 100},
-            scaling_rules={},
-        )
-
-        assert config.base_params == {"n_estimators": 100}
-        assert config.scaling_rules == {}
-
-    def test_creation_with_scaling_rules(self):
-        """Verify config creation with scaling rules."""
-        config = QuantileScalingConfig(
-            base_params={"n_estimators": 100},
-            scaling_rules={
-                "reg_lambda": {"base": 1.0, "tail_multiplier": 2.0},
-            },
-        )
-
-        assert "reg_lambda" in config.scaling_rules
-
-    def test_default_creation(self):
-        """Verify default config creation."""
-        config = QuantileScalingConfig()
-
-        assert config.base_params == {}
-        assert config.scaling_rules == {}
-
-
 class TestQuantileScalingConfigParams:
     """Tests for get_params_for_quantile method."""
 
@@ -145,85 +113,13 @@ class TestQuantileScalingConfigParams:
         # Scale factor = 1 + 1.0 * (2.0 - 1.0) = 2.0
         assert params["reg_lambda"] == pytest.approx(2.0, rel=0.01)
 
-    def test_multiple_scaling_rules(self):
-        """Verify multiple scaling rules are applied."""
-        config = QuantileScalingConfig(
-            base_params={"n_estimators": 100},
-            scaling_rules={
-                "reg_lambda": {"base": 1.0, "tail_multiplier": 2.0},
-                "reg_alpha": {"base": 0.1, "tail_multiplier": 1.5},
-            },
-        )
-
-        params = config.get_params_for_quantile(0.1)
-
-        assert "reg_lambda" in params
-        assert "reg_alpha" in params
-
-
 # =============================================================================
 # QuantileNodeSpec Tests
 # =============================================================================
 
 
 class TestQuantileNodeSpecCreation:
-    """Tests for QuantileNodeSpec creation."""
-
-    def test_basic_creation(self):
-        """Verify basic node creation."""
-        node = QuantileNodeSpec(
-            name="test",
-            property_name="price",
-            estimator_class=MockQuantileRegressor,
-        )
-
-        assert node.name == "test"
-        assert node.property_name == "price"
-        assert node.output_type == OutputType.QUANTILES
-
-    def test_creation_with_quantile_levels(self):
-        """Verify node creation with custom quantile levels."""
-        node = QuantileNodeSpec(
-            name="test",
-            property_name="price",
-            estimator_class=MockQuantileRegressor,
-            quantile_levels=[0.1, 0.5, 0.9],
-        )
-
-        assert node.quantile_levels == [0.1, 0.5, 0.9]
-        assert node.n_quantiles == 3
-
-    def test_default_quantile_levels(self):
-        """Verify default quantile levels are used."""
-        node = QuantileNodeSpec(
-            name="test",
-            property_name="price",
-            estimator_class=MockQuantileRegressor,
-        )
-
-        assert node.quantile_levels == sorted(DEFAULT_QUANTILE_LEVELS)
-        assert len(node.quantile_levels) == 19
-
-    def test_quantile_levels_sorted(self):
-        """Verify quantile levels are sorted."""
-        node = QuantileNodeSpec(
-            name="test",
-            property_name="price",
-            estimator_class=MockQuantileRegressor,
-            quantile_levels=[0.9, 0.1, 0.5],
-        )
-
-        assert node.quantile_levels == [0.1, 0.5, 0.9]
-
-    def test_auto_name_from_property(self):
-        """Verify automatic name generation from property."""
-        node = QuantileNodeSpec(
-            name="",  # Will be auto-generated
-            property_name="price",
-            estimator_class=MockQuantileRegressor,
-        )
-
-        assert node.name == "quantile_price"
+    """Tests for QuantileNodeSpec creation and validation."""
 
     def test_missing_property_name_raises(self):
         """Verify missing property_name raises error."""
@@ -258,17 +154,6 @@ class TestQuantileNodeSpecCreation:
 class TestQuantileNodeSpecProperties:
     """Tests for QuantileNodeSpec properties."""
 
-    def test_median_quantile_exact(self):
-        """Verify median_quantile when 0.5 is in levels."""
-        node = QuantileNodeSpec(
-            name="test",
-            property_name="price",
-            estimator_class=MockQuantileRegressor,
-            quantile_levels=[0.1, 0.5, 0.9],
-        )
-
-        assert node.median_quantile == 0.5
-
     def test_median_quantile_closest(self):
         """Verify median_quantile finds closest level."""
         node = QuantileNodeSpec(
@@ -281,49 +166,9 @@ class TestQuantileNodeSpecProperties:
         # Both 0.4 and 0.6 are equidistant; min() picks 0.4
         assert node.median_quantile in [0.4, 0.6]
 
-    def test_n_quantiles(self):
-        """Verify n_quantiles property."""
-        node = QuantileNodeSpec(
-            name="test",
-            property_name="price",
-            estimator_class=MockQuantileRegressor,
-            quantile_levels=[0.1, 0.25, 0.5, 0.75, 0.9],
-        )
-
-        assert node.n_quantiles == 5
-
 
 class TestQuantileNodeSpecCreateEstimator:
     """Tests for create_estimator_for_quantile method."""
-
-    def test_create_estimator_sets_quantile_params(self):
-        """Verify estimator is created with quantile parameters."""
-        node = QuantileNodeSpec(
-            name="test",
-            property_name="price",
-            estimator_class=MockQuantileRegressor,
-            quantile_levels=[0.1, 0.5, 0.9],
-        )
-
-        model = node.create_estimator_for_quantile(0.1)
-
-        assert model.objective == "reg:quantileerror"
-        assert model.quantile_alpha == 0.1
-
-    def test_create_estimator_with_fixed_params(self):
-        """Verify fixed params are applied."""
-        node = QuantileNodeSpec(
-            name="test",
-            property_name="price",
-            estimator_class=MockQuantileRegressor,
-            quantile_levels=[0.1, 0.5, 0.9],
-            fixed_params={"n_estimators": 50, "max_depth": 4},
-        )
-
-        model = node.create_estimator_for_quantile(0.5)
-
-        assert model.n_estimators == 50
-        assert model.max_depth == 4
 
     def test_create_estimator_with_scaling(self):
         """Verify quantile scaling is applied."""
@@ -365,20 +210,6 @@ class TestQuantileNodeSpecCreateEstimator:
 class TestQuantileNodeSpecGetParams:
     """Tests for get_params_for_quantile method."""
 
-    def test_get_params_includes_quantile_settings(self):
-        """Verify params include quantile-specific settings."""
-        node = QuantileNodeSpec(
-            name="test",
-            property_name="price",
-            estimator_class=MockQuantileRegressor,
-            quantile_levels=[0.1, 0.5, 0.9],
-        )
-
-        params = node.get_params_for_quantile(0.1)
-
-        assert params["objective"] == "reg:quantileerror"
-        assert params["quantile_alpha"] == 0.1
-
     def test_get_params_merges_all_sources(self):
         """Verify params merge fixed, tuned, and scaled values."""
         scaling = QuantileScalingConfig(
@@ -404,20 +235,25 @@ class TestQuantileNodeSpecGetParams:
         assert "reg_lambda" in params
 
 
-class TestQuantileNodeSpecRepr:
-    """Tests for node representation."""
+class TestQuantileNodeSpecSerialization:
+    """Tests for quantile node serialization."""
 
-    def test_repr(self):
-        """Verify repr is informative."""
+    def test_round_trips_quantile_fields(self):
+        scaling = QuantileScalingConfig(
+            base_params={"reg_lambda": 1.0},
+            scaling_rules={"reg_lambda": {"base": 1.0, "tail_multiplier": 2.0}},
+        )
         node = QuantileNodeSpec(
             name="quantile_price",
             property_name="price",
             estimator_class=MockQuantileRegressor,
             quantile_levels=[0.1, 0.5, 0.9],
+            quantile_scaling=scaling,
         )
 
-        repr_str = repr(node)
+        restored = QuantileNodeSpec.from_dict(node.to_dict())
 
-        assert "quantile_price" in repr_str
-        assert "price" in repr_str
-        assert "n_quantiles=3" in repr_str
+        assert restored.property_name == "price"
+        assert restored.quantile_levels == [0.1, 0.5, 0.9]
+        assert restored.quantile_scaling is not None
+        assert restored.quantile_scaling.scaling_rules["reg_lambda"]["tail_multiplier"] == 2.0

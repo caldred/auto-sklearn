@@ -352,52 +352,7 @@ class TrainingRun:
         ]
 
         # Serialize RunConfig
-        run_config_data: Dict[str, Any] = {
-            "cv": {
-                "n_splits": self.config.cv.n_splits,
-                "n_repeats": self.config.cv.n_repeats,
-                "strategy": self.config.cv.strategy.value,
-                "shuffle": self.config.cv.shuffle,
-                "random_state": self.config.cv.random_state,
-            },
-            "tuning": {
-                "n_trials": self.config.tuning.n_trials,
-                "timeout": self.config.tuning.timeout,
-                "early_stopping_rounds": self.config.tuning.early_stopping_rounds,
-                "metric": self.config.tuning.metric,
-                "greater_is_better": self.config.tuning.greater_is_better,
-                "strategy": self.config.tuning.strategy.value,
-                "show_progress": self.config.tuning.show_progress,
-            },
-            "verbosity": self.config.verbosity,
-        }
-        if self.config.feature_selection is not None:
-            fs = self.config.feature_selection
-            run_config_data["feature_selection"] = {
-                "enabled": fs.enabled,
-                "method": fs.method.value if hasattr(fs.method, "value") else str(fs.method),
-                "n_shadows": fs.n_shadows,
-                "threshold_mult": fs.threshold_mult,
-                "threshold_percentile": fs.threshold_percentile,
-                "retune_after_pruning": fs.retune_after_pruning,
-                "min_features": fs.min_features,
-                "max_features": fs.max_features,
-                "random_state": fs.random_state,
-            }
-        if self.config.reparameterization is not None:
-            rp = self.config.reparameterization
-            run_config_data["reparameterization"] = {
-                "enabled": rp.enabled,
-                "use_prebaked": rp.use_prebaked,
-            }
-        if self.config.estimator_scaling is not None:
-            es = self.config.estimator_scaling
-            run_config_data["estimator_scaling"] = {
-                "tuning_n_estimators": es.tuning_n_estimators,
-                "final_n_estimators": es.final_n_estimators,
-                "scaling_search": es.scaling_search,
-                "scaling_factors": es.scaling_factors,
-            }
+        run_config_data = self.config.to_dict()
 
         manifest = {
             "version": 3,
@@ -432,14 +387,7 @@ class TrainingRun:
         from sklearn_meta.spec.dependency import DependencyEdge
         from sklearn_meta.runtime.config import (
             CVFold, FoldResult, CVResult as _CVResult, RunConfig as _RunConfig,
-            CVConfig as _CVConfig, CVStrategy as _CVStrategy,
-            TuningConfig as _TuningConfig,
-            FeatureSelectionConfig as _FeatureSelectionConfig,
-            FeatureSelectionMethod as _FeatureSelectionMethod,
-            ReparameterizationConfig as _ReparameterizationConfig,
-            EstimatorScalingConfig as _EstimatorScalingConfig,
         )
-        from sklearn_meta.engine.strategy import OptimizationStrategy as _OptStrategy
 
         path = Path(path)
         manifest = read_manifest(path)
@@ -547,68 +495,7 @@ class TrainingRun:
         )
 
         # Reconstruct RunConfig
-        rc_data = manifest.get("run_config", {})
-        cv_data = rc_data.get("cv", {})
-        tuning_data = rc_data.get("tuning", {})
-
-        cv_config = _CVConfig(
-            n_splits=cv_data.get("n_splits", 5),
-            n_repeats=cv_data.get("n_repeats", 1),
-            strategy=_CVStrategy(cv_data["strategy"]) if "strategy" in cv_data else _CVStrategy.GROUP,
-            shuffle=cv_data.get("shuffle", True),
-            random_state=cv_data.get("random_state", 42),
-        )
-        tuning_config = _TuningConfig(
-            n_trials=tuning_data.get("n_trials", 100),
-            timeout=tuning_data.get("timeout"),
-            early_stopping_rounds=tuning_data.get("early_stopping_rounds"),
-            metric=tuning_data.get("metric", "neg_mean_squared_error"),
-            greater_is_better=tuning_data.get("greater_is_better", False),
-            strategy=_OptStrategy(tuning_data["strategy"]) if "strategy" in tuning_data else _OptStrategy.LAYER_BY_LAYER,
-            show_progress=tuning_data.get("show_progress", False),
-        )
-
-        fs_config = None
-        fs_data = rc_data.get("feature_selection")
-        if fs_data is not None:
-            fs_config = _FeatureSelectionConfig(
-                enabled=fs_data.get("enabled", True),
-                method=_FeatureSelectionMethod(fs_data["method"]) if "method" in fs_data else _FeatureSelectionMethod.SHADOW,
-                n_shadows=fs_data.get("n_shadows", 5),
-                threshold_mult=fs_data.get("threshold_mult", 1.414),
-                threshold_percentile=fs_data.get("threshold_percentile", 10.0),
-                retune_after_pruning=fs_data.get("retune_after_pruning", True),
-                min_features=fs_data.get("min_features", 1),
-                max_features=fs_data.get("max_features"),
-                random_state=fs_data.get("random_state", 42),
-            )
-
-        rp_config = None
-        rp_data = rc_data.get("reparameterization")
-        if rp_data is not None:
-            rp_config = _ReparameterizationConfig(
-                enabled=rp_data.get("enabled", True),
-                use_prebaked=rp_data.get("use_prebaked", True),
-            )
-
-        es_config = None
-        es_data = rc_data.get("estimator_scaling")
-        if es_data is not None:
-            es_config = _EstimatorScalingConfig(
-                tuning_n_estimators=es_data.get("tuning_n_estimators"),
-                final_n_estimators=es_data.get("final_n_estimators"),
-                scaling_search=es_data.get("scaling_search", False),
-                scaling_factors=es_data.get("scaling_factors"),
-            )
-
-        config = _RunConfig(
-            cv=cv_config,
-            tuning=tuning_config,
-            feature_selection=fs_config,
-            reparameterization=rp_config,
-            estimator_scaling=es_config,
-            verbosity=rc_data.get("verbosity", 1),
-        )
+        config = _RunConfig.from_dict(manifest.get("run_config", {}))
 
         return cls(
             graph=graph, config=config,
