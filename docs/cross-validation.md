@@ -217,7 +217,7 @@ config = RunConfig(
         strategy=CVStrategy.STRATIFIED,
         random_state=42,
     ).with_inner_cv(n_splits=3),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc"),
 )
 ```
 
@@ -261,7 +261,7 @@ graph TB
 **Using GraphBuilder (recommended):**
 
 ```python
-from sklearn_meta import GraphBuilder, RunConfig, CVConfig, CVStrategy, TuningConfig
+from sklearn_meta import GraphBuilder, RunConfigBuilder
 
 graph = (
     GraphBuilder("stacking")
@@ -272,9 +272,11 @@ graph = (
     .compile()
 )
 
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc")
+    .build()
 )
 # CVEngine routes OOF predictions automatically during fit
 ```
@@ -449,7 +451,7 @@ from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 
 from sklearn_meta import (
-    GraphBuilder, RunConfig, CVConfig, CVStrategy, TuningConfig, DataView, fit,
+    GraphBuilder, RunConfigBuilder, DataView, fit,
 )
 
 # Generate data
@@ -466,9 +468,11 @@ graph = (
 )
 
 # Configure the run
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED, random_state=42),
-    tuning=TuningConfig(n_trials=20, metric="roc_auc", greater_is_better=True),
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified", random_state=42)
+    .tuning(n_trials=20, metric="roc_auc")
+    .build()
 )
 
 # Fit

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -10,6 +11,32 @@ import numpy as np
 
 from sklearn_meta.engine.estimator_scaling import EstimatorScalingConfig
 from sklearn_meta.engine.strategy import OptimizationStrategy
+
+
+def _infer_greater_is_better(metric: str) -> bool:
+    """Infer score direction from a sklearn metric name.
+
+    All standard sklearn scorers follow the higher-is-better convention
+    (loss metrics are already negated, e.g. ``neg_mean_squared_error``).
+    For unknown metrics, warn and default to ``False``.
+    """
+    try:
+        from sklearn.metrics import get_scorer_names
+        known = set(get_scorer_names())
+    except ImportError:
+        from sklearn.metrics import SCORERS  # type: ignore[attr-defined]
+        known = set(SCORERS.keys())
+
+    if metric in known:
+        return True
+
+    warnings.warn(
+        f"Unknown metric '{metric}': defaulting to greater_is_better=False. "
+        f"Pass greater_is_better explicitly to suppress this warning.",
+        UserWarning,
+        stacklevel=4,
+    )
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -216,14 +243,26 @@ class FeatureSelectionConfig:
 
 @dataclass(frozen=True)
 class TuningConfig:
-    """Configuration for hyperparameter tuning."""
+    """Configuration for hyperparameter tuning.
+
+    If ``greater_is_better`` is not specified, it is inferred from the metric
+    name.  All standard sklearn scorer names (e.g. ``"roc_auc"``,
+    ``"neg_mean_squared_error"``) follow the higher-is-better convention.
+    For unknown metrics a warning is issued and ``False`` is used.
+    """
     n_trials: int = 100
     timeout: Optional[float] = None
     early_stopping_rounds: Optional[int] = None
     metric: str = "neg_mean_squared_error"
-    greater_is_better: bool = False
+    greater_is_better: Optional[bool] = None
     strategy: OptimizationStrategy = OptimizationStrategy.LAYER_BY_LAYER
     show_progress: bool = False
+
+    def __post_init__(self) -> None:
+        if self.greater_is_better is None:
+            object.__setattr__(
+                self, "greater_is_better", _infer_greater_is_better(self.metric)
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +332,7 @@ class RunConfigBuilder:
         timeout: Optional[float] = None,
         early_stopping_rounds: Optional[int] = None,
         metric: str = "neg_mean_squared_error",
-        greater_is_better: bool = False,
+        greater_is_better: Optional[bool] = None,
         strategy: OptimizationStrategy | str = OptimizationStrategy.LAYER_BY_LAYER,
         show_progress: bool = False,
     ) -> RunConfigBuilder:

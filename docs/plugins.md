@@ -92,7 +92,7 @@ graph = (
 config = (
     RunConfigBuilder()
     .cv(n_splits=5, strategy="stratified")
-    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .tuning(n_trials=50, metric="roc_auc")
     .build()
 )
 
@@ -440,7 +440,7 @@ graph = (
 config = (
     RunConfigBuilder()
     .cv(n_splits=5, strategy="stratified")
-    .tuning(n_trials=20, metric="roc_auc", greater_is_better=True)
+    .tuning(n_trials=20, metric="roc_auc")
     .build()
 )
 

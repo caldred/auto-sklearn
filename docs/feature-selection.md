@@ -9,8 +9,7 @@ sklearn-meta provides automated feature selection using shadow features, permuta
 In v2, the graph structure is defined separately from the runtime configuration. Feature selection is configured via `FeatureSelectionConfig` inside `RunConfig`, rather than a `.with_feature_selection()` builder method.
 
 ```python
-from sklearn_meta import GraphBuilder, GraphRunner, DataView, RunConfig, FeatureSelectionConfig
-from sklearn_meta.runtime.config import CVConfig, TuningConfig
+from sklearn_meta import GraphBuilder, GraphRunner, DataView, RunConfigBuilder
 from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 
@@ -27,10 +26,11 @@ graph = (
 )
 
 # 3. Configure the run with feature selection
-config = RunConfig(
-    cv=CVConfig(n_splits=5),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
-    feature_selection=FeatureSelectionConfig(
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc")
+    .feature_selection(
         method="shadow",
         n_shadows=5,
         threshold_mult=1.414,
@@ -39,7 +39,8 @@ config = RunConfig(
             "gender_ohe": ["gender_f", "gender_m"],
             "state_ohe": ["state_ca", "state_ny", "state_tx"],
         },
-    ),
+    )
+    .build()
 )
 
 # 4. Run
@@ -258,20 +259,17 @@ config = FeatureSelectionConfig(
 | `feature_groups` | Optional `{group_name: [feature, ...]}` map for atomic grouped selection | `None` |
 | `random_state` | Random seed for reproducibility | `42` |
 
-Feature selection is passed to `RunConfig` as an optional field:
+Feature selection is passed to `RunConfig` as an optional field. Using `RunConfigBuilder`:
 
 ```python
-from sklearn_meta import RunConfig, FeatureSelectionConfig
-from sklearn_meta.runtime.config import CVConfig, TuningConfig
+from sklearn_meta import RunConfigBuilder
 
-run_config = RunConfig(
-    cv=CVConfig(n_splits=5),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
-    feature_selection=FeatureSelectionConfig(
-        method="shadow",
-        n_shadows=5,
-        threshold_mult=1.414,
-    ),
+run_config = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc")
+    .feature_selection(method="shadow", n_shadows=5, threshold_mult=1.414)
+    .build()
 )
 ```
 
@@ -285,7 +283,7 @@ from sklearn_meta.runtime.config import RunConfigBuilder
 config = (
     RunConfigBuilder()
     .cv(n_splits=5)
-    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .tuning(n_trials=50, metric="roc_auc")
     .feature_selection(method="shadow", n_shadows=5, threshold_mult=1.414)
     .build()
 )
@@ -317,10 +315,12 @@ graph = (
     .compile()
 )
 
-config = RunConfig(
-    cv=CVConfig(n_splits=5),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
-    feature_selection=FeatureSelectionConfig(method="shadow"),
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc")
+    .feature_selection(method="shadow")
+    .build()
 )
 
 run = GraphRunner.from_config(config).fit(graph, data, config)
@@ -388,9 +388,8 @@ import pandas as pd
 import numpy as np
 
 from sklearn_meta import (
-    GraphBuilder, GraphRunner, DataView, RunConfig, FeatureSelectionConfig,
+    GraphBuilder, GraphRunner, DataView, RunConfigBuilder,
 )
-from sklearn_meta.runtime.config import CVConfig, TuningConfig
 
 # Generate data with known informative/noise structure
 X, y = make_classification(
@@ -425,16 +424,18 @@ graph = (
 )
 
 # Configure the run with feature selection
-config = RunConfig(
-    cv=CVConfig(n_splits=5),
-    tuning=TuningConfig(n_trials=30, metric="roc_auc", greater_is_better=True),
-    feature_selection=FeatureSelectionConfig(
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=30, metric="roc_auc")
+    .feature_selection(
         method="shadow",
         n_shadows=5,
         threshold_mult=1.414,
         retune_after_pruning=True,
         min_features=5,
-    ),
+    )
+    .build()
 )
 
 # Execute
@@ -517,17 +518,23 @@ FeatureSelectionConfig(
 Always compare model performance with and without selection to confirm the pruning helps:
 
 ```python
+from sklearn_meta import RunConfigBuilder
+
 # Without selection
-config_all = RunConfig(
-    cv=CVConfig(n_splits=5),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+config_all = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc")
+    .build()
 )
 
 # With selection
-config_selected = RunConfig(
-    cv=CVConfig(n_splits=5),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
-    feature_selection=FeatureSelectionConfig(method="shadow"),
+config_selected = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc")
+    .feature_selection(method="shadow")
+    .build()
 )
 
 run_all = GraphRunner.from_config(config_all).fit(graph, data, config_all)

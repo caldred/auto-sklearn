@@ -36,7 +36,7 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn_meta.spec.builder import GraphBuilder
 from sklearn_meta.engine.runner import GraphRunner
-from sklearn_meta.runtime.config import RunConfig, CVConfig, TuningConfig
+from sklearn_meta.runtime.config import RunConfigBuilder
 from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.data.view import DataView
 
@@ -60,16 +60,17 @@ graph = (
 )
 
 # 2. Configure the run
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy="stratified"),
-    tuning=TuningConfig(
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(
         n_trials=100,
         metric="roc_auc",
-        greater_is_better=True,
         early_stopping_rounds=20,
         show_progress=True,
-    ),
-    verbosity=2,
+    )
+    .verbosity(2)
+    .build()
 )
 
 # 3. Build services and data, then fit
@@ -111,7 +112,6 @@ config = RunConfig(
         timeout=3600,           # seconds
         early_stopping_rounds=20,
         metric="roc_auc",
-        greater_is_better=True,
         strategy=OptimizationStrategy.LAYER_BY_LAYER,
         show_progress=True,
     ),
@@ -149,7 +149,6 @@ tuning = TuningConfig(
     timeout=3600,
     early_stopping_rounds=20,
     metric="roc_auc",
-    greater_is_better=True,
     strategy=OptimizationStrategy.LAYER_BY_LAYER,
     show_progress=True,
 )
@@ -163,7 +162,7 @@ tuning = TuningConfig(
 | `timeout` | Time limit in seconds | None |
 | `early_stopping_rounds` | Stop if no improvement for N trials | None |
 | `metric` | Scoring metric name | `"neg_mean_squared_error"` |
-| `greater_is_better` | Maximize or minimize | False |
+| `greater_is_better` | Maximize or minimize. Optional -- automatically inferred for all standard sklearn scorer names (e.g. `"roc_auc"`, `"neg_mean_squared_error"`). Only required for custom metrics. | `None` (auto) |
 | `strategy` | Graph traversal strategy | `LAYER_BY_LAYER` |
 | `show_progress` | Display progress bar during tuning | False |
 
@@ -330,7 +329,6 @@ config = RunConfig(
     tuning=TuningConfig(
         n_trials=100,
         metric="roc_auc",
-        greater_is_better=True,
     ),
     estimator_scaling=EstimatorScalingConfig(
         tuning_n_estimators=100,     # use 100 trees during tuning (fast)
@@ -348,7 +346,6 @@ config = RunConfig(
     tuning=TuningConfig(
         n_trials=100,
         metric="roc_auc",
-        greater_is_better=True,
     ),
     estimator_scaling=EstimatorScalingConfig(
         tuning_n_estimators=100,
@@ -374,7 +371,6 @@ config = RunConfig(
     tuning=TuningConfig(
         n_trials=100,
         metric="roc_auc",
-        greater_is_better=True,
     ),
     estimator_scaling=EstimatorScalingConfig(
         tuning_n_estimators=100,
@@ -467,12 +463,12 @@ config = RunConfig(
 ```python
 # Classification
 config = RunConfig(
-    tuning=TuningConfig(metric="roc_auc", greater_is_better=True),
+    tuning=TuningConfig(metric="roc_auc"),
 )
 
 # Regression (default)
 config = RunConfig(
-    tuning=TuningConfig(metric="neg_mean_squared_error", greater_is_better=False),
+    tuning=TuningConfig(metric="neg_mean_squared_error"),
 )
 ```
 
@@ -693,7 +689,7 @@ print(f"\nTest Accuracy: {accuracy_score(y_test, predictions):.4f}")
 ```python
 from sklearn_meta.spec.builder import GraphBuilder
 from sklearn_meta.engine.runner import GraphRunner
-from sklearn_meta.runtime.config import RunConfig, CVConfig, TuningConfig
+from sklearn_meta.runtime.config import RunConfigBuilder
 from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.data.view import DataView
 
@@ -713,16 +709,17 @@ graph = (
     .compile()
 )
 
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy="stratified"),
-    tuning=TuningConfig(
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(
         n_trials=50,
         metric="roc_auc",
-        greater_is_better=True,
         early_stopping_rounds=15,
         show_progress=True,
-    ),
-    verbosity=2,
+    )
+    .verbosity(2)
+    .build()
 )
 
 services = RuntimeServices.default()
@@ -798,7 +795,6 @@ config = (
     .tuning(
         n_trials=100,
         metric="roc_auc",
-        greater_is_better=True,
         early_stopping_rounds=20,
         show_progress=True,
     )

@@ -422,7 +422,7 @@ from sklearn.linear_model import LogisticRegression
 
 from sklearn_meta.spec.builder import GraphBuilder
 from sklearn_meta.engine.runner import GraphRunner
-from sklearn_meta.runtime.config import RunConfig, CVConfig, TuningConfig
+from sklearn_meta.runtime.config import RunConfigBuilder
 from sklearn_meta.runtime.services import RuntimeServices
 from sklearn_meta.data.view import DataView
 
@@ -447,16 +447,17 @@ graph = (
 )
 
 # Configure the run
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy="stratified"),
-    tuning=TuningConfig(
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(
         n_trials=50,
         metric="roc_auc",
-        greater_is_better=True,
         early_stopping_rounds=15,
         show_progress=True,
-    ),
-    verbosity=2,
+    )
+    .verbosity(2)
+    .build()
 )
 
 # Train

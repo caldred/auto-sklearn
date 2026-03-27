@@ -59,12 +59,7 @@ graph TB
 In v2, the graph structure (what to tune) is separated from runtime configuration (how to tune). You define the graph with `GraphBuilder`, then pass a `RunConfig` with reparameterization settings to `GraphRunner`.
 
 ```python
-from sklearn_meta import GraphBuilder, GraphRunner, DataView, RunConfig
-from sklearn_meta.runtime.config import (
-    ReparameterizationConfig,
-    CVConfig,
-    TuningConfig,
-)
+from sklearn_meta import GraphBuilder, GraphRunner, DataView, RunConfigBuilder
 import xgboost as xgb
 import pandas as pd
 
@@ -84,10 +79,12 @@ graph = (
 data = DataView.from_Xy(X=pd.DataFrame(X), y=pd.Series(y))
 
 # 3. Configure the run with reparameterization
-config = RunConfig(
-    cv=CVConfig(n_splits=5),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
-    reparameterization=ReparameterizationConfig(enabled=True, use_prebaked=True),
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc")
+    .reparameterization(enabled=True, use_prebaked=True)
+    .build()
 )
 
 # 4. Run
@@ -203,13 +200,14 @@ Reparameterization is configured via `ReparameterizationConfig` inside `RunConfi
 The simplest approach -- let sklearn-meta apply known-good reparameterizations automatically:
 
 ```python
-from sklearn_meta import RunConfig
-from sklearn_meta.runtime.config import ReparameterizationConfig, TuningConfig, CVConfig
+from sklearn_meta import RunConfigBuilder
 
-config = RunConfig(
-    cv=CVConfig(n_splits=5),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
-    reparameterization=ReparameterizationConfig(enabled=True, use_prebaked=True),
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc")
+    .reparameterization(enabled=True, use_prebaked=True)
+    .build()
 )
 ```
 
@@ -229,7 +227,7 @@ reparam = LogProductReparameterization(
 
 config = RunConfig(
     cv=CVConfig(n_splits=5),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+    tuning=TuningConfig(n_trials=50, metric="roc_auc"),
     reparameterization=ReparameterizationConfig(
         enabled=True,
         use_prebaked=False,
@@ -260,7 +258,7 @@ from sklearn_meta.runtime.config import RunConfigBuilder
 config = (
     RunConfigBuilder()
     .cv(n_splits=5)
-    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .tuning(n_trials=50, metric="roc_auc")
     .reparameterization(enabled=True, use_prebaked=True)
     .build()
 )
@@ -408,7 +406,6 @@ from sklearn_meta.runtime.config import (
     ReparameterizationConfig,
     CVConfig,
     TuningConfig,
-    RunConfigBuilder,
 )
 from sklearn_meta.meta.reparameterization import LogProductReparameterization
 
@@ -438,7 +435,7 @@ graph = (
 # Configure the run
 config = RunConfig(
     cv=CVConfig(n_splits=5, strategy="stratified"),
-    tuning=TuningConfig(n_trials=30, metric="roc_auc", greater_is_better=True),
+    tuning=TuningConfig(n_trials=30, metric="roc_auc"),
     reparameterization=ReparameterizationConfig(
         enabled=True,
         use_prebaked=False,
@@ -520,16 +517,20 @@ graph = (
 )
 
 # Without reparameterization
-config_plain = RunConfig(
-    cv=CVConfig(n_splits=5),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+config_plain = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc")
+    .build()
 )
 
 # With reparameterization
-config_reparam = RunConfig(
-    cv=CVConfig(n_splits=5),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
-    reparameterization=ReparameterizationConfig(enabled=True, use_prebaked=True),
+config_reparam = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="roc_auc")
+    .reparameterization(enabled=True, use_prebaked=True)
+    .build()
 )
 
 run_plain = GraphRunner.from_config(config_plain).fit(graph, data, config_plain)

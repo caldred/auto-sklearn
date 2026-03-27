@@ -35,6 +35,31 @@ class NodeBuilder:
 
     _MISSING = object()
 
+    @staticmethod
+    def _should_infer_int_param(
+        low: Union[float, int],
+        high: Optional[Union[float, int]],
+        step: Optional[Union[float, int]],
+    ) -> bool:
+        """Infer int ranges for count-like params while preserving 0..1 floats."""
+        if (
+            not isinstance(low, int)
+            or isinstance(low, bool)
+            or not isinstance(high, int)
+            or isinstance(high, bool)
+        ):
+            return False
+        if low == 0 and high == 1:
+            # 0..1 is far more commonly a continuous rate/probability range.
+            return False
+        if step is None:
+            return True
+        if isinstance(step, bool):
+            return False
+        if isinstance(step, int):
+            return True
+        return isinstance(step, float) and step.is_integer()
+
     def __init__(
         self,
         name: str,
@@ -103,26 +128,61 @@ class NodeBuilder:
     def param(
         self,
         name: str,
-        low: float,
-        high: float,
+        low_or_choices: Union[float, int, List[Any]],
+        high: Optional[Union[float, int]] = None,
+        *,
         log: bool = False,
-        step: Optional[float] = None,
+        step: Optional[Union[float, int]] = None,
     ) -> NodeBuilder:
         """
-        Add a float hyperparameter to this node's search space.
+        Add a hyperparameter to this node's search space.
+
+        The parameter type is inferred from the arguments:
+
+        * **List** ``→`` categorical (``high``/``log``/``step`` must not be set).
+        * **Integer bounds** ``→`` integer range, except ``0..1`` which stays float.
+        * **Otherwise** ``→`` float range.
+
+        Examples::
+
+            .param("max_depth", 2, 15)                    # int
+            .param("subsample", 0, 1)                     # float
+            .param("learning_rate", 0.01, 0.3, log=True)  # float
+            .param("booster", ["gbtree", "dart"])          # categorical
+            .param("n_estimators", 50, 500, step=50)       # int
 
         Args:
             name: Parameter name.
-            low: Lower bound.
-            high: Upper bound.
+            low_or_choices: Lower bound, or a list of categorical choices.
+            high: Upper bound (omit for categorical).
             log: Whether to sample in log space.
-            step: Optional step size for discrete sampling.
+            step: Optional step size for discrete float sampling.
 
         Returns:
             Self for chaining.
         """
         self._ensure_search_space()
-        self._search_space.add_float(name, low, high, log=log, step=step)
+
+        if isinstance(low_or_choices, list):
+            if high is not None or log or step is not None:
+                raise TypeError(
+                    ".param() with a list of choices does not accept "
+                    "high, log, or step"
+                )
+            self._search_space.add_categorical(name, low_or_choices)
+        elif self._should_infer_int_param(low_or_choices, high, step):
+            int_step = None if step is None else int(step)
+            self._search_space.add_int(
+                name,
+                int(low_or_choices),
+                int(high),
+                log=log,
+                step=1 if int_step is None else int_step,
+            )
+        else:
+            self._search_space.add_float(
+                name, float(low_or_choices), float(high), log=log, step=step  # type: ignore[arg-type]
+            )
         return self
 
     def int_param(

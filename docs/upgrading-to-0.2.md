@@ -32,7 +32,7 @@ data = DataView.from_Xy(X_train, y_train, groups=groups)
 config = (
     RunConfigBuilder()
     .cv(n_splits=5, strategy="group")
-    .tuning(n_trials=50, metric="neg_log_loss", greater_is_better=True)
+    .tuning(n_trials=50, metric="neg_log_loss")
     .build()
 )
 

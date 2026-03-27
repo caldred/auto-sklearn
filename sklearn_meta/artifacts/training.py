@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 
 from sklearn_meta.runtime.config import CVResult, RunConfig
 
@@ -62,10 +63,50 @@ class TrainingRun:
     node_results: Dict[str, NodeRunResult]  # values may be QuantileNodeRunResult
     metadata: RunMetadata
     total_time: float = 0.0
+    _inference_graph: Optional[InferenceGraph] = field(
+        default=None, init=False, repr=False, compare=False,
+    )
 
     def compile_inference(self) -> InferenceGraph:
         from sklearn_meta.artifacts.compiler import InferenceCompiler
         return InferenceCompiler.compile(self)
+
+    def _get_inference_graph(self) -> InferenceGraph:
+        """Return the cached InferenceGraph, compiling on first access."""
+        if self._inference_graph is None:
+            self._inference_graph = self.compile_inference()
+        return self._inference_graph
+
+    def predict(
+        self, X: pd.DataFrame, node_name: Optional[str] = None,
+    ) -> np.ndarray:
+        """Compile (once) and predict in a single call.
+
+        For repeated predictions, prefer :meth:`compile_inference` to avoid
+        re-checking the cache on each call.
+        """
+        from sklearn_meta.spec.quantile import JointQuantileGraphSpec
+
+        if isinstance(self.graph, JointQuantileGraphSpec):
+            raise TypeError(
+                "predict() is not supported for joint quantile graphs. "
+                "Use compile_inference() to get a JointQuantileInferenceGraph, "
+                "then call predict_median(), predict_quantile(), or sample_joint()."
+            )
+        return self._get_inference_graph().predict(X, node_name=node_name)
+
+    def predict_proba(
+        self, X: pd.DataFrame, node_name: Optional[str] = None,
+    ) -> np.ndarray:
+        """Compile (once) and predict probabilities in a single call."""
+        from sklearn_meta.spec.quantile import JointQuantileGraphSpec
+
+        if isinstance(self.graph, JointQuantileGraphSpec):
+            raise TypeError(
+                "predict_proba() is not supported for joint quantile graphs. "
+                "Use compile_inference() for quantile-specific methods."
+            )
+        return self._get_inference_graph().predict_proba(X, node_name=node_name)
 
     def get_node(self, node_name: str) -> NodeRunResult:
         """Return a fitted node result by node name."""

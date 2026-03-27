@@ -340,7 +340,7 @@ compile() -> GraphSpec
 ```python
 # --- Search space ---
 search_space(space: SearchSpace) -> NodeBuilder              # Set a pre-built SearchSpace
-param(name, low, high, log=False, step=None) -> NodeBuilder  # Add float hyperparameter
+param(name, low_or_choices, high=None, log=False, step=None) -> NodeBuilder  # Add inferred int/float or categorical shorthand
 int_param(name, low, high, step=1) -> NodeBuilder            # Add integer hyperparameter
 cat_param(name, choices) -> NodeBuilder                      # Add categorical hyperparameter
 
@@ -619,7 +619,7 @@ class TuningConfig:
     timeout: float | None = None
     early_stopping_rounds: int | None = None
     metric: str = "neg_mean_squared_error"
-    greater_is_better: bool = False
+    greater_is_better: bool | None = None  # auto-inferred from metric name
     strategy: OptimizationStrategy = OptimizationStrategy.LAYER_BY_LAYER
     show_progress: bool = False
 ```
@@ -733,7 +733,7 @@ from sklearn_meta.runtime.config import RunConfigBuilder
 config = (
     RunConfigBuilder()
     .cv(n_splits=5, strategy="stratified")
-    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .tuning(n_trials=50, metric="roc_auc")
     .feature_selection(method="shadow")
     .build()
 )
@@ -1252,13 +1252,16 @@ import sklearn_meta
 
 sklearn_meta.fit(
     graph: GraphSpec,
-    data: DataView,
-    config: RunConfig,
+    data_or_X: DataView | pd.DataFrame,
+    y_or_config: RunConfig | Any = None,
+    config: RunConfig | RuntimeServices | None = None,
+    *,
+    groups: Any = None,
     services: RuntimeServices | None = None,
 ) -> TrainingRun
 ```
 
-Shortcut that creates a `GraphRunner` and calls `fit()`. Uses `RuntimeServices.default()` if no services are provided.
+Shortcut that creates a `GraphRunner` and calls `fit()`. Supports both `fit(graph, data, config, services)` and `fit(graph, X, y, config, groups=..., services=...)`. Uses `RuntimeServices.default()` if no services are provided.
 
 ---
 

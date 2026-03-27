@@ -9,7 +9,7 @@ Model graphs allow you to define complex machine learning pipelines as directed 
 The `GraphBuilder` fluent API is the recommended way to build model graphs. It produces a `GraphSpec` via `.compile()`:
 
 ```python
-from sklearn_meta import GraphBuilder, RunConfig, DataView, fit
+from sklearn_meta import GraphBuilder, RunConfigBuilder, DataView, fit
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 
@@ -27,9 +27,11 @@ graph = (
     .compile()
 )
 
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc")
+    .build()
 )
 
 data = DataView.from_Xy(X_train, y_train)

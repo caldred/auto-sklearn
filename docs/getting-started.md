@@ -89,22 +89,16 @@ graph = (
 
 #### Step 3: Configure the Training Run
 
-Runtime concerns -- cross-validation, tuning, and verbosity -- live in a `RunConfig`, separate from the graph definition.
+Runtime concerns -- cross-validation, tuning, and verbosity -- live in a `RunConfig`, separate from the graph definition. Use `RunConfigBuilder` to construct one fluently.
 
 ```python
-from sklearn_meta import RunConfig, CVConfig, CVStrategy, TuningConfig
+from sklearn_meta import RunConfigBuilder
 
-config = RunConfig(
-    cv=CVConfig(
-        n_splits=5,
-        strategy=CVStrategy.STRATIFIED,
-        random_state=42,
-    ),
-    tuning=TuningConfig(
-        n_trials=50,
-        metric="roc_auc",
-        greater_is_better=True,
-    ),
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified", random_state=42)
+    .tuning(n_trials=50, metric="roc_auc")
+    .build()
 )
 ```
 
@@ -143,7 +137,7 @@ from sklearn.metrics import accuracy_score
 
 from sklearn_meta import (
     GraphBuilder,
-    RunConfig, CVConfig, CVStrategy, TuningConfig,
+    RunConfigBuilder,
     GraphRunner, RuntimeServices, DataView,
 )
 
@@ -163,9 +157,11 @@ graph = (
 )
 
 # 2. Configure runtime
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc")
+    .build()
 )
 
 # 3. Fit and predict
@@ -226,9 +222,9 @@ predictions = loaded.predict(X_test)
 
 ---
 
-### Using the RunConfigBuilder
+### RunConfigBuilder: Additional Options
 
-For a fluent alternative to constructing `RunConfig` by hand, use `RunConfigBuilder`:
+The `RunConfigBuilder` supports additional configuration beyond CV and tuning, such as feature selection and verbosity:
 
 ```python
 from sklearn_meta import RunConfigBuilder
@@ -236,7 +232,7 @@ from sklearn_meta import RunConfigBuilder
 config = (
     RunConfigBuilder()
     .cv(n_splits=5, strategy="stratified", random_state=42)
-    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .tuning(n_trials=50, metric="roc_auc")
     .feature_selection(method="shadow")
     .verbosity(2)
     .build()
@@ -270,7 +266,7 @@ from sklearn.linear_model import LogisticRegression
 
 from sklearn_meta import (
     GraphBuilder,
-    RunConfig, CVConfig, CVStrategy, TuningConfig,
+    RunConfigBuilder,
     GraphRunner, RuntimeServices, DataView,
 )
 
@@ -297,13 +293,11 @@ graph = (
 )
 
 # Configure and fit
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
-    tuning=TuningConfig(
-        n_trials=100,
-        metric="roc_auc",
-        greater_is_better=True,
-    ),
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=100, metric="roc_auc")
+    .build()
 )
 
 run = GraphRunner(RuntimeServices.default()).fit(

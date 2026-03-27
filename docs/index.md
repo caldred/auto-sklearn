@@ -132,7 +132,7 @@ The `GraphBuilder` produces a pure `GraphSpec`. Runtime concerns (CV, tuning, fi
 ```python
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn_meta import GraphBuilder, RunConfig, CVConfig, TuningConfig, DataView, GraphRunner, RuntimeServices
+from sklearn_meta import GraphBuilder, RunConfigBuilder, DataView, GraphRunner, RuntimeServices
 
 # 1. Build a graph spec
 graph = (
@@ -151,9 +151,11 @@ graph = (
 )
 
 # 2. Configure the run
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy="stratified"),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc")
+    .build()
 )
 
 # 3. Wrap data in a DataView
@@ -174,7 +176,7 @@ For quick experiments, `sklearn_meta.fit()` wraps the runner in a single call:
 
 ```python
 import sklearn_meta
-from sklearn_meta import GraphBuilder, RunConfig, CVConfig, TuningConfig, DataView
+from sklearn_meta import GraphBuilder, RunConfigBuilder, DataView
 
 graph = (
     GraphBuilder()
@@ -185,9 +187,11 @@ graph = (
     .compile()
 )
 
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy="stratified"),
-    tuning=TuningConfig(n_trials=50, metric="roc_auc", greater_is_better=True),
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5, strategy="stratified")
+    .tuning(n_trials=50, metric="roc_auc")
+    .build()
 )
 
 data = DataView.from_Xy(X_train, y_train)
@@ -206,7 +210,7 @@ from sklearn_meta import RunConfigBuilder
 config = (
     RunConfigBuilder()
     .cv(n_splits=5, strategy="stratified")
-    .tuning(n_trials=50, metric="roc_auc", greater_is_better=True)
+    .tuning(n_trials=50, metric="roc_auc")
     .feature_selection(method="shadow", n_shadows=5)
     .reparameterization(enabled=True, use_prebaked=True)
     .verbosity(2)
