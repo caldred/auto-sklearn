@@ -677,8 +677,12 @@ inference = training_run.compile_inference()
 # Predict using the final (leaf) node
 predictions = inference.predict(X_test)
 
+# For classifier leaves, get class probabilities directly
+probabilities = inference.predict_proba(X_test)
+
 # Predict from a specific node
 rf_predictions = inference.predict(X_test, node_name="rf")
+rf_probabilities = inference.predict_proba(X_test, node_name="rf")
 ```
 
 For stacking graphs, `.predict()` automatically chains predictions through the graph: base model predictions are computed first and fed as features to downstream models.
@@ -692,7 +696,14 @@ For stacking graphs where a base model's output type is set to `"proba"`, the pr
 .output_type("proba")
 ```
 
-To get probability outputs from an `InferenceGraph`, access the individual fold models:
+To get probability outputs from an `InferenceGraph`, call `predict_proba()` on the compiled inference graph:
+
+```python
+probas = inference.predict_proba(X_test)
+rf_probas = inference.predict_proba(X_test, node_name="rf")
+```
+
+Manual fold-level averaging is still available for advanced inspection:
 
 ```python
 import numpy as np

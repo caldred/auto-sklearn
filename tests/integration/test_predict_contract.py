@@ -1,8 +1,8 @@
-"""Integration tests for InferenceGraph.predict() public contract.
+"""Integration tests for InferenceGraph prediction public contract.
 
 Tests cover: single-node prediction, two-layer stacking, proba stacking,
-feature selection at inference, conditional node handling, and missing
-node errors.
+feature selection at inference, conditional node handling, missing
+node errors, and probability prediction ergonomics.
 """
 
 import numpy as np
@@ -131,6 +131,89 @@ class TestSingleNodePrediction:
         preds_named = inference.predict(X_df, node_name="tree")
 
         np.testing.assert_array_equal(preds_default, preds_named)
+
+
+class TestProbabilityPrediction:
+    """Verify predict_proba() contract for classifier inference."""
+
+    def test_predict_proba_returns_correct_shape(self, mock_search_backend):
+        ctx, X_df = _make_classification_ctx()
+        node = NodeSpec(
+            name="tree",
+            estimator_class=DecisionTreeClassifier,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+        inference = fitted.compile_inference()
+        probas = inference.predict_proba(X_df)
+
+        assert probas.shape == (len(X_df), 2)
+        assert np.isfinite(probas).all()
+
+    def test_predict_proba_is_deterministic(self, mock_search_backend):
+        ctx, X_df = _make_classification_ctx()
+        node = NodeSpec(
+            name="tree",
+            estimator_class=DecisionTreeClassifier,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+        inference = fitted.compile_inference()
+
+        probas1 = inference.predict_proba(X_df)
+        probas2 = inference.predict_proba(X_df)
+
+        np.testing.assert_array_equal(probas1, probas2)
+
+    def test_predict_proba_rejects_regressor_leaf(self, mock_search_backend):
+        ctx, X_df = _make_regression_ctx()
+        node = NodeSpec(
+            name="tree",
+            estimator_class=DecisionTreeRegressor,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        fitted = _fit_graph(graph, ctx, _quick_tuning_config(), mock_search_backend)
+        inference = fitted.compile_inference()
+
+        with pytest.raises(ValueError, match="predict_proba"):
+            inference.predict_proba(X_df)
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +374,134 @@ class TestProbaStackingPrediction:
         assert preds.shape == (len(X_df),)
         assert np.isfinite(preds).all()
 
+    def test_predict_proba_on_classifier_leaf_uses_leaf_estimator(
+        self, mock_search_backend
+    ):
+        ctx, X_df = _make_classification_ctx()
+
+        base_clf = NodeSpec(
+            name="base_clf",
+            estimator_class=DecisionTreeClassifier,
+            output_type=OutputType.PROBA,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        meta_clf = NodeSpec(
+            name="meta_clf",
+            estimator_class=LogisticRegression,
+            fixed_params={"random_state": 42, "max_iter": 500},
+        )
+
+        graph = GraphSpec()
+        graph.add_node(base_clf)
+        graph.add_node(meta_clf)
+        graph.add_edge(DependencyEdge(
+            source="base_clf", target="meta_clf", dep_type=DependencyType.PROBA,
+        ))
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+        inference = fitted.compile_inference()
+
+        preds = inference.predict(X_df)
+        probas = inference.predict_proba(X_df)
+
+        assert preds.shape == (len(X_df),)
+        assert probas.shape == (len(X_df), 2)
+        assert np.isfinite(probas).all()
+
+    def test_predict_proba_with_explicit_internal_node_name(
+        self, mock_search_backend
+    ):
+        ctx, X_df = _make_classification_ctx()
+
+        base_clf = NodeSpec(
+            name="base_clf",
+            estimator_class=DecisionTreeClassifier,
+            output_type=OutputType.PROBA,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        meta_clf = NodeSpec(
+            name="meta_clf",
+            estimator_class=LogisticRegression,
+            fixed_params={"random_state": 42, "max_iter": 500},
+        )
+
+        graph = GraphSpec()
+        graph.add_node(base_clf)
+        graph.add_node(meta_clf)
+        graph.add_edge(DependencyEdge(
+            source="base_clf", target="meta_clf", dep_type=DependencyType.PROBA,
+        ))
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+        inference = fitted.compile_inference()
+        probas = inference.predict_proba(X_df, node_name="base_clf")
+
+        assert probas.shape == (len(X_df), 2)
+        assert np.isfinite(probas).all()
+
+    def test_predict_proba_on_existing_proba_node(self, mock_search_backend):
+        ctx, X_df = _make_classification_ctx()
+
+        node = NodeSpec(
+            name="tree",
+            estimator_class=DecisionTreeClassifier,
+            output_type=OutputType.PROBA,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+        inference = fitted.compile_inference()
+
+        probas = inference.predict_proba(X_df)
+        probs_from_predict = inference.predict(X_df)
+
+        assert probas.shape == (len(X_df), 2)
+        np.testing.assert_allclose(probas, probs_from_predict)
+
 
 # ---------------------------------------------------------------------------
 # Test 4: Feature selection + inference
@@ -338,6 +549,55 @@ class TestFeatureSelectionInference:
         assert np.isfinite(preds).all()
 
         # Verify the models were only trained on 3 features
+        for m in fitted.node_results["tree"].models:
+            assert m.n_features_in_ == 3
+
+    def test_predict_proba_uses_selected_features(self, mock_search_backend):
+        ctx, X_df = _make_classification_ctx(n_features=5)
+
+        node = NodeSpec(
+            name="tree",
+            estimator_class=DecisionTreeClassifier,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+
+        selected = ["f0", "f2", "f4"]
+
+        data = ctx.materialize()
+        new_models = []
+        for fold_result in fitted.node_results["tree"].cv_result.fold_results:
+            m = DecisionTreeClassifier(random_state=42, max_depth=3)
+            train_idx = fold_result.fold.train_indices
+            m.fit(X_df.iloc[train_idx][selected], data.y[train_idx])
+            new_models.append(m)
+            fold_result.model = m
+
+        fitted.node_results["tree"].selected_features = selected
+
+        inference = fitted.compile_inference()
+        probas = inference.predict_proba(X_df)
+
+        assert probas.shape == (len(X_df), 2)
+        assert np.isfinite(probas).all()
+
         for m in fitted.node_results["tree"].models:
             assert m.n_features_in_ == 3
 
@@ -444,6 +704,47 @@ class TestConditionalNodeHandling:
         with pytest.raises(KeyError, match="conditional"):
             inference.predict(X_df, node_name="meta")
 
+    def test_predict_proba_skipped_conditional_node_raises_key_error(
+        self, mock_search_backend
+    ):
+        ctx, X_df = _make_classification_ctx()
+
+        normal_node = NodeSpec(
+            name="normal",
+            estimator_class=DecisionTreeClassifier,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        conditional_node = NodeSpec(
+            name="conditional",
+            estimator_class=DecisionTreeClassifier,
+            fixed_params={"random_state": 42, "max_depth": 3},
+            condition=lambda ctx: False,
+        )
+
+        graph = GraphSpec()
+        graph.add_node(normal_node)
+        graph.add_node(conditional_node)
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+        inference = fitted.compile_inference()
+
+        with pytest.raises(KeyError, match="conditional"):
+            inference.predict_proba(X_df, node_name="conditional")
+
 
 # ---------------------------------------------------------------------------
 # Test 6: Missing node error
@@ -486,6 +787,37 @@ class TestMissingNodeError:
         with pytest.raises(KeyError, match="nonexistent"):
             inference.predict(X_df, node_name="nonexistent")
 
+    def test_predict_proba_nonexistent_node_raises_key_error(self, mock_search_backend):
+        ctx, X_df = _make_classification_ctx()
+
+        node = NodeSpec(
+            name="tree",
+            estimator_class=DecisionTreeClassifier,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+        inference = fitted.compile_inference()
+
+        with pytest.raises(KeyError, match="nonexistent"):
+            inference.predict_proba(X_df, node_name="nonexistent")
+
 
 class TestPersistenceContract:
     """Verify save/load preserves inference and rejects training-only access."""
@@ -526,3 +858,40 @@ class TestPersistenceContract:
         preds_after = loaded.predict(X_df)
 
         np.testing.assert_array_equal(preds_before, preds_after)
+
+    def test_inference_only_round_trip_preserves_predict_proba(
+        self, tmp_path, mock_search_backend
+    ):
+        ctx, X_df = _make_classification_ctx()
+
+        node = NodeSpec(
+            name="tree",
+            estimator_class=DecisionTreeClassifier,
+            fixed_params={"random_state": 42, "max_depth": 3},
+        )
+        graph = GraphSpec()
+        graph.add_node(node)
+
+        config = RunConfig(
+            cv=CVConfig(
+                n_splits=2,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+            ),
+            tuning=TuningConfig(
+                strategy=OptimizationStrategy.NONE,
+                metric="accuracy",
+                greater_is_better=True,
+            ),
+            verbosity=0,
+        )
+
+        fitted = _fit_graph(graph, ctx, config, mock_search_backend)
+        inference = fitted.compile_inference()
+        probas_before = inference.predict_proba(X_df)
+
+        inference.save(tmp_path / "model")
+        loaded = InferenceGraph.load(tmp_path / "model")
+        probas_after = loaded.predict_proba(X_df)
+
+        np.testing.assert_array_equal(probas_before, probas_after)

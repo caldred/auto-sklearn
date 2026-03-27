@@ -25,18 +25,39 @@ class InferenceGraph:
     node_params: Dict[str, Dict[str, Any]]
 
     def predict(self, X: pd.DataFrame, node_name: Optional[str] = None) -> np.ndarray:
-        # Same recursive logic as old FittedGraph.predict
-        if node_name is None:
-            leaves = self.graph.get_leaf_nodes()
-            if not leaves:
-                raise ValueError("Graph has no leaf nodes")
-            node_name = leaves[0]
-        return self._predict_node(X, node_name)
+        target_node = self._resolve_target_node(node_name)
+        return self._predict_node(X, target_node)
 
-    def _predict_node(self, X: pd.DataFrame, node_name: str, cache: Optional[Dict[str, np.ndarray]] = None) -> np.ndarray:
+    def predict_proba(
+        self,
+        X: pd.DataFrame,
+        node_name: Optional[str] = None,
+    ) -> np.ndarray:
+        target_node = self._resolve_target_node(node_name)
+        return self._predict_node(X, target_node, final_output_mode="predict_proba")
+
+    def _resolve_target_node(self, node_name: Optional[str]) -> str:
+        if node_name is not None:
+            return node_name
+
+        leaves = self.graph.get_leaf_nodes()
+        if not leaves:
+            raise ValueError("Graph has no leaf nodes")
+        return leaves[0]
+
+    def _predict_node(
+        self,
+        X: pd.DataFrame,
+        node_name: str,
+        cache: Optional[Dict[object, np.ndarray]] = None,
+        final_output_mode: str = "configured",
+    ) -> np.ndarray:
         if cache is None:
             cache = {}
-        if node_name in cache:
+        cache_key = (node_name, final_output_mode)
+        if cache_key in cache:
+            return cache[cache_key]
+        if node_name in cache and final_output_mode == "configured":
             return cache[node_name]
 
         node = self.graph.get_node(node_name)
@@ -67,11 +88,40 @@ class InferenceGraph:
         # Ensemble predictions from fold models
         predictions = []
         for model in self.node_models[node_name]:
-            predictions.append(get_output(node, model, X_augmented))
+            predictions.append(
+                self._get_model_output(
+                    node,
+                    model,
+                    X_augmented,
+                    final_output_mode=final_output_mode,
+                )
+            )
 
         result = np.mean(predictions, axis=0)
-        cache[node_name] = result
+        if final_output_mode == "configured":
+            cache[node_name] = result
+        cache[cache_key] = result
         return result
+
+    def _get_model_output(
+        self,
+        node,
+        model: Any,
+        X: pd.DataFrame,
+        final_output_mode: str = "configured",
+    ) -> np.ndarray:
+        if final_output_mode == "configured":
+            return get_output(node, model, X)
+
+        if final_output_mode == "predict_proba":
+            if not hasattr(model, "predict_proba"):
+                raise ValueError(
+                    f"Node '{node.name}' does not support probability prediction: "
+                    f"{type(model).__name__} has no 'predict_proba' method"
+                )
+            return model.predict_proba(X)
+
+        raise ValueError(f"Unknown final output mode: {final_output_mode}")
 
     def save(self, path) -> None:
         import joblib
