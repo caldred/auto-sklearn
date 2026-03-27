@@ -55,6 +55,9 @@ from sklearn_meta.meta.correlation import CorrelationAnalyzer, HyperparameterCor
 from sklearn_meta.audit.logger import AuditLogger
 from sklearn_meta.persistence.cache import FitCache
 
+# Convenience helpers
+from sklearn_meta.convenience import ComparisonResult, compare, tune, cross_validate, stack
+
 
 __version__ = "0.2.0"
 
@@ -204,4 +207,9 @@ __all__ = [
     "AuditLogger",
     # Convenience
     "fit",
+    "ComparisonResult",
+    "compare",
+    "tune",
+    "cross_validate",
+    "stack",
 ]

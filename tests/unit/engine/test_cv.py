@@ -10,6 +10,7 @@ from sklearn_meta.runtime.config import (
     CVStrategy,
     FoldResult,
     NestedCVFold,
+    RunConfigBuilder,
 )
 
 
@@ -192,6 +193,61 @@ class TestCVConfig:
         nested = config.with_inner_cv(n_splits=3)
 
         assert nested.inner_cv.random_state == 43
+
+
+class TestRunConfigBuilderCV:
+    """Tests for RunConfigBuilder nested CV support."""
+
+    def test_builder_cv_supports_inner_cv_int(self):
+        config = (
+            RunConfigBuilder()
+            .cv(
+                n_splits=5,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+                inner_cv=3,
+            )
+            .build()
+        )
+
+        assert config.cv.n_splits == 5
+        assert config.cv.strategy == CVStrategy.STRATIFIED
+        assert config.cv.inner_cv is not None
+        assert config.cv.inner_cv.n_splits == 3
+        assert config.cv.inner_cv.n_repeats == 1
+        assert config.cv.inner_cv.strategy == CVStrategy.STRATIFIED
+        assert config.cv.inner_cv.random_state == 43
+
+    def test_builder_cv_supports_inner_cv_custom_strategy(self):
+        config = (
+            RunConfigBuilder()
+            .cv(
+                n_splits=5,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+                inner_cv=3,
+                inner_strategy=CVStrategy.RANDOM,
+            )
+            .build()
+        )
+
+        assert config.cv.inner_cv is not None
+        assert config.cv.inner_cv.strategy == CVStrategy.RANDOM
+
+    def test_builder_cv_supports_prebuilt_inner_cv(self):
+        inner = CVConfig(n_splits=4, strategy=CVStrategy.RANDOM, random_state=99)
+        config = (
+            RunConfigBuilder()
+            .cv(
+                n_splits=5,
+                strategy=CVStrategy.STRATIFIED,
+                random_state=42,
+                inner_cv=inner,
+            )
+            .build()
+        )
+
+        assert config.cv.inner_cv is inner
 
 
 class TestCVStrategy:

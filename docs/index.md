@@ -1,283 +1,91 @@
-# sklearn-meta Documentation
+# sklearn-meta
 
-> A Python library for automated machine learning with meta-learning capabilities, hyperparameter optimization, and model stacking.
+A Python library for automated ML pipelines with hyperparameter optimization, model stacking, and feature selection.
 
 ---
 
-## Overview
+## Install
 
-sklearn-meta provides a powerful framework for building automated machine learning pipelines. It combines hyperparameter optimization with advanced techniques like reparameterization, feature selection, knowledge distillation, and model stacking to achieve state-of-the-art results with minimal configuration.
-
-```mermaid
-graph TB
-    subgraph "sklearn-meta Pipeline"
-        A[Raw Data] --> B[DataView]
-        B --> C[Feature Selection]
-        C --> D[GraphSpec]
-        D --> E[Hyperparameter Tuning]
-        E --> F[Cross-Validation]
-        F --> G[TrainingRun]
-        G --> H[InferenceGraph]
-        H --> I[Predictions]
-    end
-
-    subgraph "Key Components"
-        J[SearchSpace] -.-> E
-        K[Reparameterization] -.-> E
-        L[Plugins] -.-> D
-    end
+```bash
+pip install -e .
 ```
 
----
+Optional boosting libraries:
 
-## Key Features
-
-| Feature | Description |
-|---------|-------------|
-| **Graph Specs** | Define complex pipelines as directed acyclic graphs (DAGs) |
-| **GraphBuilder Fluent API** | Build pipelines with a chainable, readable API |
-| **Hyperparameter Optimization** | Backend-agnostic search with Optuna integration |
-| **Reparameterization** | Orthogonal parameter transformations for faster convergence |
-| **Cross-Validation** | Stratified, grouped, random, and time-series strategies |
-| **Feature Selection** | Shadow feature-based selection with entropy matching |
-| **Model Stacking** | Multi-layer stacking with out-of-fold predictions |
-| **Knowledge Distillation** | Teacher-student training with KL-divergence loss |
-| **Estimator Scaling** | Scale n_estimators for boosting models with learning rate adjustment |
-| **Joint Quantile Regression** | Model correlated targets with uncertainty quantification |
-| **Plugin System** | Extensible plugins for model-specific behavior |
-| **Caching** | Hash-based caching for expensive operations |
-
----
-
-## Documentation
-
-### Getting Started
-- [Installation & Quickstart](getting-started.md) -- Get up and running in minutes
-
-### Core Concepts
-- [Model Graphs](model-graphs.md) -- Building ML pipelines as DAGs
-- [Search Spaces](search-spaces.md) -- Defining hyperparameter search spaces
-- [Cross-Validation](cross-validation.md) -- CV strategies and configuration
-
-### Advanced Topics
-- [Tuning & Optimization](tuning.md) -- Hyperparameter optimization strategies
-- [Reparameterization](reparameterization.md) -- Meta-learning parameter transforms
-- [Model Stacking](stacking.md) -- Multi-layer ensemble methods
-- [Feature Selection](feature-selection.md) -- Automated feature selection
-- [Plugins](plugins.md) -- Extending functionality with plugins
-
-### Specialized Topics
-- [Joint Quantile Regression](joint-quantile-regression.md) -- Multivariate target modeling with uncertainty
-- [Correlation Analysis](api-reference.md#correlationanalyzer) -- Discover hyperparameter correlations post-optimization
-
-### Reference
-- [API Reference](api-reference.md) -- Complete API documentation
-
----
-
-## Architecture
-
-```mermaid
-graph LR
-    subgraph "Spec Layer"
-        GS[GraphSpec]
-        NS[NodeSpec]
-        GB[GraphBuilder]
-    end
-
-    subgraph "Data Layer"
-        DV[DataView]
-        DR[DatasetRecord]
-        MB[MaterializedBatch]
-    end
-
-    subgraph "Runtime Layer"
-        RC[RunConfig]
-        RS[RuntimeServices]
-    end
-
-    subgraph "Engine Layer"
-        GR[GraphRunner]
-        CV[CVEngine]
-        SS[SearchService]
-    end
-
-    subgraph "Artifacts Layer"
-        TR[TrainingRun]
-        IG[InferenceGraph]
-    end
-
-    GB --> GS
-    NS --> GS
-    DR --> DV
-    DV --> MB
-    GS --> GR
-    DV --> GR
-    RC --> GR
-    RS --> GR
-    GR --> CV
-    GR --> SS
-    GR --> TR
-    TR --> IG
+```bash
+pip install xgboost lightgbm catboost
 ```
 
 ---
 
 ## Quick Example
 
-### Using the GraphBuilder Fluent API (Recommended)
-
-The `GraphBuilder` produces a pure `GraphSpec`. Runtime concerns (CV, tuning, fitting) are configured separately via `RunConfig` and executed by `GraphRunner`.
-
-```python
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn_meta import GraphBuilder, RunConfigBuilder, DataView, GraphRunner, RuntimeServices
-
-# 1. Build a graph spec
-graph = (
-    GraphBuilder("my_pipeline")
-    .add_model("rf", RandomForestClassifier)
-        .param("n_estimators", 50, 500)
-        .param("max_depth", 3, 20)
-        .fixed_params(random_state=42, n_jobs=-1)
-    .add_model("gbm", GradientBoostingClassifier)
-        .param("learning_rate", 0.01, 0.3, log=True)
-        .param("max_depth", 3, 10)
-        .int_param("n_estimators", 50, 300)
-    .add_model("meta", LogisticRegression)
-        .stacks("rf", "gbm")
-    .compile()
-)
-
-# 2. Configure the run
-config = (
-    RunConfigBuilder()
-    .cv(n_splits=5, strategy="stratified")
-    .tuning(n_trials=50, metric="roc_auc")
-    .build()
-)
-
-# 3. Wrap data in a DataView
-data = DataView.from_Xy(X_train, y_train)
-
-# 4. Fit with GraphRunner
-runner = GraphRunner(RuntimeServices.default())
-training_run = runner.fit(graph, data, config)
-
-# 5. Compile to an inference graph and predict
-inference = training_run.compile_inference()
-predictions = inference.predict(X_test)
-```
-
-### Using the Convenience Function
-
-For quick experiments, `sklearn_meta.fit()` wraps the runner in a single call:
-
-```python
-import sklearn_meta
-from sklearn_meta import GraphBuilder, RunConfigBuilder, DataView
-
-graph = (
-    GraphBuilder()
-    .add_model("rf", RandomForestClassifier)
-        .param("n_estimators", 50, 500)
-        .param("max_depth", 3, 20)
-        .fixed_params(random_state=42, n_jobs=-1)
-    .compile()
-)
-
-config = (
-    RunConfigBuilder()
-    .cv(n_splits=5, strategy="stratified")
-    .tuning(n_trials=50, metric="roc_auc")
-    .build()
-)
-
-data = DataView.from_Xy(X_train, y_train)
-
-training_run = sklearn_meta.fit(graph, data, config)
-predictions = training_run.compile_inference().predict(X_test)
-```
-
-### Using RunConfigBuilder
-
-For more readable configuration, use the fluent `RunConfigBuilder`:
-
-```python
-from sklearn_meta import RunConfigBuilder
-
-config = (
-    RunConfigBuilder()
-    .cv(n_splits=5, strategy="stratified")
-    .tuning(n_trials=50, metric="roc_auc")
-    .feature_selection(method="shadow", n_shadows=5)
-    .reparameterization(enabled=True, use_prebaked=True)
-    .verbosity(2)
-    .build()
-)
-```
-
-### Using the Low-Level API
-
-For full control, construct `NodeSpec` and `GraphSpec` objects directly:
+Tune a random forest in a few lines:
 
 ```python
 from sklearn.ensemble import RandomForestClassifier
-from sklearn_meta import (
-    DataView,
-    NodeSpec,
-    GraphSpec,
-    RunConfig,
-    CVConfig,
-    CVStrategy,
-    TuningConfig,
-    RuntimeServices,
-    GraphRunner,
-    SearchSpace,
+from sklearn_meta import tune
+
+result = tune(
+    RandomForestClassifier,
+    X_train, y_train,
+    params={"n_estimators": (50, 500), "max_depth": (3, 20)},
+    metric="roc_auc",
 )
-
-# Define search space
-space = SearchSpace()
-space.add_int("n_estimators", 50, 200)
-space.add_int("max_depth", 3, 15)
-space.add_float("min_samples_split", 0.01, 0.3)
-
-# Create node spec (keyword-only arguments)
-node = NodeSpec(
-    name="random_forest",
-    estimator_class=RandomForestClassifier,
-    search_space=space,
-    fixed_params={"random_state": 42, "n_jobs": -1},
-)
-
-# Build graph
-graph = GraphSpec()
-graph.add_node(node)
-graph.validate()
-
-# Configure the run
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
-    tuning=TuningConfig(
-        n_trials=50,
-        metric="roc_auc",
-        greater_is_better=True,
-    ),
-)
-
-# Wrap data
-data = DataView.from_Xy(X=X_train, y=y_train)
-
-# Fit
-services = RuntimeServices.default()
-runner = GraphRunner(services)
-training_run = runner.fit(graph, data, config)
-
-# Predict
-inference = training_run.compile_inference()
-predictions = inference.predict(X_test)
+result.best_params_
+result.predict(X_test)
 ```
+
+sklearn-meta also provides `cross_validate()`, `stack()`, and `compare()` for other common workflows, and a full `GraphBuilder` API when you need more control. See [Getting Started](getting-started.md) for a walkthrough.
+
+---
+
+## Documentation
+
+### Tutorial
+
+Work through these in order to learn sklearn-meta:
+
+1. [Getting Started](getting-started.md) -- From first tune to stacking ensembles
+2. [Tuning](tuning.md) -- Hyperparameter optimization in depth
+3. [Stacking](stacking.md) -- Multi-model ensembles
+4. [Feature Selection](feature-selection.md) -- Automated feature pruning
+
+### Reference
+
+Look up specific topics:
+
+- [Search Spaces](search-spaces.md) -- Parameter types, conditional params, shorthand notation
+- [Cross-Validation](cross-validation.md) -- CV strategies, nested CV, grouped splits
+- [Model Graphs](model-graphs.md) -- Custom DAG architectures with GraphBuilder
+- [Reparameterization](reparameterization.md) -- Orthogonal parameter transforms
+- [Plugins](plugins.md) -- Extending sklearn-meta with model-specific behavior
+- [Joint Quantile Regression](joint-quantile-regression.md) -- Multivariate targets with uncertainty
+- [API Reference](api-reference.md) -- Complete class and function reference
+
+---
+
+## How It Works
+
+sklearn-meta has three phases:
+
+1. **Define** a model graph -- what models to train and how they connect
+2. **Configure** the run -- CV strategy, tuning trials, feature selection
+3. **Fit** -- sklearn-meta handles tuning, cross-validation, and training
+
+The convenience helpers (`tune`, `cross_validate`, `stack`, `compare`) handle all three phases in a single call. For custom architectures, use `GraphBuilder` + `RunConfigBuilder` + `fit()` to control each phase separately.
+
+```python
+# Convenience helper (one call)
+result = tune(MyModel, X, y, params={...}, metric="roc_auc")
+
+# Explicit API (full control)
+graph = GraphBuilder("pipeline").add_model("m", MyModel).param(...).build()
+config = RunConfigBuilder().cv(n_splits=5).tuning(n_trials=50, metric="roc_auc").build()
+result = fit(graph, X, y, config)
+```
+
+Both approaches return the same `TrainingRun` object with `.predict()`, `.best_params_`, `.best_score_`, and more.
 
 ---
 

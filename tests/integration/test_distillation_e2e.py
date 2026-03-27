@@ -111,7 +111,7 @@ class TestDistillationEndToEnd:
             .add_model("student", MockXGBClassifier)
                 .distill_from("teacher", temperature=3.0, alpha=0.5)
                 .fixed_params(n_estimators=5, random_state=42)
-            .compile()
+            .build()
         )
 
         fitted = _fit_distillation_graph(graph, X, y, mock_search_backend)
@@ -138,7 +138,7 @@ class TestDistillationEndToEnd:
             .add_model("student", MockXGBClassifier)
                 .distill_from("teacher")
                 .fixed_params(n_estimators=5, random_state=42)
-            .compile()
+            .build()
         )
 
         fitted = _fit_distillation_graph(graph, X, y, mock_search_backend)
@@ -162,7 +162,7 @@ class TestDistillationEndToEnd:
             .add_model("student", MockXGBClassifier)
                 .distill_from("teacher")
                 .fixed_params(n_estimators=5, random_state=42)
-            .compile()
+            .build()
         )
 
         fitted = _fit_distillation_graph(graph, X, y, mock_search_backend)
@@ -202,7 +202,7 @@ class TestDistillationEndToEnd:
             .add_model("student", MockXGBClassifier)
                 .distill_from("teacher", temperature=2.0, alpha=0.8)
                 .fixed_params(n_estimators=5, random_state=42)
-            .compile()
+            .build()
         )
 
         fitted = _fit_distillation_graph(

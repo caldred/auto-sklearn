@@ -431,7 +431,7 @@ class TestFullIntegration:
             .add_model("lr", LogisticRegression)
                 .fixed_params(random_state=42, max_iter=1000)
                 .stacks("rf")
-            .compile()
+            .build()
         )
 
         cv_config = CVConfig(n_splits=3, strategy=CVStrategy.STRATIFIED, random_state=42)

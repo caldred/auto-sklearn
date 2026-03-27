@@ -95,7 +95,7 @@ class NodeBuilder:
         """Delegate unknown attributes to GraphBuilder for fluent chaining.
 
         This allows fluent transitions from node-level configuration to
-        graph-level configuration (e.g. ``.add_model()``, ``.compile()``)
+        graph-level configuration (e.g. ``.add_model()``, ``.build()``)
         without maintaining explicit forwarding methods.
         """
         # Only delegate public methods to avoid masking internal errors
@@ -474,7 +474,7 @@ class GraphBuilder:
                 .param("max_depth", 3, 10)
             .add_model("meta", LogisticRegression)
                 .stacks("rf", "xgb")
-            .compile()
+            .build()
         )
     """
 
@@ -509,7 +509,7 @@ class GraphBuilder:
         self._nodes[name] = builder
         return builder
 
-    def compile(self) -> GraphSpec:
+    def build(self) -> GraphSpec:
         """
         Build the GraphSpec from accumulated nodes and edges.
 
@@ -537,6 +537,16 @@ class GraphBuilder:
         graph.validate()
 
         return graph
+
+    def compile(self) -> GraphSpec:
+        """Deprecated: use :meth:`build` instead."""
+        import warnings
+        warnings.warn(
+            "GraphBuilder.compile() is deprecated, use .build() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.build()
 
     def __repr__(self) -> str:
         return f"GraphBuilder(models={list(self._nodes.keys())})"

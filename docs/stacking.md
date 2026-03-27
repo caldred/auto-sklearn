@@ -1,530 +1,105 @@
-# Model Stacking
+# Stacking
 
-Stacking (stacked generalization) combines multiple models by training a meta-learner on their predictions. sklearn-meta provides robust stacking with automatic out-of-fold prediction handling to prevent data leakage.
-
----
-
-## What is Stacking?
-
-Stacking trains a "meta-learner" on the predictions of "base models":
-
-```mermaid
-graph TB
-    subgraph "Input"
-        X[Features X]
-        Y[Target y]
-    end
-
-    subgraph "Base Models"
-        X --> RF[Random Forest]
-        X --> XGB[XGBoost]
-        X --> SVM[SVM]
-    end
-
-    subgraph "Meta Features"
-        RF --> |predictions| MF[Stacked Features]
-        XGB --> |predictions| MF
-        SVM --> |predictions| MF
-    end
-
-    subgraph "Meta Learner"
-        MF --> LR[Logistic Regression]
-        Y --> LR
-    end
-
-    LR --> P[Final Predictions]
-```
-
-**Why stacking works:**
-- Different models capture different patterns
-- Meta-learner learns optimal combination
-- Often outperforms individual models
+Stacking trains a "meta-learner" on the predictions of multiple "base models." sklearn-meta handles the tricky part -- generating out-of-fold predictions so the meta-learner never sees leaked training data.
 
 ---
 
-## The Leakage Problem
+## Quick Start
 
-**Naive stacking leaks information:**
-
-```mermaid
-graph LR
-    subgraph "Wrong Approach"
-        A[Train base on all data] --> B[Predict on training data]
-        B --> C[Train meta on predictions]
-        C --> D[Meta sees training predictions!]
-    end
-```
-
-Base models see training data, so predictions are overfit, and the meta-learner learns overfit patterns.
-
-**Solution: Out-of-Fold (OOF) predictions:**
-
-```mermaid
-graph LR
-    subgraph "Correct Approach"
-        A[Train base on fold 1-4] --> B[Predict fold 5]
-        A2[Train base on fold 1-3,5] --> B2[Predict fold 4]
-        B --> C[Combine OOF predictions]
-        B2 --> C
-        C --> D[Train meta on OOF]
-        D --> E[No leakage]
-    end
-```
-
-Each sample's prediction comes from a model that **never saw that sample**.
-
----
-
-## Quick Start with GraphBuilder
-
-The `GraphBuilder` fluent API is the easiest way to build stacking pipelines. `GraphBuilder` produces a `GraphSpec` (the graph definition); runtime concerns (CV, tuning, fitting) are handled separately by `RunConfig` and `GraphRunner`.
+`stack()` builds and fits a stacking ensemble in one call:
 
 ```python
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
+from sklearn_meta import stack
 
-from sklearn_meta import (
-    GraphBuilder, RunConfig, RunConfigBuilder,
-    RuntimeServices, GraphRunner, DataView, OptunaBackend,
+result = stack(
+    base_models={
+        "rf": (RandomForestClassifier, {"n_estimators": (50, 500), "max_depth": (3, 20)}),
+        "gbm": (GradientBoostingClassifier, {"learning_rate": (0.01, 0.3, {"log": True})}),
+    },
+    meta_model=LogisticRegression,
+    X=X_train, y=y_train,
+    metric="roc_auc",
+    n_trials=50,
 )
 
-# 1. Build the graph spec
+result.predict(X_test)      # ensemble predictions
+result.best_score_           # meta-learner's CV score
+```
+
+### stack() Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `base_models` | Dict of `{name: model_spec}` (see format below) | required |
+| `meta_model` | Meta-learner model spec | required |
+| `metric` | Scoring metric | `"neg_mean_squared_error"` |
+| `n_trials` | Optuna trials per model | `50` |
+| `cv` | Number of folds or a `CVConfig` | `5` |
+| `strategy` | CV strategy (auto-detected if omitted) | `None` |
+| `groups` | Group labels for group CV | `None` |
+
+Model specs can be:
+- An estimator class: `RandomForestClassifier` (uses defaults, no tuning)
+- An estimator instance: `RandomForestClassifier(n_estimators=200)` (uses those params, no tuning)
+- A tuple: `(EstimatorClass, params_dict)` for tuning
+- A tuple: `(EstimatorClass, params_dict, fixed_params_dict)` for tuning with fixed params
+
+---
+
+## How Stacking Works
+
+The key challenge with stacking is **data leakage**: if base models predict on data they trained on, the meta-learner sees overfit predictions and learns overfit patterns.
+
+sklearn-meta solves this with **out-of-fold (OOF) predictions**:
+
+1. Split data into K folds
+2. For each fold, train base models on the other K-1 folds
+3. Predict on the held-out fold
+4. Combine predictions -- every training sample has a prediction from a model that never saw it
+5. Train the meta-learner on these OOF predictions
+
+At prediction time, all fold models predict and their outputs are averaged before being passed to the meta-learner.
+
+### Layer-by-Layer Optimization
+
+For stacking graphs, sklearn-meta tunes models **layer by layer**:
+
+1. **Layer 0**: Tune all base models (independently, can be parallelized)
+2. **Generate OOF predictions** from the tuned base models
+3. **Layer 1**: Tune the meta-learner on OOF predictions
+
+This ensures the meta-learner is tuned on realistic inputs.
+
+---
+
+## Using the Explicit API
+
+For multi-level stacking, mixed dependency types, or fine-grained control, use `GraphBuilder`:
+
+```python
+from sklearn.svm import SVC
+from sklearn_meta import GraphBuilder, RunConfigBuilder, fit
+
 graph = (
     GraphBuilder("stacking_pipeline")
     # Base models
     .add_model("rf", RandomForestClassifier)
-        .param("n_estimators", 50, 200)
-        .int_param("max_depth", 3, 15)
-    .add_model("gb", GradientBoostingClassifier)
-        .param("n_estimators", 50, 200)
+        .int_param("n_estimators", 50, 500)
+        .int_param("max_depth", 3, 20)
+        .fixed_params(random_state=42)
+    .add_model("gbm", GradientBoostingClassifier)
         .param("learning_rate", 0.01, 0.3, log=True)
+        .int_param("max_depth", 3, 10)
     .add_model("svm", SVC)
-        .param("C", 0.1, 10.0)
+        .param("C", 0.1, 100.0, log=True)
         .fixed_params(probability=True)
     # Meta-learner stacking on base model probabilities
     .add_model("meta", LogisticRegression)
         .param("C", 0.01, 100.0, log=True)
-        .stacks_proba("rf", "gb", "svm")
-    .compile()
-)
-
-# 2. Configure the run
-config = (
-    RunConfigBuilder()
-    .cv(n_splits=5, strategy="stratified")
-    .tuning(
-        n_trials=50,
-        metric="roc_auc",
-        early_stopping_rounds=20,
-        show_progress=True,
-    )
+        .stacks_proba("rf", "gbm", "svm")
     .build()
-)
-
-# 3. Fit
-data = DataView.from_Xy(X=X_train, y=y_train)
-services = RuntimeServices(search_backend=OptunaBackend(direction="maximize"))
-training_run = GraphRunner(services).fit(graph, data, config)
-
-# 4. Predict
-inference = training_run.compile_inference()
-predictions = inference.predict(X_test)
-```
-
-### NodeBuilder Dependency Methods
-
-| Method | Description |
-|--------|-------------|
-| `.stacks("source_node")` | Prediction dependency (class labels or regression values) |
-| `.stacks_proba("source_node")` | Probability dependency (class probabilities) |
-
-Both methods accept multiple source names: `.stacks("a", "b")` and `.stacks_proba("a", "b")`.
-
----
-
-## Building a Stacking Pipeline (Low-Level API)
-
-### Step 1: Define Base Models
-
-```python
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.svm import SVC
-from sklearn_meta import NodeSpec
-from sklearn_meta.search.space import SearchSpace
-
-# Random Forest
-rf_space = SearchSpace().add_int("n_estimators", 50, 200).add_int("max_depth", 3, 15)
-rf_node = NodeSpec(name="rf", estimator_class=RandomForestClassifier, search_space=rf_space, fixed_params={"random_state": 42})
-
-# Gradient Boosting
-gb_space = SearchSpace().add_int("n_estimators", 50, 200).add_float("learning_rate", 0.01, 0.3, log=True)
-gb_node = NodeSpec(name="gb", estimator_class=GradientBoostingClassifier, search_space=gb_space, fixed_params={"random_state": 42})
-
-# SVM
-svm_space = SearchSpace().add_float("C", 0.1, 10, log=True)
-svm_node = NodeSpec(name="svm", estimator_class=SVC, search_space=svm_space, fixed_params={"probability": True, "random_state": 42})
-```
-
-### Step 2: Define Meta-Learner
-
-```python
-from sklearn.linear_model import LogisticRegression
-
-meta_space = SearchSpace().add_float("C", 0.01, 100, log=True)
-meta_node = NodeSpec(name="meta", estimator_class=LogisticRegression, search_space=meta_space, fixed_params={"random_state": 42})
-```
-
-### Step 3: Create Graph with Dependencies
-
-```python
-from sklearn_meta import GraphSpec, DependencyEdge, DependencyType
-
-graph = GraphSpec()
-
-# Add nodes
-graph.add_node(rf_node)
-graph.add_node(gb_node)
-graph.add_node(svm_node)
-graph.add_node(meta_node)
-
-# Connect base models to meta-learner using DependencyEdge
-graph.add_edge(DependencyEdge(source="rf", target="meta", dep_type=DependencyType.PROBA))
-graph.add_edge(DependencyEdge(source="gb", target="meta", dep_type=DependencyType.PROBA))
-graph.add_edge(DependencyEdge(source="svm", target="meta", dep_type=DependencyType.PROBA))
-```
-
-### Step 4: Configure, Run, and Fit
-
-```python
-from sklearn_meta import (
-    DataView, RunConfig, CVConfig, CVStrategy, TuningConfig,
-    RuntimeServices, GraphRunner, OptunaBackend,
-)
-
-data = DataView.from_Xy(X=X_train, y=y_train)
-
-config = RunConfig(
-    cv=CVConfig(n_splits=5, strategy=CVStrategy.STRATIFIED),
-    tuning=TuningConfig(
-        n_trials=30,
-        metric="roc_auc",
-        greater_is_better=True,
-        show_progress=True,
-    ),
-)
-
-services = RuntimeServices(search_backend=OptunaBackend(direction="maximize"))
-training_run = GraphRunner(services).fit(graph, data, config)
-```
-
-### Step 5: Predict
-
-```python
-inference = training_run.compile_inference()
-predictions = inference.predict(X_test)
-```
-
----
-
-## Dependency Types
-
-All dependencies use `DependencyEdge` with a `DependencyType` enum:
-
-```python
-from sklearn_meta import DependencyEdge, DependencyType
-```
-
-### Prediction Dependency
-
-Pass class predictions (0, 1, 2, ...) or regression values:
-
-```python
-edge = DependencyEdge(source="base", target="meta", dep_type=DependencyType.PREDICTION)
-graph.add_edge(edge)
-```
-
-**Meta-learner input:** One feature per base model (binary) or k features per model (k-class).
-
-### Probability Dependency
-
-Pass probability predictions:
-
-```python
-edge = DependencyEdge(source="base", target="meta", dep_type=DependencyType.PROBA)
-graph.add_edge(edge)
-```
-
-**Meta-learner input:** k features per base model (k = number of classes).
-
-**Usually better** because:
-- Preserves confidence information
-- More information for meta-learner
-- Better calibration opportunities
-
-### With GraphBuilder
-
-```python
-# Prediction dependency
-builder.stacks("base_model")
-
-# Probability dependency
-builder.stacks_proba("base_model")
-
-# Multiple sources at once
-builder.stacks_proba("rf", "gb", "svm")
-```
-
----
-
-## Multi-Level Stacking
-
-Stack multiple layers deep:
-
-```mermaid
-graph TB
-    subgraph "Layer 0: Base Models"
-        I[Input] --> RF[RF]
-        I --> XGB[XGB]
-        I --> LGBM[LGBM]
-        I --> CAT[CatBoost]
-    end
-
-    subgraph "Layer 1: First Meta"
-        RF --> M1[Meta 1]
-        XGB --> M1
-        LGBM --> M2[Meta 2]
-        CAT --> M2
-    end
-
-    subgraph "Layer 2: Final Meta"
-        M1 --> FM[Final Meta]
-        M2 --> FM
-    end
-
-    FM --> O[Output]
-```
-
-### Low-Level API
-
-```python
-from sklearn_meta import GraphSpec, DependencyEdge, DependencyType
-
-graph = GraphSpec()
-
-# Layer 0
-graph.add_node(rf_node)
-graph.add_node(xgb_node)
-graph.add_node(lgbm_node)
-graph.add_node(cat_node)
-
-# Layer 1
-graph.add_node(meta1_node)
-graph.add_node(meta2_node)
-
-graph.add_edge(DependencyEdge(source="rf", target="meta1", dep_type=DependencyType.PROBA))
-graph.add_edge(DependencyEdge(source="xgb", target="meta1", dep_type=DependencyType.PROBA))
-graph.add_edge(DependencyEdge(source="lgbm", target="meta2", dep_type=DependencyType.PROBA))
-graph.add_edge(DependencyEdge(source="cat", target="meta2", dep_type=DependencyType.PROBA))
-
-# Layer 2
-graph.add_node(final_node)
-graph.add_edge(DependencyEdge(source="meta1", target="final", dep_type=DependencyType.PROBA))
-graph.add_edge(DependencyEdge(source="meta2", target="final", dep_type=DependencyType.PROBA))
-```
-
-### GraphBuilder API
-
-```python
-from sklearn_meta import GraphBuilder, RunConfigBuilder, RuntimeServices, GraphRunner, DataView, OptunaBackend
-
-graph = (
-    GraphBuilder("deep_stack")
-    # Layer 0
-    .add_model("rf", RandomForestClassifier)
-        .int_param("n_estimators", 50, 200)
-    .add_model("xgb", XGBClassifier)
-        .int_param("n_estimators", 50, 200)
-    .add_model("lgbm", LGBMClassifier)
-        .int_param("n_estimators", 50, 200)
-    .add_model("cat", CatBoostClassifier)
-        .int_param("iterations", 50, 200)
-    # Layer 1
-    .add_model("meta1", LogisticRegression)
-        .param("C", 0.01, 100.0, log=True)
-        .stacks_proba("rf", "xgb")
-    .add_model("meta2", LogisticRegression)
-        .param("C", 0.01, 100.0, log=True)
-        .stacks_proba("lgbm", "cat")
-    # Layer 2
-    .add_model("final", Ridge)
-        .param("alpha", 0.01, 100.0, log=True)
-        .stacks_proba("meta1", "meta2")
-    .compile()
-)
-
-config = (
-    RunConfigBuilder()
-    .cv(n_splits=5, strategy="stratified")
-    .tuning(n_trials=50, metric="roc_auc", show_progress=True)
-    .build()
-)
-
-data = DataView.from_Xy(X=X_train, y=y_train)
-services = RuntimeServices(search_backend=OptunaBackend(direction="maximize"))
-training_run = GraphRunner(services).fit(graph, data, config)
-```
-
----
-
-## How OOF Predictions Work
-
-### During Training
-
-```mermaid
-sequenceDiagram
-    participant R as GraphRunner
-    participant B as Base Model
-    participant D as DataView
-    participant M as Meta Model
-
-    R->>D: Create 5 folds
-
-    loop For each fold i
-        R->>B: Train on folds != i
-        B->>R: Model_i
-        R->>B: Predict fold i
-        B->>D: Store OOF predictions as overlay
-    end
-
-    D->>D: Combine OOF predictions
-    D->>M: OOF as training features
-    R->>M: Train meta on OOF
-```
-
-### Prediction Time
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant G as InferenceGraph
-    participant B as Base Models
-    participant M as Meta Model
-
-    U->>G: predict(X_test)
-    G->>B: Get predictions from each
-    B->>G: [rf_pred, xgb_pred, svm_pred]
-    G->>G: Stack predictions as features
-    G->>M: Predict on stacked features
-    M->>U: Final predictions
-```
-
----
-
-## Working with Results
-
-### TrainingRun
-
-```python
-# Compile to an InferenceGraph for predictions
-inference = training_run.compile_inference()
-
-# Predict through the full graph (starting from leaf nodes)
-predictions = inference.predict(X_test)
-
-# Predict from a specific node
-rf_predictions = inference.predict(X_test, node_name="rf")
-
-# Access a node's training results
-rf_result = training_run.node_results["rf"]
-
-# Get OOF predictions for a node
-rf_oof = rf_result.oof_predictions
-```
-
-### Getting Probability Predictions
-
-`InferenceGraph.predict()` returns class labels or regression values. To get probabilities, average `predict_proba` across the fold models:
-
-```python
-import numpy as np
-
-models = training_run.node_results["rf"].models
-probas = np.mean(
-    [model.predict_proba(X_test) for model in models],
-    axis=0,
-)
-```
-
-### NodeRunResult
-
-```python
-rf_result = training_run.node_results["rf"]
-
-rf_result.best_params          # best hyperparameters dict
-rf_result.mean_score           # mean CV score
-rf_result.oof_predictions      # out-of-fold predictions
-rf_result.models               # list of fitted model objects (one per fold)
-rf_result.cv_result            # cross-validation result
-rf_result.optimization_result  # full optimization result
-rf_result.selected_features    # selected features (if feature selection enabled)
-```
-
----
-
-## Stacking Strategies
-
-### Simple Stacking
-
-One layer of base models + one meta-learner:
-
-```
-Base Layer -> Meta Layer
-```
-
-**Pros:** Simple, less overfitting risk
-**Cons:** Limited expressiveness
-
-### Deep Stacking
-
-Multiple meta-learner layers:
-
-```
-Base Layer -> Meta Layer 1 -> Meta Layer 2 -> Final
-```
-
-**Pros:** More expressive
-**Cons:** Overfitting risk, longer training
-
-### Blending
-
-No OOF -- use holdout set instead:
-
-```
-Train base on 70% -> Predict 30% holdout -> Train meta on holdout predictions
-```
-
-**Pros:** Faster (single train per model)
-**Cons:** Wastes data, higher variance
-
-### Feature-Weighted Linear Stacking (FWLS)
-
-Meta-learner is constrained to linear combination:
-
-```python
-from sklearn.linear_model import Ridge
-from sklearn_meta import GraphBuilder, RunConfigBuilder, RuntimeServices, GraphRunner, DataView, OptunaBackend
-
-graph = (
-    GraphBuilder("fwls")
-    .add_model("rf", RandomForestClassifier)
-        .int_param("n_estimators", 50, 200)
-    .add_model("xgb", XGBClassifier)
-        .int_param("n_estimators", 50, 200)
-    .add_model("meta", Ridge)
-        .param("alpha", 0.01, 100.0, log=True)
-        .stacks_proba("rf", "xgb")
-    .compile()
 )
 
 config = (
@@ -534,189 +109,97 @@ config = (
     .build()
 )
 
-data = DataView.from_Xy(X=X_train, y=y_train)
-services = RuntimeServices(search_backend=OptunaBackend(direction="maximize"))
-training_run = GraphRunner(services).fit(graph, data, config)
+result = fit(graph, X_train, y_train, config)
 ```
 
-**Pros:** Interpretable, less overfitting
-**Cons:** May underfit complex relationships
+### Dependency Methods
+
+| Method | What it passes to the meta-learner |
+|--------|------------------------------------|
+| `.stacks("base")` | Class predictions (labels or regression values) |
+| `.stacks_proba("base")` | Class probabilities -- usually better for classification |
+
+Both accept multiple sources: `.stacks_proba("rf", "gbm", "svm")`.
+
+For classification, `.stacks_proba()` is generally preferred because it preserves confidence information.
 
 ---
 
-## Complete Example
+## Multi-Level Stacking
+
+For deeper architectures, chain multiple meta-learner layers:
 
 ```python
-from sklearn.datasets import make_classification
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score, roc_auc_score
-import pandas as pd
+from sklearn.linear_model import Ridge
 
-from sklearn_meta import (
-    GraphBuilder, GraphSpec, NodeSpec, DependencyEdge, DependencyType,
-    DataView, RunConfig, RunConfigBuilder, CVConfig, CVStrategy, TuningConfig,
-    RuntimeServices, GraphRunner, OptunaBackend,
-)
-from sklearn_meta.search.space import SearchSpace
-
-# === Data ===
-X, y = make_classification(
-    n_samples=2000, n_features=20,
-    n_informative=10, n_redundant=5,
-    random_state=42
-)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-X_train, X_test = pd.DataFrame(X_train), pd.DataFrame(X_test)
-y_train, y_test = pd.Series(y_train), pd.Series(y_test)
-
-# === Build graph with GraphBuilder ===
 graph = (
-    GraphBuilder("stacking_pipeline")
-    # Base Model 1: Random Forest
+    GraphBuilder("deep_stack")
+    # Layer 0: Base models
     .add_model("rf", RandomForestClassifier)
-        .int_param("n_estimators", 50, 300)
-        .int_param("max_depth", 3, 15)
-        .param("min_samples_split", 0.01, 0.1)
-        .fixed_params(random_state=42, n_jobs=-1)
-    # Base Model 2: Gradient Boosting
-    .add_model("gb", GradientBoostingClassifier)
-        .int_param("n_estimators", 50, 300)
-        .param("learning_rate", 0.01, 0.3, log=True)
-        .int_param("max_depth", 3, 8)
-        .fixed_params(random_state=42)
-    # Base Model 3: SVM
-    .add_model("svm", SVC)
-        .param("C", 0.1, 100.0, log=True)
-        .cat_param("kernel", ["rbf", "poly"])
-        .fixed_params(probability=True, random_state=42)
-    # Meta-Learner: Logistic Regression
-    .add_model("meta", LogisticRegression)
+        .int_param("n_estimators", 50, 200)
+    .add_model("xgb", XGBClassifier)
+        .int_param("n_estimators", 50, 200)
+    .add_model("lgbm", LGBMClassifier)
+        .int_param("n_estimators", 50, 200)
+    # Layer 1: Intermediate meta-learners
+    .add_model("meta1", LogisticRegression)
         .param("C", 0.01, 100.0, log=True)
-        .fixed_params(random_state=42, max_iter=1000)
-        .stacks_proba("rf", "gb", "svm")
-    .compile()
-)
-
-# Validate
-graph.validate()
-print(f"Execution order: {graph.topological_order()}")
-
-# === Configure the run ===
-config = (
-    RunConfigBuilder()
-    .cv(n_splits=5, strategy="stratified")
-    .tuning(
-        n_trials=30,
-        metric="roc_auc",
-        early_stopping_rounds=15,
-        show_progress=True,
-    )
+        .stacks_proba("rf", "xgb")
+    .add_model("meta2", LogisticRegression)
+        .param("C", 0.01, 100.0, log=True)
+        .stacks_proba("lgbm")
+    # Layer 2: Final meta-learner
+    .add_model("final", Ridge)
+        .param("alpha", 0.01, 100.0, log=True)
+        .stacks_proba("meta1", "meta2")
     .build()
 )
+```
 
-# === Run Stacking Pipeline ===
-data = DataView.from_Xy(X=X_train, y=y_train)
-services = RuntimeServices(search_backend=OptunaBackend(direction="maximize"))
+Each layer is tuned in order: base models first, then layer 1 meta-learners, then the final meta-learner.
 
-print("\nTuning stacking pipeline...")
-training_run = GraphRunner(services).fit(graph, data, config)
+---
 
-# === Evaluate ===
-print("\n=== Results ===")
-print("\nBest parameters per node:")
-for name in ["rf", "gb", "svm", "meta"]:
-    result = training_run.node_results[name]
-    print(f"  {name}: {result.best_params} (score: {result.mean_score:.4f})")
+## Working with Results
 
-# Compile to InferenceGraph for predictions
-inference = training_run.compile_inference()
-predictions = inference.predict(X_test)
-print(f"\nStacking Accuracy: {accuracy_score(y_test, predictions):.4f}")
+```python
+# Predict through the full stack
+predictions = result.predict(X_test)
 
-# Compare individual models
-print("\nIndividual Model Performance (for comparison):")
-for name in ["rf", "gb", "svm"]:
-    node_pred = inference.predict(X_test, node_name=name)
-    print(f"  {name}: Accuracy={accuracy_score(y_test, node_pred):.4f}")
+# Shortcuts resolve to the leaf (meta-learner) node
+result.best_score_       # meta-learner's CV score
+result.best_params_      # meta-learner's best params
+print(result.summary())  # summary of all nodes
+
+# Access individual models
+rf_result = result.node_results["rf"]
+rf_result.best_params
+rf_result.mean_score
+rf_result.oof_predictions
+
+# Predict from a specific node
+rf_preds = result.predict(X_test, node_name="rf")
+
+# Get probability predictions by averaging fold models
+import numpy as np
+models = result.node_results["rf"].models
+probas = np.mean([m.predict_proba(X_test) for m in models], axis=0)
 ```
 
 ---
 
 ## Best Practices
 
-### 1. Use Diverse Base Models
-
-```python
-# Good: Different model families
-base_models = [
-    RandomForestClassifier,     # Tree-based, bagging
-    GradientBoostingClassifier, # Tree-based, boosting
-    SVC,                        # Kernel-based
-    LogisticRegression,         # Linear
-    KNeighborsClassifier,       # Instance-based
-]
-
-# Less effective: All similar models
-base_models = [
-    RandomForestClassifier,
-    ExtraTreesClassifier,
-    BaggingClassifier,  # All tree-based bagging
-]
-```
-
-### 2. Use Simple Meta-Learner
-
-```python
-# Recommended: Linear models
-LogisticRegression
-Ridge
-ElasticNet
-
-# Use with caution: Complex models can overfit
-GradientBoostingClassifier
-RandomForestClassifier
-```
-
-### 3. Use Probability Dependencies
-
-```python
-# Better for classification (more information)
-builder.stacks_proba("base")
-# or
-graph.add_edge(DependencyEdge(source="base", target="meta", dep_type=DependencyType.PROBA))
-
-# Less information
-builder.stacks("base")
-# or
-graph.add_edge(DependencyEdge(source="base", target="meta", dep_type=DependencyType.PREDICTION))
-```
-
-### 4. Don't Stack Too Deep
-
-```
-Recommended: 2 layers (base + meta)
-Maximum: 3 layers (base + meta + final)
-Avoid: 4+ layers (overfitting, diminishing returns)
-```
-
-### 5. Ensure Sufficient Data
-
-Stacking requires enough data for:
-- OOF predictions (N samples for each of K base models)
-- Meta-learner training
-
-```
-Minimum: ~1000 samples
-Recommended: 5000+ samples
-```
+1. **Use diverse base models** -- Mix model families (trees, linear, kernel-based). Three variations of random forest won't help much.
+2. **Keep the meta-learner simple** -- `LogisticRegression` or `Ridge` work well. Complex meta-learners tend to overfit.
+3. **Use `.stacks_proba()` for classification** -- Probabilities carry more information than class labels.
+4. **Don't stack too deep** -- 2 layers (base + meta) is the sweet spot. 3 layers occasionally helps. 4+ rarely does.
+5. **Ensure sufficient data** -- Stacking needs enough samples for reliable OOF predictions. Aim for 1000+ samples minimum.
 
 ---
 
 ## Next Steps
 
-- [Model Graphs](model-graphs.md) -- Graph architecture details
-- [Cross-Validation](cross-validation.md) -- How OOF is generated
-- [Tuning](tuning.md) -- Layer-by-layer optimization
+- [Model Graphs](model-graphs.md) -- Custom DAG architectures, dependency types, graph operations
+- [Cross-Validation](cross-validation.md) -- CV strategies for stacking
+- [Tuning](tuning.md) -- Optimization settings

@@ -108,6 +108,154 @@ class TrainingRun:
             )
         return self._get_inference_graph().predict_proba(X, node_name=node_name)
 
+    # ------------------------------------------------------------------
+    # Shortcut properties (sklearn-style trailing underscore)
+    # ------------------------------------------------------------------
+
+    def _single_node_result(self) -> NodeRunResult:
+        """Return the single or leaf node result.
+
+        Resolves unambiguously when the graph has exactly one node, or
+        exactly one leaf node.  Raises ``ValueError`` otherwise.
+        """
+        if len(self.node_results) == 1:
+            return next(iter(self.node_results.values()))
+        leaves = self.graph.get_leaf_nodes()
+        fitted_leaves = [n for n in leaves if n in self.node_results]
+        if len(fitted_leaves) == 1:
+            return self.node_results[fitted_leaves[0]]
+        raise ValueError(
+            f"Ambiguous: graph has {len(fitted_leaves)} leaf nodes "
+            f"({', '.join(fitted_leaves)}). Access results via "
+            f".node_results['name'] or .get_node('name') instead."
+        )
+
+    @property
+    def best_params_(self) -> Dict[str, Any]:
+        """Best hyperparameters found (single/leaf node shortcut).
+
+        Follows the sklearn convention of trailing underscore for
+        fitted attributes (cf. ``GridSearchCV.best_params_``).
+        """
+        return self._single_node_result().best_params
+
+    @property
+    def best_score_(self) -> float:
+        """Mean CV score (single/leaf node shortcut)."""
+        return self._single_node_result().mean_score
+
+    @property
+    def oof_predictions_(self) -> np.ndarray:
+        """Out-of-fold predictions (single/leaf node shortcut)."""
+        return self._single_node_result().oof_predictions
+
+    @property
+    def feature_importances_(self) -> pd.Series:
+        """Feature importances averaged across fold models (single/leaf node shortcut).
+
+        Returns a pandas Series sorted by importance (descending), with
+        feature names as the index.  Importances are extracted via the
+        ``ImportanceRegistry`` (tree-based, linear, etc.) and averaged
+        across all CV fold models.
+
+        Follows the sklearn convention of trailing underscore for fitted
+        attributes (cf. ``RandomForestClassifier.feature_importances_``).
+        """
+        from sklearn_meta.selection.importance import ImportanceRegistry
+
+        node = self._single_node_result()
+        models = node.models
+        feature_names = (
+            list(node.selected_features)
+            if node.selected_features is not None
+            else list(self.metadata.feature_names)
+        )
+
+        registry = ImportanceRegistry.default()
+        all_importances: List[Dict[str, float]] = []
+        for model in models:
+            extractor = registry.get_extractor(model)
+            imp = extractor.extract(model, feature_names)
+            all_importances.append(imp)
+
+        avg = {
+            name: float(np.mean([imp.get(name, 0.0) for imp in all_importances]))
+            for name in feature_names
+        }
+        series = pd.Series(avg, name="importance")
+        return series.sort_values(ascending=False)
+
+    def summary(self, node_name: Optional[str] = None) -> str:
+        """Return a formatted summary of the training run.
+
+        Args:
+            node_name: Show results for a specific node.  When ``None``,
+                shows the single/leaf node for single-model graphs or
+                all nodes for multi-model graphs.
+        """
+        lines: List[str] = ["TrainingRun Summary", "=" * 40]
+
+        if node_name is not None:
+            nodes_to_show = [self.get_node(node_name)]
+        elif len(self.node_results) == 1:
+            nodes_to_show = list(self.node_results.values())
+        else:
+            topo = self.graph.topological_order()
+            nodes_to_show = [
+                self.node_results[n] for n in topo if n in self.node_results
+            ]
+
+        for node in nodes_to_show:
+            if len(nodes_to_show) > 1:
+                lines.append("")
+                lines.append(f"--- {node.node_name} ---")
+
+            # Estimator class name
+            graph_node = self.graph.get_node(node.node_name)
+            lines.append(f"Model:    {graph_node.estimator_class.__name__}")
+
+            # Metric and score
+            lines.append(f"Metric:   {self.config.tuning.metric}")
+            cv = node.cv_result
+            lines.append(
+                f"CV score: {cv.mean_score:.4f} +/- {cv.std_score:.4f} "
+                f"({cv.n_folds} folds)"
+            )
+
+            # Timing
+            if cv.total_fit_time > 0:
+                lines.append(f"Fit time: {cv.total_fit_time:.1f}s")
+
+            # Best params
+            if node.best_params:
+                lines.append("")
+                lines.append("Best params:")
+                for k, v in node.best_params.items():
+                    lines.append(f"  {k}: {v}")
+
+            # Feature selection
+            n_original = len(self.metadata.feature_names)
+            if node.selected_features is not None:
+                n_kept = len(node.selected_features)
+                n_dropped = n_original - n_kept
+                lines.append("")
+                lines.append(
+                    f"Features: {n_kept} kept, {n_dropped} dropped "
+                    f"(of {n_original})"
+                )
+            else:
+                lines.append(f"Features: {n_original}")
+
+        # Footer
+        lines.append("")
+        lines.append(f"Total time: {self.total_time:.1f}s")
+
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Node access
+    # ------------------------------------------------------------------
+
     def get_node(self, node_name: str) -> NodeRunResult:
         """Return a fitted node result by node name."""
         try:

@@ -1,42 +1,6 @@
 # Model Graphs
 
-Model graphs allow you to define complex machine learning pipelines as directed acyclic graphs (DAGs). This enables sophisticated architectures like model stacking, parallel ensembles, and feature transformations.
-
----
-
-## Quick Start with GraphBuilder
-
-The `GraphBuilder` fluent API is the recommended way to build model graphs. It produces a `GraphSpec` via `.compile()`:
-
-```python
-from sklearn_meta import GraphBuilder, RunConfigBuilder, DataView, fit
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-
-graph = (
-    GraphBuilder("stacking_pipeline")
-    .add_model("rf", RandomForestClassifier)
-    .int_param("n_estimators", 50, 200)
-    .int_param("max_depth", 3, 15)
-    .add_model("gb", GradientBoostingClassifier)
-    .int_param("n_estimators", 50, 200)
-    .param("learning_rate", 0.01, 0.3, log=True)
-    .add_model("meta", LogisticRegression)
-    .param("C", 0.01, 10.0, log=True)
-    .stacks_proba("rf", "gb")
-    .compile()
-)
-
-config = (
-    RunConfigBuilder()
-    .cv(n_splits=5, strategy="stratified")
-    .tuning(n_trials=50, metric="roc_auc")
-    .build()
-)
-
-data = DataView.from_Xy(X_train, y_train)
-result = fit(graph, data, config)
-```
+For simple stacking, use `stack()` (see [Stacking](stacking.md)). This page covers custom graph architectures -- the low-level building blocks for when you need full control over how models connect.
 
 ---
 
@@ -44,7 +8,7 @@ result = fit(graph, data, config)
 
 ### NodeSpec
 
-A `NodeSpec` represents a single model in your pipeline:
+A `NodeSpec` represents a single model in the graph:
 
 ```python
 from sklearn_meta import NodeSpec
@@ -64,7 +28,7 @@ node = NodeSpec(
 
 ### GraphSpec
 
-A `GraphSpec` contains nodes and their dependencies:
+A `GraphSpec` is a DAG of nodes and edges:
 
 ```python
 from sklearn_meta import GraphSpec
@@ -76,16 +40,17 @@ graph.add_node(xgb_node)
 
 ### Dependencies
 
-Dependencies define how nodes connect. All dependency types use the `DependencyEdge` class with a `DependencyType` enum:
+Edges are represented by `DependencyEdge` with a `DependencyType` enum:
 
 ```python
 from sklearn_meta import DependencyEdge, DependencyType
 
-# Meta-learner uses predictions from base models
 graph.add_edge(
     DependencyEdge(source="rf", target="meta", dep_type=DependencyType.PREDICTION)
 )
 ```
+
+`GraphBuilder` provides shorthand for common edge types (`.stacks()`, `.stacks_proba()`). For the full set of dependency types, see the reference table below.
 
 ---
 
@@ -93,15 +58,7 @@ graph.add_edge(
 
 ### Single Model
 
-The simplest architecture -- one model with hyperparameter tuning:
-
-```mermaid
-graph LR
-    A[Input Data] --> B[Random Forest]
-    B --> C[Predictions]
-```
-
-**Using GraphBuilder (recommended):**
+One model with hyperparameter tuning:
 
 ```python
 from sklearn_meta import GraphBuilder
@@ -110,37 +67,25 @@ graph = (
     GraphBuilder("single_model")
     .add_model("rf", RandomForestClassifier)
     .int_param("n_estimators", 50, 200)
-    .compile()
+    .build()
 )
-```
-
-**Using low-level API:**
-
-```python
-graph = GraphSpec()
-graph.add_node(rf_node)
 ```
 
 ### Parallel Ensemble
 
-Multiple independent models that can be trained in parallel:
-
-```mermaid
-graph LR
-    A[Input Data] --> B[Random Forest]
-    A --> C[XGBoost]
-    A --> D[LightGBM]
-    B --> E[Voting/Averaging]
-    C --> E
-    D --> E
-```
+Multiple independent models (no edges means parallel execution):
 
 ```python
-graph = GraphSpec()
-graph.add_node(rf_node)
-graph.add_node(xgb_node)
-graph.add_node(lgbm_node)
-# No dependencies = parallel execution
+graph = (
+    GraphBuilder("parallel")
+    .add_model("rf", RandomForestClassifier)
+    .int_param("n_estimators", 50, 200)
+    .add_model("xgb", XGBClassifier)
+    .int_param("n_estimators", 50, 200)
+    .add_model("lgbm", LGBMClassifier)
+    .int_param("n_estimators", 50, 200)
+    .build()
+)
 ```
 
 ### Two-Level Stacking
@@ -164,8 +109,6 @@ graph TB
     E --> F[Final Predictions]
 ```
 
-**Using GraphBuilder (recommended):**
-
 ```python
 from sklearn_meta import GraphBuilder
 
@@ -180,156 +123,106 @@ graph = (
     .fixed_params(probability=True)
     .add_model("meta", LogisticRegression)
     .stacks_proba("rf", "xgb", "svm")
-    .compile()
+    .build()
 )
 ```
 
-**Using low-level API:**
-
-```python
-from sklearn_meta import DependencyEdge, DependencyType
-
-# Base models
-graph.add_node(rf_node)
-graph.add_node(xgb_node)
-graph.add_node(svm_node)
-
-# Meta-learner
-graph.add_node(meta_node)
-
-# Dependencies
-graph.add_edge(DependencyEdge(source="rf", target="meta", dep_type=DependencyType.PREDICTION))
-graph.add_edge(DependencyEdge(source="xgb", target="meta", dep_type=DependencyType.PREDICTION))
-graph.add_edge(DependencyEdge(source="svm", target="meta", dep_type=DependencyType.PREDICTION))
-```
-
-### Three-Level Stacking
-
-Deep stacking with multiple meta-learner layers:
-
-```mermaid
-graph TB
-    subgraph "Layer 1"
-        I[Input] --> A[RF]
-        I --> B[XGB]
-        I --> C[LGBM]
-        I --> D[CatBoost]
-    end
-
-    subgraph "Layer 2"
-        A --> E[Meta-1]
-        B --> E
-        C --> F[Meta-2]
-        D --> F
-    end
-
-    subgraph "Layer 3"
-        E --> G[Final Meta]
-        F --> G
-    end
-
-    G --> H[Output]
-```
+For deeper stacking (3+ levels) and stacking best practices, see [Stacking](stacking.md).
 
 ---
 
 ## Dependency Types
 
-All dependency types are expressed using `DependencyEdge` with a `DependencyType` enum value:
+All dependency types use `DependencyEdge(source, target, dep_type=DependencyType.X)`.
+
+| Type | What is passed | GraphBuilder shorthand | Typical use case |
+|------|---------------|----------------------|-----------------|
+| `PREDICTION` | Class labels or regression values | `.stacks("src")` | Standard stacking |
+| `PROBA` | Class probabilities | `.stacks_proba("src")` | Classification stacking (preferred) |
+| `TRANSFORM` | Transformed feature matrix | `.depends_on("src", dep_type=DependencyType.TRANSFORM)` | PCA, other transformers |
+| `FEATURE` | Selected / engineered features | -- | Feature selection steps |
+| `BASE_MARGIN` | Raw margins (pre-sigmoid) | -- | Incremental boosting |
+| `DISTILL` | Soft targets from a teacher | -- | Knowledge distillation |
+
+---
+
+## Knowledge Distillation
+
+Train a smaller student model using soft targets from a larger teacher model. The student optimizes a blended loss: `alpha * KL_soft + (1 - alpha) * CE_hard`.
 
 ```python
-from sklearn_meta import DependencyEdge, DependencyType
-```
+from xgboost import XGBClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn_meta import GraphBuilder, RunConfigBuilder, fit
 
-### PREDICTION
-
-Passes class predictions (or regression values) to downstream nodes:
-
-```python
-graph.add_edge(
-    DependencyEdge(source="base", target="meta", dep_type=DependencyType.PREDICTION)
+graph = (
+    GraphBuilder("distillation")
+    # Teacher: large model
+    .add_model("teacher", GradientBoostingClassifier)
+        .param("n_estimators", 200, 1000)
+        .param("learning_rate", 0.01, 0.3, log=True)
+        .param("max_depth", 4, 12)
+        .output_type("proba")
+    # Student: smaller model learns from teacher's soft targets
+    .add_model("student", XGBClassifier)
+        .param("n_estimators", 10, 100)
+        .param("max_depth", 2, 6)
+        .distill_from("teacher", temperature=3.0, alpha=0.5)
+    .build()
 )
-```
 
-**Use case:** Standard stacking where meta-learner sees predicted classes.
-
-**GraphBuilder shorthand:** `.stacks("base")`
-
-### PROBA
-
-Passes probability predictions to downstream nodes:
-
-```python
-graph.add_edge(
-    DependencyEdge(source="base", target="meta", dep_type=DependencyType.PROBA)
+config = (
+    RunConfigBuilder()
+    .cv(n_splits=5)
+    .tuning(n_trials=50, metric="neg_log_loss")
+    .build()
 )
+
+result = fit(graph, X_train, y_train, config)
 ```
 
-**Use case:** Stacking with probability calibration or when confidence matters.
+- **temperature** -- Softens the teacher's probability distribution. Higher values produce smoother targets.
+- **alpha** -- Blend weight. `1.0` = only soft targets, `0.0` = ignore teacher entirely.
 
-**GraphBuilder shorthand:** `.stacks_proba("base")`
+The teacher must be in an earlier layer than the student (i.e., no dependencies flowing from student to teacher).
 
-### TRANSFORM
+---
 
-Passes transformed features (e.g., from a transformer):
+## NodeBuilder Reference
 
-```python
-graph.add_edge(
-    DependencyEdge(source="pca", target="classifier", dep_type=DependencyType.TRANSFORM)
-)
-```
+`GraphBuilder.add_model()` returns a `NodeBuilder` with these chainable methods:
 
-**Use case:** Dimensionality reduction or feature engineering steps.
+### Search space
 
-**GraphBuilder shorthand:** `.depends_on("pca", dep_type=DependencyType.TRANSFORM)`
+| Method | Description |
+|--------|-------------|
+| `.param(name, low, high)` | Numeric range (int if both bounds are ints, float otherwise) |
+| `.param(name, low, high, log=True)` | Log-scaled range |
+| `.param(name, [choices])` | Categorical parameter |
+| `.int_param(name, low, high)` | Integer range (explicit) |
+| `.cat_param(name, [choices])` | Categorical (explicit) |
+| `.search_space(space)` | Attach a pre-built `SearchSpace` object |
+| `.fixed_params(**kwargs)` | Non-tuned parameters passed to the estimator constructor |
 
-### FEATURE
+### Model behavior
 
-Passes selected or engineered features:
+| Method | Description |
+|--------|-------------|
+| `.fit_params(**kwargs)` | Extra keyword arguments passed to `estimator.fit()` (e.g., `verbose=False`, `eval_set=...`) |
+| `.output_type(t)` | Output type: `"prediction"` (default), `"proba"`, or `"transform"` |
+| `.feature_cols([cols])` | Restrict this model to a subset of input features |
+| `.condition(fn)` | Only include this model if `fn(data)` returns `True` |
+| `.plugins("name")` | Attach model-specific plugins (see [Plugins](plugins.md)) |
+| `.description("text")` | Optional human-readable description |
 
-```python
-graph.add_edge(
-    DependencyEdge(source="selector", target="classifier", dep_type=DependencyType.FEATURE)
-)
-```
+### Dependencies
 
-**Use case:** Feature selection steps where a subset of features is passed downstream.
-
-### BASE_MARGIN
-
-Passes raw margin values (pre-sigmoid/softmax) for boosting models:
-
-```python
-graph.add_edge(
-    DependencyEdge(source="xgb_stage1", target="xgb_stage2", dep_type=DependencyType.BASE_MARGIN)
-)
-```
-
-**Use case:** Incremental boosting where one model's raw output initializes another.
-
-### CONDITIONAL_SAMPLE
-
-Passes conditional samples for downstream processing:
-
-```python
-graph.add_edge(
-    DependencyEdge(source="sampler", target="model", dep_type=DependencyType.CONDITIONAL_SAMPLE)
-)
-```
-
-**Use case:** Conditional data augmentation or sampling strategies.
-
-### DISTILL
-
-Passes soft targets from a teacher model for knowledge distillation:
-
-```python
-graph.add_edge(
-    DependencyEdge(source="teacher", target="student", dep_type=DependencyType.DISTILL)
-)
-```
-
-**Use case:** Knowledge distillation where a large teacher model trains a smaller student model using soft probability targets.
+| Method | Description |
+|--------|-------------|
+| `.stacks("src", ...)` | Use prediction outputs from upstream models as features |
+| `.stacks_proba("src", ...)` | Use probability outputs from upstream models as features |
+| `.depends_on("src", dep_type=...)` | Generic dependency with explicit `DependencyType` |
+| `.distill_from("teacher", temperature=3.0, alpha=0.5)` | Knowledge distillation from a teacher model |
 
 ---
 
@@ -346,14 +239,11 @@ order = graph.topological_order()
 
 ### Get Layers
 
-Group nodes by their depth in the graph. Returns a `List[List[str]]` where each inner list contains the node names at that depth:
+Group nodes by depth. Returns `List[List[str]]`:
 
 ```python
 layers = graph.get_layers()
-# [
-#     ['rf', 'xgb', 'svm'],  # Layer 0: Base models
-#     ['meta']                # Layer 1: Meta-learner
-# ]
+# [['rf', 'xgb', 'svm'], ['meta']]
 ```
 
 ### Root and Leaf Nodes
@@ -379,222 +269,25 @@ descendants = graph.descendants("rf")      # All transitive children
 
 ### Validation
 
-Check for cycles and structural issues:
-
 ```python
 warnings = graph.validate()  # Returns list of warnings, raises CycleError on cycles
 ```
 
-### Cycle Detection
-
-```mermaid
-graph LR
-    A[Node A] --> B[Node B]
-    B --> C[Node C]
-    C -.->|Invalid!| A
-```
-
-```python
-from sklearn_meta import DependencyEdge, DependencyType
-
-# This will cause a cycle
-graph.add_edge(
-    DependencyEdge(source="c", target="a", dep_type=DependencyType.PREDICTION)
-)
-# Raises CycleError immediately on add_edge()
-```
-
----
-
-## Complete Stacking Example
-
-### Using GraphBuilder (Recommended)
-
-```python
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
-
-from sklearn_meta import GraphBuilder
-
-graph = (
-    GraphBuilder("classification_stack")
-    # Base Model 1: Random Forest
-    .add_model("rf", RandomForestClassifier)
-    .int_param("n_estimators", 50, 200)
-    .int_param("max_depth", 3, 15)
-    .fixed_params(random_state=42)
-    # Base Model 2: Gradient Boosting
-    .add_model("gb", GradientBoostingClassifier)
-    .int_param("n_estimators", 50, 200)
-    .param("learning_rate", 0.01, 0.3, log=True)
-    .fixed_params(random_state=42)
-    # Base Model 3: SVM
-    .add_model("svm", SVC)
-    .param("C", 0.1, 10.0, log=True)
-    .cat_param("kernel", ["rbf", "poly"])
-    .fixed_params(probability=True, random_state=42)
-    # Meta-Learner: Logistic Regression
-    .add_model("meta", LogisticRegression)
-    .param("C", 0.01, 10.0, log=True)
-    .fixed_params(random_state=42, max_iter=1000)
-    .stacks_proba("rf", "gb", "svm")
-    .compile()
-)
-```
-
-### Using Low-Level API
-
-```python
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
-
-from sklearn_meta import NodeSpec, GraphSpec, DependencyEdge, DependencyType
-from sklearn_meta.search.space import SearchSpace
-
-# === Base Model 1: Random Forest ===
-rf_space = SearchSpace()
-rf_space.add_int("n_estimators", 50, 200)
-rf_space.add_int("max_depth", 3, 15)
-
-rf_node = NodeSpec(
-    name="rf",
-    estimator_class=RandomForestClassifier,
-    search_space=rf_space,
-    fixed_params={"random_state": 42},
-)
-
-# === Base Model 2: Gradient Boosting ===
-gb_space = SearchSpace()
-gb_space.add_int("n_estimators", 50, 200)
-gb_space.add_float("learning_rate", 0.01, 0.3, log=True)
-
-gb_node = NodeSpec(
-    name="gb",
-    estimator_class=GradientBoostingClassifier,
-    search_space=gb_space,
-    fixed_params={"random_state": 42},
-)
-
-# === Base Model 3: SVM ===
-svm_space = SearchSpace()
-svm_space.add_float("C", 0.1, 10.0, log=True)
-svm_space.add_categorical("kernel", ["rbf", "poly"])
-
-svm_node = NodeSpec(
-    name="svm",
-    estimator_class=SVC,
-    search_space=svm_space,
-    fixed_params={"probability": True, "random_state": 42},
-)
-
-# === Meta-Learner: Logistic Regression ===
-meta_space = SearchSpace()
-meta_space.add_float("C", 0.01, 10.0, log=True)
-
-meta_node = NodeSpec(
-    name="meta",
-    estimator_class=LogisticRegression,
-    search_space=meta_space,
-    fixed_params={"random_state": 42, "max_iter": 1000},
-)
-
-# === Build Graph ===
-graph = GraphSpec()
-
-# Add all nodes
-graph.add_node(rf_node)
-graph.add_node(gb_node)
-graph.add_node(svm_node)
-graph.add_node(meta_node)
-
-# Connect base models to meta-learner with probability dependencies
-graph.add_edge(DependencyEdge(source="rf", target="meta", dep_type=DependencyType.PROBA))
-graph.add_edge(DependencyEdge(source="gb", target="meta", dep_type=DependencyType.PROBA))
-graph.add_edge(DependencyEdge(source="svm", target="meta", dep_type=DependencyType.PROBA))
-
-# Validate the graph
-graph.validate()
-
-print(f"Layers: {graph.get_layers()}")
-print(f"Execution order: {graph.topological_order()}")
-```
-
-Output:
-```
-Layers: [['rf', 'gb', 'svm'], ['meta']]
-Execution order: ['rf', 'gb', 'svm', 'meta']
-```
+Cycles are detected eagerly -- `add_edge()` raises `CycleError` immediately if the new edge would create a cycle.
 
 ---
 
 ## Best Practices
 
-### 1. Name Nodes Descriptively
-
-```python
-# Good
-NodeSpec(name="xgb_base_classifier", ...)
-NodeSpec(name="lr_meta_learner", ...)
-
-# Avoid
-NodeSpec(name="model1", ...)
-NodeSpec(name="m", ...)
-```
-
-### 2. Use Probability Dependencies for Classification
-
-```python
-# Better for classification stacking
-graph.add_edge(
-    DependencyEdge(source="base", target="meta", dep_type=DependencyType.PROBA)
-)
-
-# Prediction dependency loses probability information
-graph.add_edge(
-    DependencyEdge(source="base", target="meta", dep_type=DependencyType.PREDICTION)
-)
-```
-
-Or with GraphBuilder:
-
-```python
-# Preferred for classification
-.stacks_proba("base")
-
-# Use for regression or when only class labels are needed
-.stacks("base")
-```
-
-### 3. Keep Graphs Shallow
-
-Deep stacking (>3 levels) rarely improves performance and increases:
-- Training time
-- Overfitting risk
-- Memory usage
-
-```mermaid
-graph LR
-    subgraph "Recommended"
-        A[Base] --> B[Meta]
-    end
-
-    subgraph "Use with caution"
-        C[Base] --> D[Meta 1] --> E[Meta 2] --> F[Meta 3]
-    end
-```
-
-### 4. Validate Before Training
-
-```python
-graph.validate()  # Always validate before passing to fit()
-```
+1. **Name nodes descriptively.** Use names like `"xgb_base"` or `"lr_meta"`, not `"model1"`. Graph operations return node names, so readability matters.
+2. **Keep graphs shallow.** Two layers (base + meta) is the sweet spot. Three layers occasionally helps. Deeper graphs increase training time and overfitting risk with diminishing returns.
+3. **Validate before training.** Always call `graph.validate()` before passing a hand-built `GraphSpec` to `fit()`.
 
 ---
 
 ## Next Steps
 
-- [Stacking](stacking.md) -- Deep dive into stacking strategies
-- [Cross-Validation](cross-validation.md) -- How OOF predictions work
-- [Tuning](tuning.md) -- Optimizing graph hyperparameters
+- [Stacking](stacking.md) -- `stack()` convenience API and stacking strategies
+- [Search Spaces](search-spaces.md) -- Parameter types, conditional params, shorthand notation
+- [Cross-Validation](cross-validation.md) -- CV strategies and out-of-fold predictions
+- [Tuning](tuning.md) -- Optimization settings for graph hyperparameters

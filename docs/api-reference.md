@@ -332,7 +332,7 @@ GraphBuilder(name: str | None = None)
 add_model(name: str, estimator_class: Type) -> NodeBuilder
 
 # Build and validate the GraphSpec
-compile() -> GraphSpec
+build() -> GraphSpec
 ```
 
 **NodeBuilder Methods:**
@@ -360,7 +360,7 @@ stacks_proba(*sources: str) -> NodeBuilder                   # Shortcut for PROB
 distill_from(teacher_name, alpha=0.5, temperature=3.0) -> NodeBuilder
 ```
 
-NodeBuilder delegates unknown attributes to the parent `GraphBuilder` via `__getattr__`, enabling seamless chaining between node-level and graph-level methods (e.g., calling `.add_model()` or `.compile()` on a `NodeBuilder`).
+NodeBuilder delegates unknown attributes to the parent `GraphBuilder` via `__getattr__`, enabling seamless chaining between node-level and graph-level methods (e.g., calling `.add_model()` or `.build()` on a `NodeBuilder`).
 
 **Example:**
 
@@ -381,7 +381,7 @@ graph = (
         .param("max_depth", 3, 8)
     .add_model("meta", LogisticRegression)
         .stacks("rf", "gbm")
-    .compile()
+    .build()
 )
 ```
 
@@ -395,7 +395,7 @@ graph = (
         .param("max_depth", 3, 10)
     .add_model("student", LogisticRegression)
         .distill_from("teacher", temperature=3.0, alpha=0.5)
-    .compile()
+    .build()
 )
 ```
 
@@ -689,6 +689,8 @@ cv(
     n_splits=5, n_repeats=1,
     strategy: CVStrategy | str = CVStrategy.GROUP,
     shuffle=True, random_state=42,
+    inner_cv: int | CVConfig | None = None,
+    inner_strategy: CVStrategy | str | None = None,
 ) -> RunConfigBuilder
 
 tuning(
@@ -927,12 +929,51 @@ class TrainingRun:
 # Compile into a lightweight inference graph
 compile_inference() -> InferenceGraph
 
+# Predict directly (compiles inference graph on first call, caches it)
+predict(X: pd.DataFrame, node_name: str | None = None) -> np.ndarray
+
+# Predict probabilities directly
+predict_proba(X: pd.DataFrame, node_name: str | None = None) -> np.ndarray
+
+# Print a formatted summary of the training run
+summary(node_name: str | None = None) -> str
+
 # Save to disk (joblib for models, JSON manifest for metadata)
 save(path, include_training_artifacts=True) -> None
 
 # Load from disk
 @classmethod
 load(path) -> TrainingRun
+```
+
+**Shortcut Properties (sklearn-style trailing underscore):**
+
+These resolve automatically for single-model graphs or graphs with a single leaf node.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `best_params_` | `dict[str, Any]` | Best hyperparameters (cf. `GridSearchCV.best_params_`) |
+| `best_score_` | `float` | Mean CV score |
+| `oof_predictions_` | `np.ndarray` | Out-of-fold predictions |
+| `feature_importances_` | `pd.Series` | Feature importances averaged across folds, sorted descending |
+
+For multi-model graphs with multiple leaves, these raise `ValueError` -- use `node_results["name"]` instead.
+
+**Example:**
+
+```python
+run = GraphRunner(services).fit(graph, data, config)
+
+# Shortcut properties (single-model or single-leaf graphs)
+run.best_params_           # {'n_estimators': 200, 'max_depth': 7}
+run.best_score_            # 0.9231
+run.feature_importances_   # sorted pd.Series with feature names as index
+
+# Predict directly (no need to call compile_inference())
+predictions = run.predict(X_test)
+
+# Formatted summary
+print(run.summary())
 ```
 
 ---
@@ -1245,7 +1286,9 @@ All lifecycle methods chain through applicable sub-plugins.
 
 ---
 
-## Top-Level Convenience Function
+## Top-Level Convenience Functions
+
+### fit()
 
 ```python
 import sklearn_meta
@@ -1262,6 +1305,202 @@ sklearn_meta.fit(
 ```
 
 Shortcut that creates a `GraphRunner` and calls `fit()`. Supports both `fit(graph, data, config, services)` and `fit(graph, X, y, config, groups=..., services=...)`. Uses `RuntimeServices.default()` if no services are provided.
+
+---
+
+### tune()
+
+```python
+from sklearn_meta import tune
+
+tune(
+    estimator_class,          # Estimator class or instance
+    X: pd.DataFrame,
+    y,
+    *,
+    params: dict,             # Search space (required)
+    fixed_params: dict = None,
+    n_trials: int = 100,
+    metric: str = "neg_mean_squared_error",
+    cv: int | CVConfig = 5,
+    strategy: str | CVStrategy = None,  # auto-inferred from estimator
+    groups = None,
+    verbosity: int = 1,
+) -> TrainingRun
+```
+
+Tune a single model with cross-validated hyperparameter search. Wraps `GraphBuilder` + `RunConfigBuilder` + `fit()` in one call.
+
+The `params` dict defines the search space:
+- `(low, high)` -- numeric range
+- `(low, high, {"log": True})` -- range with options
+- `[choice1, choice2, ...]` -- categorical
+
+CV strategy is auto-inferred: `"stratified"` for classifiers, `"random"` otherwise.
+
+```python
+from sklearn_meta import tune
+
+result = tune(
+    RandomForestClassifier,
+    X_train, y_train,
+    params={"n_estimators": (50, 500), "max_depth": (3, 20)},
+    fixed_params={"random_state": 42},
+    n_trials=100,
+    metric="accuracy",
+)
+result.best_params_        # {'n_estimators': 200, 'max_depth': 7}
+result.best_score_         # 0.9231
+result.predict(X_test)
+```
+
+---
+
+### cross_validate()
+
+```python
+from sklearn_meta import cross_validate
+
+cross_validate(
+    estimator_class,          # Estimator class or instance
+    X: pd.DataFrame,
+    y,
+    *,
+    fixed_params: dict = None,
+    metric: str = "neg_mean_squared_error",
+    cv: int | CVConfig = 5,
+    strategy: str | CVStrategy = None,
+    groups = None,
+    verbosity: int = 1,
+) -> TrainingRun
+```
+
+Cross-validate a single model with fixed hyperparameters (no tuning). Useful for getting OOF predictions, fold models, and an inference graph.
+
+```python
+from sklearn_meta import cross_validate
+
+result = cross_validate(
+    RandomForestClassifier,
+    X_train, y_train,
+    fixed_params={"n_estimators": 100, "random_state": 42},
+    metric="accuracy",
+)
+result.best_score_         # mean CV score
+result.oof_predictions_    # OOF predictions
+```
+
+---
+
+### stack()
+
+```python
+from sklearn_meta import stack
+
+stack(
+    base_models: dict[str, model_spec],
+    meta_model: model_spec,
+    X: pd.DataFrame,
+    y,
+    *,
+    metric: str = "neg_mean_squared_error",
+    n_trials: int = 50,
+    cv: int | CVConfig = 5,
+    strategy: str | CVStrategy = None,
+    groups = None,
+    verbosity: int = 1,
+) -> TrainingRun
+```
+
+Build and fit a stacking ensemble in one call. Base model predictions are stacked as features for the meta-learner, with automatic OOF handling.
+
+Each model spec can be:
+- `EstimatorClass` -- no tuning, uses defaults
+- `EstimatorInstance` -- uses its configured params as fixed params
+- `(EstimatorOrInstance, params_dict)` -- with tuning
+- `(EstimatorOrInstance, params_dict, fixed_params_dict)` -- with tuning and fixed params
+
+```python
+from sklearn_meta import stack
+
+result = stack(
+    base_models={
+        "rf": (RandomForestClassifier, {"n_estimators": (50, 500)}),
+        "xgb": (XGBClassifier, {"learning_rate": (0.01, 0.3, {"log": True})}),
+    },
+    meta_model=LogisticRegression,
+    X=X_train, y=y_train,
+    metric="accuracy",
+    n_trials=50,
+)
+result.predict(X_test)
+```
+
+---
+
+### compare()
+
+```python
+from sklearn_meta import compare
+
+compare(
+    models: dict[str, model_spec],
+    X: pd.DataFrame,
+    y,
+    *,
+    metric: str = "neg_mean_squared_error",
+    n_trials: int = 100,
+    cv: int | CVConfig = 5,
+    strategy: str | CVStrategy = None,
+    groups = None,
+    verbosity: int = 1,
+) -> ComparisonResult
+```
+
+Fit several models independently and return a ranked leaderboard. Models with a `params` dict are tuned; models without are cross-validated with fixed params.
+
+```python
+from sklearn_meta import compare
+
+result = compare(
+    {
+        "rf": (RandomForestClassifier, {"n_estimators": (50, 500)}),
+        "lr": LogisticRegression,
+        "xgb": (XGBClassifier, {"learning_rate": (0.01, 0.3, {"log": True})}),
+    },
+    X_train, y_train,
+    metric="accuracy",
+)
+
+result.best_name           # "rf"
+result.best_run            # TrainingRun for the best model
+result.leaderboard         # pandas DataFrame (model, score, time)
+result["rf"]               # dict-like access to individual TrainingRuns
+print(result)              # ranked summary
+```
+
+---
+
+### ComparisonResult
+
+```python
+from sklearn_meta import ComparisonResult
+```
+
+Result bundle returned by `compare()`. Supports dict-style access.
+
+**Properties:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `rankings` | `list[tuple[str, float]]` | Ordered `(model_name, score)` tuples, best first |
+| `best_name` | `str` | Name of the best-scoring model |
+| `best_run` | `TrainingRun` | `TrainingRun` for the best model |
+| `leaderboard` | `pd.DataFrame` | Sorted table with `model`, `score`, `time` columns |
+| `runs` | `dict[str, TrainingRun]` | All runs by name |
+| `metric` | `str` | Metric used for comparison |
+
+**Methods:** `to_frame()` (alias for `leaderboard`), `__getitem__`, `__contains__`, `__len__`, `__repr__`.
 
 ---
 
@@ -1359,7 +1598,7 @@ from sklearn_meta import (
 from sklearn_meta import FitCache, AuditLogger
 
 # Convenience
-from sklearn_meta import fit
+from sklearn_meta import fit, tune, cross_validate, stack, compare, ComparisonResult
 ```
 
 ---
@@ -1393,7 +1632,7 @@ graph = (
     .add_model("meta", Ridge)
         .stacks("rf", "xgb")
         .param("alpha", 0.01, 100.0, log=True)
-    .compile()
+    .build()
 )
 
 # 2. Create the data view
@@ -1418,6 +1657,7 @@ inference = training_run.compile_inference()
 predictions = inference.predict(X_test)
 
 # 6. Inspect results
+print(training_run.summary())  # formatted summary of all nodes
 for name, result in training_run.node_results.items():
     print(f"{name}: mean_score={result.mean_score:.4f}, params={result.best_params}")
 
@@ -1426,10 +1666,22 @@ training_run.save("./my_model")
 loaded = TrainingRun.load("./my_model")
 ```
 
-Or use the convenience function:
+Or use the convenience helpers for common workflows:
 
 ```python
-import sklearn_meta
+from sklearn_meta import tune, stack
 
+# Single-model tuning
+result = tune(
+    RandomForestRegressor,
+    X_train, y_train,
+    params={"n_estimators": (50, 500), "max_depth": (3, 20)},
+    metric="neg_mean_squared_error",
+)
+result.best_params_
+result.predict(X_test)
+
+# Or use fit() for full control with less boilerplate
+import sklearn_meta
 training_run = sklearn_meta.fit(graph, data, config)
 ```

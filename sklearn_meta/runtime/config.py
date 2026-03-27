@@ -314,15 +314,35 @@ class RunConfigBuilder:
         strategy: CVStrategy | str = CVStrategy.GROUP,
         shuffle: bool = True,
         random_state: int = 42,
+        inner_cv: int | CVConfig | None = None,
+        inner_strategy: CVStrategy | str | None = None,
     ) -> RunConfigBuilder:
         if isinstance(strategy, str):
             strategy = CVStrategy(strategy)
+
+        resolved_inner_cv: Optional[CVConfig] = None
+        if inner_cv is not None:
+            if isinstance(inner_strategy, str):
+                inner_strategy = CVStrategy(inner_strategy)
+
+            if isinstance(inner_cv, CVConfig):
+                resolved_inner_cv = inner_cv
+            else:
+                resolved_inner_cv = CVConfig(
+                    n_splits=inner_cv,
+                    n_repeats=1,
+                    strategy=inner_strategy if inner_strategy is not None else strategy,
+                    shuffle=shuffle,
+                    random_state=random_state + 1,
+                )
+
         self._cv_kwargs = dict(
             n_splits=n_splits,
             n_repeats=n_repeats,
             strategy=strategy,
             shuffle=shuffle,
             random_state=random_state,
+            inner_cv=resolved_inner_cv,
         )
         return self
 

@@ -312,6 +312,8 @@ class ImportanceRegistry:
     Automatically selects the appropriate extractor for a given model.
     """
 
+    _default: "ImportanceRegistry | None" = None
+
     def __init__(self) -> None:
         """Initialize with default extractors."""
         self._extractors: List[ImportanceExtractor] = [
@@ -319,6 +321,13 @@ class ImportanceRegistry:
             LinearImportanceExtractor(),
         ]
         self._fallback = PermutationImportanceExtractor()
+
+    @classmethod
+    def default(cls) -> "ImportanceRegistry":
+        """Return a shared read-only registry with the default extractors."""
+        if cls._default is None:
+            cls._default = cls()
+        return cls._default
 
     def register(self, extractor: ImportanceExtractor, priority: int = -1) -> None:
         """
