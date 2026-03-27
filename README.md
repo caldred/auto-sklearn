@@ -16,15 +16,6 @@ brew install libomp         # OpenMP on macOS (required for XGBoost)
 pip install lightgbm        # LightGBM support
 ```
 
-## Breaking Changes In 0.2.0
-
-`0.2.0` is intentionally breaking. The old `sklearn_meta.api` module and the
-`sklearn_meta.core.*` package tree were removed.
-
-Use the top-level `sklearn_meta` exports and the new `spec`, `data`, `runtime`,
-`engine`, and `artifacts` packages instead. See
-[docs/upgrading-to-0.2.md](docs/upgrading-to-0.2.md) for migration guidance.
-
 ## Quick Start
 
 sklearn-meta separates graph definition from execution. Define a model graph, configure the run, and fit:
