@@ -166,6 +166,23 @@ config = (
 )
 ```
 
+You can also provide an explicit estimator ladder:
+
+```python
+config = (
+    RunConfigBuilder()
+    .tuning(n_trials=100, metric="neg_log_loss")
+    .estimator_scaling(
+        tuning_n_estimators=200,
+        scaling_search=True,
+        scaling_estimators=[200, 300, 500, 750, 1000, 1500, 2000],
+    )
+    .build()
+)
+```
+
+If both `scaling_factors` and `scaling_estimators` are provided, sklearn-meta combines them into one increasing search ladder after the stage-one baseline.
+
 ---
 
 ## Progress Monitoring

@@ -115,5 +115,7 @@ class SearchService:
 
         best_params = dict(node.fixed_params)
         best_params.update(best_params_transformed)
+        if _use_tuning_n_estimators:
+            best_params["n_estimators"] = tuning_n_estimators
 
         return best_params, opt_result

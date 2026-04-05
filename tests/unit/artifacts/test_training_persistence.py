@@ -128,7 +128,8 @@ class TestTrainingRunPersistence:
                 tuning_n_estimators=100,
                 final_n_estimators=500,
                 scaling_search=True,
-                scaling_factors=[1, 2, 4],
+                scaling_factors=[1.5, 2, 4],
+                scaling_estimators=[300, 750],
             ),
             verbosity=2,
         )
@@ -166,7 +167,8 @@ class TestTrainingRunPersistence:
         assert loaded.config.estimator_scaling.tuning_n_estimators == 100
         assert loaded.config.estimator_scaling.final_n_estimators == 500
         assert loaded.config.estimator_scaling.scaling_search is True
-        assert loaded.config.estimator_scaling.scaling_factors == [1, 2, 4]
+        assert loaded.config.estimator_scaling.scaling_factors == [1.5, 2, 4]
+        assert loaded.config.estimator_scaling.scaling_estimators == [300, 750]
 
         # Verbosity
         assert loaded.config.verbosity == 2
@@ -249,7 +251,8 @@ class TestTrainingRunPersistence:
                 tuning_n_estimators=100,
                 final_n_estimators=500,
                 scaling_search=True,
-                scaling_factors=[1, 2, 4],
+                scaling_factors=[1.5, 2, 4],
+                scaling_estimators=[300, 750],
             ),
         )
         repeat_oof = np.random.randn(2, 100)

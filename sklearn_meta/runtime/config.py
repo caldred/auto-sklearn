@@ -579,13 +579,15 @@ class RunConfigBuilder:
         tuning_n_estimators: Optional[int] = None,
         final_n_estimators: Optional[int] = None,
         scaling_search: bool = False,
-        scaling_factors: Optional[List[int]] = None,
+        scaling_factors: Optional[List[float]] = None,
+        scaling_estimators: Optional[List[int]] = None,
     ) -> RunConfigBuilder:
         self._scaling_config = EstimatorScalingConfig(
             tuning_n_estimators=tuning_n_estimators,
             final_n_estimators=final_n_estimators,
             scaling_search=scaling_search,
             scaling_factors=scaling_factors,
+            scaling_estimators=scaling_estimators,
         )
         return self
 

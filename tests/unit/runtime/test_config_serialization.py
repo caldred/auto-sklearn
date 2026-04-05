@@ -48,7 +48,8 @@ def test_run_config_round_trip():
             tuning_n_estimators=50,
             final_n_estimators=200,
             scaling_search=True,
-            scaling_factors=[1, 2, 4],
+            scaling_factors=[1.5, 2, 4],
+            scaling_estimators=[300, 500],
         ),
         verbosity=2,
     )
@@ -66,6 +67,8 @@ def test_run_config_round_trip():
     assert restored.reparameterization.use_prebaked is False
     assert restored.estimator_scaling is not None
     assert restored.estimator_scaling.final_n_estimators == 200
+    assert restored.estimator_scaling.scaling_factors == [1.5, 2, 4]
+    assert restored.estimator_scaling.scaling_estimators == [300, 500]
     assert restored.verbosity == 2
 
 

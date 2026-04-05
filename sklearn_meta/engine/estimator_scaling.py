@@ -27,7 +27,8 @@ class EstimatorScalingConfig:
     tuning_n_estimators: Optional[int] = None
     final_n_estimators: Optional[int] = None
     scaling_search: bool = False
-    scaling_factors: Optional[List[int]] = None
+    scaling_factors: Optional[List[float]] = None
+    scaling_estimators: Optional[List[int]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -35,6 +36,7 @@ class EstimatorScalingConfig:
             "final_n_estimators": self.final_n_estimators,
             "scaling_search": self.scaling_search,
             "scaling_factors": self.scaling_factors,
+            "scaling_estimators": self.scaling_estimators,
         }
 
     @classmethod
@@ -44,6 +46,7 @@ class EstimatorScalingConfig:
             final_n_estimators=data.get("final_n_estimators"),
             scaling_search=data.get("scaling_search", False),
             scaling_factors=data.get("scaling_factors"),
+            scaling_estimators=data.get("scaling_estimators"),
         )
 
 
@@ -80,6 +83,26 @@ class EstimatorScaler:
 
         return best_params
 
+    def _resolve_search_n_estimators(self, base_n_estimators: int) -> List[int]:
+        resolved = [base_n_estimators]
+
+        scaling_factors = self.config.scaling_factors
+        scaling_estimators = self.config.scaling_estimators
+        if scaling_factors is None and scaling_estimators is None:
+            scaling_factors = [2, 5, 10, 20]
+
+        for factor in scaling_factors or []:
+            candidate = int(round(base_n_estimators * float(factor)))
+            if candidate > base_n_estimators:
+                resolved.append(candidate)
+
+        for n_estimators in scaling_estimators or []:
+            candidate = int(n_estimators)
+            if candidate > base_n_estimators:
+                resolved.append(candidate)
+
+        return [base_n_estimators] + sorted(set(resolved) - {base_n_estimators})
+
     def search_scaling(
         self,
         node,
@@ -88,8 +111,6 @@ class EstimatorScaler:
         cross_validate_fn: Callable[[Dict[str, Any]], Any],
     ) -> Tuple[Dict[str, Any], Any]:
         """Search for optimal n_estimators/learning_rate scaling."""
-        scaling_factors = [1] + (self.config.scaling_factors or [2, 5, 10, 20])
-
         if ("n_estimators" not in best_params
                 and not supports_param(node.estimator_class, "n_estimators")):
             logger.warning(
@@ -98,26 +119,32 @@ class EstimatorScaler:
             )
             return best_params, None
 
-        base_n_estimators = best_params.get("n_estimators", 100)
+        base_n_estimators = best_params.get(
+            "n_estimators",
+            self.config.tuning_n_estimators or 100,
+        )
         base_lr = best_params.get("learning_rate")
 
         if base_lr is None:
             logger.warning("No learning_rate in params, skipping estimator scaling search")
             return best_params, None
 
+        search_n_estimators = self._resolve_search_n_estimators(base_n_estimators)
+
         logger.info(
             f"Estimator scaling search: base n_estimators={base_n_estimators}, "
             f"lr={base_lr:.6f}"
         )
 
-        best_scale = 1
+        best_n_estimators = base_n_estimators
         best_score = None
         best_scaled_params = dict(best_params)
         best_cv_result = None
 
-        for scale in scaling_factors:
+        for n_estimators in search_n_estimators:
+            scale = n_estimators / base_n_estimators
             scaled_params = dict(best_params)
-            scaled_params["n_estimators"] = base_n_estimators * scale
+            scaled_params["n_estimators"] = n_estimators
             scaled_params["learning_rate"] = base_lr / scale
 
             cv_result = cross_validate_fn(scaled_params)
@@ -130,23 +157,29 @@ class EstimatorScaler:
             else:
                 is_better = score < best_score
 
-            status = "(baseline)" if scale == 1 else ("(better)" if is_better else "(worse)")
+            status = "(baseline)" if n_estimators == base_n_estimators else (
+                "(better)" if is_better else "(worse)"
+            )
             logger.info(
-                f"  {scale}x: n_estimators={scaled_params['n_estimators']}, "
+                f"  {scale:.3g}x: n_estimators={scaled_params['n_estimators']}, "
                 f"lr={scaled_params['learning_rate']:.6f}, score={score:.5f} {status}"
             )
 
             if is_better:
-                best_scale = scale
+                best_n_estimators = n_estimators
                 best_score = score
                 best_scaled_params = scaled_params
                 best_cv_result = cv_result
-            elif scale > 1:
-                logger.info(f"  Stopping search (performance degraded at {scale}x)")
+            elif n_estimators > base_n_estimators:
+                logger.info(
+                    "  Stopping search "
+                    f"(performance degraded at n_estimators={n_estimators})"
+                )
                 break
 
         logger.info(
-            f"Best scaling: {best_scale}x (n_estimators={best_scaled_params['n_estimators']}, "
+            f"Best scaling: n_estimators={best_n_estimators} "
+            f"(n_estimators={best_scaled_params['n_estimators']}, "
             f"lr={best_scaled_params['learning_rate']:.6f}, score={best_score:.5f})"
         )
 

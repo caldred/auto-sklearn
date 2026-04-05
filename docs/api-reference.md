@@ -790,6 +790,7 @@ estimator_scaling(
     final_n_estimators=None,
     scaling_search=False,
     scaling_factors=None,
+    scaling_estimators=None,
 ) -> RunConfigBuilder
 
 verbosity(level: int) -> RunConfigBuilder
@@ -1336,7 +1337,8 @@ class EstimatorScalingConfig:
     tuning_n_estimators: int | None = None
     final_n_estimators: int | None = None
     scaling_search: bool = False
-    scaling_factors: list[int] | None = None
+    scaling_factors: list[float] | None = None
+    scaling_estimators: list[int] | None = None
 ```
 
 **Serialization:**
