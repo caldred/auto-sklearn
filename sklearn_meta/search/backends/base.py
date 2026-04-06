@@ -118,6 +118,7 @@ class SearchBackend(ABC):
         callbacks: Optional[List[Callable]] = None,
         study_name: Optional[str] = None,
         early_stopping_rounds: Optional[int] = None,
+        seed_params: Optional[List[Dict[str, Any]]] = None,
     ) -> OptimizationResult:
         """
         Run hyperparameter optimization.
@@ -130,6 +131,7 @@ class SearchBackend(ABC):
             callbacks: Optional list of callback functions.
             study_name: Optional name for the study.
             early_stopping_rounds: Stop if no improvement for this many trials.
+            seed_params: Optional parameter sets to evaluate first as warm starts.
 
         Returns:
             OptimizationResult with best parameters and all trial results.

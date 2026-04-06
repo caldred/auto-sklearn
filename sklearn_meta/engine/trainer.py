@@ -211,6 +211,13 @@ class StandardNodeTrainer:
 
             # --- 6. Re-tune after pruning ---
             if config.feature_selection.retune_after_pruning and node.has_search_space and search_space is not None:
+                narrowed_search_space = search_space.narrow_around(best_params)
+                narrowed_reparam_space = search_service.build_reparameterized_space(
+                    node,
+                    narrowed_search_space,
+                    config.reparameterization,
+                )
+
                 def _cv_fn_retune(params: Dict[str, Any]) -> CVResult:
                     return self._cross_validate(
                         node, data, params, cv_engine, services, config,
@@ -222,14 +229,15 @@ class StandardNodeTrainer:
 
                 best_params, opt_result = search_service.optimize_node(
                     node=node,
-                    search_space=search_space,
-                    reparam_space=reparam_space,
+                    search_space=narrowed_search_space,
+                    reparam_space=narrowed_reparam_space,
                     cross_validate_fn=_cv_fn_retune,
                     n_trials=config.tuning.n_trials,
                     timeout=config.tuning.timeout,
                     early_stopping_rounds=config.tuning.early_stopping_rounds,
                     greater_is_better=config.tuning.greater_is_better,
                     tuning_n_estimators=tuning_n_est,
+                    seed_params=[best_params],
                 )
 
         # --- 7. Estimator scaling ---

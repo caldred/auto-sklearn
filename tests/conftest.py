@@ -567,6 +567,7 @@ class MockSearchBackend:
         callbacks=None,
         study_name: str = "test",
         early_stopping_rounds: Optional[int] = None,
+        seed_params: Optional[List[Dict[str, Any]]] = None,
     ):
         """Run mock optimization."""
         from sklearn_meta.search.backends.base import OptimizationResult, TrialResult
@@ -574,6 +575,24 @@ class MockSearchBackend:
         best_value = float('inf')
         best_params = self._best_params
         trials = []
+
+        trial_id = 0
+        for seed in seed_params or []:
+            params = dict(seed)
+            if self._best_params:
+                params.update(self._best_params)
+            value = objective(params)
+            if value < best_value:
+                best_value = value
+                best_params = params.copy()
+            trials.append(TrialResult(
+                params=params,
+                value=value,
+                trial_id=trial_id,
+                duration=0.1,
+                state="COMPLETE",
+            ))
+            trial_id += 1
 
         for i in range(n_trials):
             trial = MockOptunaTrial(seed=42 + i)
@@ -591,16 +610,17 @@ class MockSearchBackend:
             trials.append(TrialResult(
                 params=params,
                 value=value,
-                trial_id=i,
+                trial_id=trial_id,
                 duration=0.1,
                 state="COMPLETE",
             ))
+            trial_id += 1
 
         return OptimizationResult(
             best_params=best_params,
             best_value=best_value,
             trials=trials,
-            n_trials=n_trials,
+            n_trials=len(trials),
             study_name=study_name,
         )
 

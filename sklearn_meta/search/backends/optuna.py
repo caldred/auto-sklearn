@@ -144,6 +144,7 @@ class OptunaBackend(SearchBackend):
         callbacks: Optional[List[Callable]] = None,
         study_name: Optional[str] = None,
         early_stopping_rounds: Optional[int] = None,
+        seed_params: Optional[List[Dict[str, Any]]] = None,
     ) -> OptimizationResult:
         """
         Run hyperparameter optimization using Optuna.
@@ -167,6 +168,8 @@ class OptunaBackend(SearchBackend):
             sampler=self.sampler,
             pruner=self.pruner,
         )
+        for params in seed_params or []:
+            self._study.enqueue_trial(params)
 
         def optuna_objective(trial: optuna.Trial) -> float:
             self._current_trial = trial

@@ -55,6 +55,7 @@ class SearchService:
         early_stopping_rounds: Optional[int],
         greater_is_better: bool,
         tuning_n_estimators: Optional[int] = None,
+        seed_params: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[Dict[str, Any], OptimizationResult]:
         """Run hyperparameter optimization for a node."""
         from sklearn_meta.engine.estimator_scaling import supports_param
@@ -99,6 +100,13 @@ class SearchService:
                 return -score
             return score
 
+        prepared_seed_params = self._prepare_seed_params(
+            effective_space=effective_space,
+            original_space=original_space,
+            reparam_space=reparam_space,
+            seed_params=seed_params,
+        )
+
         opt_result = self.backend.optimize(
             objective=objective,
             search_space=effective_space,
@@ -106,6 +114,7 @@ class SearchService:
             timeout=timeout,
             study_name=f"{node.name}_tuning",
             early_stopping_rounds=early_stopping_rounds,
+            seed_params=prepared_seed_params,
         )
 
         best_params_transformed = opt_result.best_params
@@ -119,3 +128,43 @@ class SearchService:
             best_params["n_estimators"] = tuning_n_estimators
 
         return best_params, opt_result
+
+    @staticmethod
+    def _prepare_seed_params(
+        *,
+        effective_space,
+        original_space,
+        reparam_space: Optional[ReparameterizedSpace],
+        seed_params: Optional[List[Dict[str, Any]]],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Filter and transform warm-start parameter sets for the backend."""
+
+        if not seed_params:
+            return None
+
+        prepared: List[Dict[str, Any]] = []
+        original_param_names = set(original_space.parameter_names)
+        effective_param_names = set(effective_space.parameter_names)
+
+        for params in seed_params:
+            filtered = {
+                name: value
+                for name, value in params.items()
+                if name in original_param_names
+            }
+            if not filtered:
+                continue
+            transformed = (
+                reparam_space.forward_transform(filtered)
+                if reparam_space is not None
+                else filtered
+            )
+            transformed = {
+                name: value
+                for name, value in transformed.items()
+                if name in effective_param_names
+            }
+            if transformed:
+                prepared.append(transformed)
+
+        return prepared or None
