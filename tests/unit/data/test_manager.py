@@ -158,7 +158,7 @@ class TestCVEngineGroupCV:
     def test_stratified_group_cv_no_group_leak(self, classification_data):
         """Verify stratified-group CV never leaks a group across splits."""
         X, y = classification_data
-        groups = np.repeat(np.arange(len(X) // 2), 2)
+        groups = np.repeat(np.arange(len(X) // 5), 5)
         data_view = DataView.from_Xy(X, y=y, groups=groups)
         cv_engine = CVEngine(
             CVConfig(
@@ -187,7 +187,7 @@ class TestCVEngineGroupCV:
     def test_stratified_group_cv_produces_valid_folds(self, classification_data):
         """Verify stratified-group CV produces the requested number of folds."""
         X, y = classification_data
-        groups = np.repeat(np.arange(len(X) // 2), 2)
+        groups = np.repeat(np.arange(len(X) // 5), 5)
         data_view = DataView.from_Xy(X, y=y, groups=groups)
         cv_engine = CVEngine(
             CVConfig(
