@@ -72,6 +72,26 @@ def test_run_config_round_trip():
     assert restored.verbosity == 2
 
 
+def test_run_config_round_trip_with_stratified_group_cv():
+    config = RunConfig(
+        cv=CVConfig(
+            n_splits=4,
+            n_repeats=1,
+            strategy=CVStrategy.STRATIFIED_GROUP,
+            shuffle=True,
+            random_state=17,
+        ),
+    )
+
+    restored = RunConfig.from_dict(config.to_dict())
+
+    assert restored.cv.n_splits == 4
+    assert restored.cv.n_repeats == 1
+    assert restored.cv.strategy == CVStrategy.STRATIFIED_GROUP
+    assert restored.cv.shuffle is True
+    assert restored.cv.random_state == 17
+
+
 def test_run_config_round_trips_custom_reparameterizations():
     config = RunConfig(
         reparameterization=ReparameterizationConfig(

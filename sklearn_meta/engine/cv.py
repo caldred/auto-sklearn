@@ -11,6 +11,7 @@ from sklearn.model_selection import (
     KFold,
     RepeatedKFold,
     RepeatedStratifiedKFold,
+    StratifiedGroupKFold,
     StratifiedKFold,
     TimeSeriesSplit,
 )
@@ -53,13 +54,15 @@ class CVEngine:
         else:
             y = None
 
-        # y is only *required* for STRATIFIED splitting; the other
-        # splitters (KFold, GroupKFold, TimeSeriesSplit) accept y but
-        # do not use it.
-        if self.cv_config.strategy == CVStrategy.STRATIFIED and y is None:
+        # y is only *required* for STRATIFIED / STRATIFIED_GROUP splitting; the
+        # other splitters accept y but may not use it.
+        if self.cv_config.strategy in (
+            CVStrategy.STRATIFIED,
+            CVStrategy.STRATIFIED_GROUP,
+        ) and y is None:
             raise ValueError(
                 "Cannot create folds without target variable y "
-                "when using STRATIFIED strategy"
+                f"when using {self.cv_config.strategy.value.upper()} strategy"
             )
 
         n_samples = batch.n_samples
@@ -81,12 +84,16 @@ class CVEngine:
                 "Falling back to RANDOM."
             )
             effective_strategy = CVStrategy.RANDOM
+        if effective_strategy == CVStrategy.STRATIFIED_GROUP and groups is None:
+            raise ValueError(
+                "CVConfig strategy is STRATIFIED_GROUP but no groups were provided."
+            )
 
         splitter = self._create_splitter(effective_strategy)
         folds = []
 
         X = batch.X
-        if effective_strategy == CVStrategy.GROUP:
+        if effective_strategy in (CVStrategy.GROUP, CVStrategy.STRATIFIED_GROUP):
             split_iter = splitter.split(X, y, groups=groups)
         else:
             split_iter = splitter.split(X, y)
@@ -196,6 +203,15 @@ class CVEngine:
             if n_repeats > 1:
                 raise ValueError("Repeated GroupKFold is not supported")
             return GroupKFold(n_splits=n_splits)
+
+        elif strategy == CVStrategy.STRATIFIED_GROUP:
+            if n_repeats > 1:
+                raise ValueError("Repeated StratifiedGroupKFold is not supported")
+            return StratifiedGroupKFold(
+                n_splits=n_splits,
+                shuffle=self.cv_config.shuffle,
+                random_state=random_state,
+            )
 
         elif strategy == CVStrategy.STRATIFIED:
             if n_repeats > 1:

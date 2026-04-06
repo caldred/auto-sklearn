@@ -155,6 +155,56 @@ class TestCVEngineGroupCV:
         # Should still create valid folds
         assert len(folds) == cv_config_group.n_splits
 
+    def test_stratified_group_cv_no_group_leak(self, classification_data):
+        """Verify stratified-group CV never leaks a group across splits."""
+        X, y = classification_data
+        groups = np.repeat(np.arange(len(X) // 2), 2)
+        data_view = DataView.from_Xy(X, y=y, groups=groups)
+        cv_engine = CVEngine(
+            CVConfig(
+                n_splits=3,
+                strategy=CVStrategy.STRATIFIED_GROUP,
+                shuffle=True,
+                random_state=42,
+            )
+        )
+
+        folds = cv_engine.create_folds(data_view)
+
+        resolved_groups = data_view.resolve_channel(data_view.groups)
+        for fold in folds:
+            train_groups = set(resolved_groups[fold.train_indices])
+            val_groups = set(resolved_groups[fold.val_indices])
+            assert train_groups.isdisjoint(val_groups)
+
+    def test_stratified_group_cv_requires_groups(self, data_context):
+        """Verify stratified-group CV fails loudly without groups."""
+        cv_engine = CVEngine(CVConfig(strategy=CVStrategy.STRATIFIED_GROUP))
+
+        with pytest.raises(ValueError, match="STRATIFIED_GROUP"):
+            cv_engine.create_folds(data_context)
+
+    def test_stratified_group_cv_produces_valid_folds(self, classification_data):
+        """Verify stratified-group CV produces the requested number of folds."""
+        X, y = classification_data
+        groups = np.repeat(np.arange(len(X) // 2), 2)
+        data_view = DataView.from_Xy(X, y=y, groups=groups)
+        cv_engine = CVEngine(
+            CVConfig(
+                n_splits=3,
+                strategy=CVStrategy.STRATIFIED_GROUP,
+                shuffle=True,
+                random_state=42,
+            )
+        )
+
+        folds = cv_engine.create_folds(data_view)
+
+        assert len(folds) == 3
+        for fold in folds:
+            val_y = y[fold.val_indices]
+            assert len(np.unique(val_y)) == 2
+
 
 class TestCVEngineRepeatedCV:
     """Tests for repeated cross-validation."""

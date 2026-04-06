@@ -76,6 +76,7 @@ def _infer_greater_is_better(metric: str) -> bool:
 class CVStrategy(Enum):
     """Cross-validation splitting strategies."""
     GROUP = "group"
+    STRATIFIED_GROUP = "stratified_group"
     STRATIFIED = "stratified"
     RANDOM = "random"
     TIME_SERIES = "time_series"

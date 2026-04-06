@@ -187,6 +187,12 @@ class TestCVConfig:
 
         assert config.strategy == CVStrategy.STRATIFIED
 
+    def test_cvconfig_stratified_group_from_string(self):
+        """Verify stratified_group strategy can be set from string."""
+        config = CVConfig(strategy="stratified_group")
+
+        assert config.strategy == CVStrategy.STRATIFIED_GROUP
+
     def test_cvconfig_inner_cv_has_different_random_state(self):
         """Verify inner CV has different random state."""
         config = CVConfig(random_state=42)
@@ -255,15 +261,22 @@ class TestCVStrategy:
 
     def test_all_strategies_defined(self):
         """Verify all expected strategies exist."""
-        strategies = [CVStrategy.GROUP, CVStrategy.STRATIFIED, CVStrategy.RANDOM, CVStrategy.TIME_SERIES]
+        strategies = [
+            CVStrategy.GROUP,
+            CVStrategy.STRATIFIED_GROUP,
+            CVStrategy.STRATIFIED,
+            CVStrategy.RANDOM,
+            CVStrategy.TIME_SERIES,
+        ]
 
-        assert len(CVStrategy) == 4
+        assert len(CVStrategy) == 5
         for strategy in strategies:
             assert strategy in CVStrategy
 
     def test_strategy_values(self):
         """Verify strategy string values."""
         assert CVStrategy.GROUP.value == "group"
+        assert CVStrategy.STRATIFIED_GROUP.value == "stratified_group"
         assert CVStrategy.STRATIFIED.value == "stratified"
         assert CVStrategy.RANDOM.value == "random"
         assert CVStrategy.TIME_SERIES.value == "time_series"
